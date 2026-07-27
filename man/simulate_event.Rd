@@ -11,6 +11,7 @@ simulate_event(
   df = NULL,
   foul_prob = NULL,
   taper = 0,
+  form_sd = NULL,
   calibration = NULL,
   seed = NULL
 )
@@ -35,6 +36,11 @@ Defaults to the measured rate from \code{calibration}.}
 \item{taper}{Systematic shift applied to every athlete, on the log
 performance scale. Positive values make the field faster; use this to
 represent championship tapering.}
+
+\item{form_sd}{Irreducible day-to-day form variation, on the log performance
+scale. Unlike \code{ability_se} this does \strong{not} shrink as evidence
+accumulates. Defaults to the measured value from \code{calibration}; see
+\code{\link[=fit_form_sd]{fit_form_sd()}}.}
 
 \item{calibration}{Optional \code{citius_calibration} from \code{\link[=calibrate]{calibrate()}}. Supplies
 the measured shared-shock magnitude, per-athlete condition sensitivity and

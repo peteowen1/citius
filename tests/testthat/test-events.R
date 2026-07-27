@@ -49,6 +49,21 @@ test_that("sex codes are accepted in every form the feeds use", {
   expect_equal(match_event("100 Metres", "W"), "AT-100Metres-W")
 })
 
+test_that("medley aliases resolve without swallowing medley relays", {
+  # World Aquatics results say "200m Medley" where entry lists say "200m
+  # Individual Medley". Without the alias, 4,935 swims across four Olympic
+  # events matched nothing and were dropped from every model.
+  expect_equal(match_event("Men's 200m Medley", "M"), "SW-200mIndividualMedley-M")
+  expect_equal(match_event("Women's 400m Medley", "W"), "SW-400mIndividualMedley-W")
+  expect_equal(match_event("Men's 200m Individual Medley", "M"),
+               "SW-200mIndividualMedley-M")
+  expect_equal(match_event("Men's 100m Medley", "M"), "SW-100mIndividualMedley-M")
+  # The guard that makes the alias safe: a medley RELAY is a different event and
+  # must never collapse onto the individual one.
+  expect_true(is.na(match_event("Men's 4x100m Medley Relay", "M")))
+  expect_true(is.na(match_event("Mixed 4x50m Medley Relay", "X")))
+})
+
 test_that("unmatched events return NA instead of a plausible guess", {
   # Silently snapping an unknown event onto a neighbour would corrupt histories.
   expect_true(is.na(match_event("Underwater Basket Weaving", "M")))

@@ -257,6 +257,17 @@ competition_results <- function(competition_id, days = 1:12) {
     tech <- isTRUE(ev$isTechnical)
     tier <- ev$category %||% NA_character_
 
+    # `raceNumber` is only a discriminator if it is actually distinct across the
+    # event's races. Some meets -- typically age-group or multi-division -- give
+    # EVERY race of an event raceNumber = 1, which pooled six separate finals
+    # into one 45-athlete "race" with six athletes at each placing. Trusting a
+    # present-but-duplicated value is the same mistake as trusting raceId.
+    rn_all <- vapply(ev$races %||% list(),
+                     function(r) suppressWarnings(as.integer(r$raceNumber %||% NA)),
+                     integer(1))
+    rn_usable <- length(rn_all) > 0 && !anyNA(rn_all) && all(rn_all > 0L) &&
+      !anyDuplicated(rn_all)
+
     lapply(ev$races %||% list(), function(rc) {
       results <- rc$results %||% list()
       if (!length(results)) return(NULL)
@@ -267,8 +278,17 @@ competition_results <- function(competition_id, days = 1:12) {
       # were run separately -- at Glasgow 2026 the wind across those 11 heats
       # ranged 0.6 to 3.9 m/s. Between-heat variation then had nowhere to go but
       # the residual, deflating condition_sd and inflating sigma_within.
+      # `eventName` is in the key because age divisions arrive as SEPARATE
+      # `ev` objects sharing one `eventId` -- a U14 through U18 1500m all carry
+      # eventId 10229513 and raceNumber 1, so they pooled into one 46-athlete
+      # "final" with six athletes at each placing. The per-event distinctness
+      # check above cannot see this: from inside any single `ev`, raceNumber 1
+      # looks perfectly unique. For ordinary meets eventName is absent and this
+      # adds a constant to the key, leaving grouping unchanged.
       race_key <- paste(competition_id, ev$eventId %||% disc,
-                        rc$raceId %||% rc$race, .race_discriminator(rc),
+                        ev$eventName %||% "",
+                        rc$raceId %||% rc$race,
+                        .race_discriminator(rc, use_number = rn_usable),
                         sep = "|")
 
       data.table::rbindlist(lapply(results, function(x) {
@@ -278,9 +298,20 @@ competition_results <- function(competition_id, days = 1:12) {
           athlete_id   = as.character(ath$id %||% NA),
           athlete_name = trimws(paste(ath$firstname %||% "", ath$lastname %||% "")),
           birthdate    = as_date_safe(ath$birthdate %||% NA),
+          # TRUE when the feed knows only the birth YEAR, so age is uncertain by
+          # up to a year. The aging curve treats every birthdate as exact; this
+          # flag is what would let it weight or exclude the imprecise ones.
+          birthdate_year_only = isTRUE(ath$birthdateOnlyYear),
           date         = as_date_safe(x$date %||% rc$date %||% NA),
           sport        = "Athletics",
           discipline   = disc,
+          # A stable numeric code for the event, independent of how the feed
+          # spells the name. Captured for robustness: match_event() currently
+          # relies entirely on string normalisation, and every registry gap
+          # found so far has been a spelling the normaliser did not anticipate.
+          discipline_code = as.character(x$disciplineCode %||% NA_character_),
+          event_name   = ev$eventName %||% NA_character_,
+          comp_day     = suppressWarnings(as.integer(rc$day %||% NA)),
           sex_code     = sex,
           competition_id = as.integer(competition_id),
           race_key     = race_key,
@@ -330,9 +361,16 @@ competition_results <- function(competition_id, days = 1:12) {
 
 #' Per-race discriminator within a round
 #'
-#' `raceNumber` separates the heats of a round, but some competitions supply
-#' `-1` for it (a not-available sentinel) on every race, which collapses the
-#' round back into one key — the exact bug this is meant to prevent.
+#' `raceNumber` separates the heats of a round, but only when the feed populates
+#' it distinctly. Two failure modes, both seen in live data and both collapsing
+#' a round back into one key:
+#'
+#' * `-1` on every race, a not-available sentinel.
+#' * `1` on every race, typical of age-group and multi-division meets. This one
+#'   is nastier because the value looks valid — it pooled six separate finals
+#'   into a single 45-athlete "race" with six athletes at each placing. The
+#'   caller therefore checks distinctness across the whole event and passes
+#'   `use_number = FALSE` when it fails.
 #'
 #' The fallback derives an id from the race's own field. It must be **content**
 #' derived rather than positional: day pages overlap, so the same race arrives
@@ -344,12 +382,14 @@ competition_results <- function(competition_id, days = 1:12) {
 #' to collide, which is not a realistic risk within a single round.
 #'
 #' @param rc One `races` element from the feed.
+#' @param use_number Whether `raceNumber` is distinct across this event's races.
+#'   When `FALSE` the content hash is used regardless of what the feed supplied.
 #' @return A length-1 character discriminator.
 #' @keywords internal
 #' @noRd
-.race_discriminator <- function(rc) {
+.race_discriminator <- function(rc, use_number = TRUE) {
   rn <- suppressWarnings(as.integer(rc$raceNumber %||% NA))
-  if (!is.na(rn) && rn > 0L) return(as.character(rn))
+  if (isTRUE(use_number) && !is.na(rn) && rn > 0L) return(as.character(rn))
   ids <- vapply(rc$results %||% list(), function(x) {
     a <- (x$athletes %||% list())[[1]] %||% list()
     as.character(a$id %||% NA)

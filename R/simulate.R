@@ -104,6 +104,10 @@ condition_sensitivity <- function(ability, event_id, calibration = NULL) {
 #' @param taper Systematic shift applied to every athlete, on the log
 #'   performance scale. Positive values make the field faster; use this to
 #'   represent championship tapering.
+#' @param form_sd Irreducible day-to-day form variation, on the log performance
+#'   scale. Unlike `ability_se` this does **not** shrink as evidence
+#'   accumulates. Defaults to the measured value from `calibration`; see
+#'   [fit_form_sd()].
 #' @param calibration Optional `citius_calibration` from [calibrate()]. Supplies
 #'   the measured shared-shock magnitude, per-athlete condition sensitivity and
 #'   foul rate. Without it the simulator falls back to registry placeholders.
@@ -124,7 +128,7 @@ condition_sensitivity <- function(ability, event_id, calibration = NULL) {
 #' @export
 simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
                            df = NULL, foul_prob = NULL, taper = 0,
-                           calibration = NULL, seed = NULL) {
+                           form_sd = NULL, calibration = NULL, seed = NULL) {
   ab <- data.table::as.data.table(ability)
   req <- c("athlete_id", "event_id", "ability", "sigma")
   missing <- setdiff(req, names(ab))
@@ -198,11 +202,31 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
   ability_se <- if ("ability_se" %in% names(ab)) ab$ability_se else rep(0, n_ath)
   ability_se[!is.finite(ability_se)] <- 0
 
+  # A third term, and the one that does NOT shrink with evidence: form on the
+  # day. `ability_se` tends to zero as results accumulate, so without this the
+  # simulator becomes arbitrarily confident about well-known athletes -- which
+  # is exactly where it was worst. Out-of-sample standardised residuals had sd
+  # 1.18 for athletes with w_total < 0.5 but 1.74 for w_total > 4. See
+  # [fit_form_sd()] for why it is a constant rather than a proportion.
+  # Global, not per-event: it is measured as one constant across families
+  # because that demonstrably normalises sd(z) better than a per-family or
+  # proportional term. So it is read off the calibration directly rather than
+  # through .calibrated_value(), which indexes the per-event table.
+  if (is.null(form_sd)) {
+    form_sd <- if (!is.null(calibration) && !is.null(calibration$form_sd)) {
+      calibration$form_sd
+    } else NA_real_
+    if (!is.finite(form_sd)) form_sd <- 0
+  }
+
   est_error <- matrix(stats::rnorm(n_sims * n_ath), nrow = n_sims, ncol = n_ath) *
     matrix(ability_se, nrow = n_sims, ncol = n_ath, byrow = TRUE)
+  form_error <- if (form_sd > 0) {
+    matrix(stats::rnorm(n_sims * n_ath, sd = form_sd), nrow = n_sims, ncol = n_ath)
+  } else 0
 
   perf <- matrix(ab$ability, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
-    est_error +
+    est_error + form_error +
     noise * matrix(ab$sigma, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
     outer(cond, sens) + taper
 
@@ -220,7 +244,7 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
       perf = perf, rank = rank, ability = ab, event_id = event_id,
       orientation = orientation, n_sims = n_sims,
       settings = list(condition_sd = condition_sd, df = df,
-                      foul_prob = foul_prob, taper = taper)
+                      foul_prob = foul_prob, taper = taper, form_sd = form_sd)
     ),
     class = "citius_sim"
   )

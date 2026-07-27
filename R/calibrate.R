@@ -272,6 +272,11 @@ calibrate <- function(results, min_races = 8L) {
     ability = dec$ability,
     athlete = athlete,
     tail_df = tail_df,
+    # Measured separately by fit_form_sd(), which needs held-out meets and is
+    # therefore too expensive to run inside calibrate(). Left NULL here and
+    # attached by the calibration pipeline; the simulator treats NULL as zero,
+    # which is the honest fallback rather than a guess.
+    form_sd = NULL,
     race = dec$race,
     min_races = min_races,
     converged = dec$converged

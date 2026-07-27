@@ -77,7 +77,43 @@ citius_events <- function() {
     d("Hammer Throw",            "throw",    "metres",   1L, FALSE, TRUE,  0.035),
     d("Javelin Throw",           "throw",    "metres",   1L, FALSE, TRUE,  0.045),
     d("Decathlon",               "combined", "points",   1L, FALSE, FALSE, 0.030, "M"),
-    d("Heptathlon",              "combined", "points",   1L, FALSE, FALSE, 0.030, "W")
+    # Heptathlon is BOTH the women's outdoor combined event and the men's
+    # INDOOR one. Registering it women-only silently dropped 527 men's results.
+    d("Heptathlon",              "combined", "points",   1L, FALSE, FALSE, 0.030),
+    d("Pentathlon",              "combined", "points",   1L, FALSE, FALSE, 0.030, "W"),
+
+    # --- events found unmatched in the harvest audit --------------------------
+    # A feed-coverage audit found 22.8% of sampled rows matching no event, and
+    # ~30,000 of those were ordinary events simply absent from the registry --
+    # indoor distances, road races and the shorter walks. They were not
+    # corrupting anything (match_event() returns NA rather than guessing), but
+    # they were invisible to every model.
+    #
+    # These cv_priors are FALLBACK placeholders in the same sense as the rest of
+    # the registry: calibrate() replaces them with measured values, and
+    # `calibration$events$calibrated` says which are real.
+    d("60 Metres",               "sprint",   "seconds", -1L, FALSE, FALSE, 0.010),
+    d("60 Metres Hurdles",       "hurdles",  "seconds", -1L, FALSE, FALSE, 0.013),
+    d("150 Metres",              "sprint",   "seconds", -1L, FALSE, FALSE, 0.012),
+    d("300 Metres",              "sprint",   "seconds", -1L, FALSE, FALSE, 0.012),
+    d("600 Metres",              "middle",   "seconds", -1L, TRUE,  FALSE, 0.015),
+    d("1000 Metres",             "middle",   "seconds", -1L, TRUE,  FALSE, 0.016),
+    d("2000 Metres",             "middle",   "seconds", -1L, TRUE,  FALSE, 0.018),
+    d("3000 Metres",             "distance", "seconds", -1L, TRUE,  FALSE, 0.018),
+    d("2000 Metres Steeplechase","distance", "seconds", -1L, TRUE,  FALSE, 0.020),
+    # Road distances are separate events from their track namesakes: a 10km road
+    # race and a 10,000m track race are run on different surfaces to different
+    # tactics, so they must not be aliased together.
+    d("Half Marathon",           "road",     "seconds", -1L, FALSE, FALSE, 0.025),
+    d("5 Kilometres Road",       "road",     "seconds", -1L, FALSE, FALSE, 0.020),
+    d("10 Kilometres Road",      "road",     "seconds", -1L, FALSE, FALSE, 0.022),
+    d("5000 Metres Race Walk",   "walk",     "seconds", -1L, FALSE, FALSE, 0.025),
+    d("5 Kilometres Race Walk",  "walk",     "seconds", -1L, FALSE, FALSE, 0.025),
+    d("10 Kilometres Race Walk", "walk",     "seconds", -1L, FALSE, FALSE, 0.025),
+    d("35 Kilometres Race Walk", "walk",     "seconds", -1L, FALSE, FALSE, 0.030),
+    d("50 Kilometres Race Walk", "walk",     "seconds", -1L, FALSE, FALSE, 0.030),
+    d("Half Marathon Race Walk", "walk",     "seconds", -1L, FALSE, FALSE, 0.028),
+    d("Weight Throw",            "throw",    "metres",   1L, FALSE, TRUE,  0.035)
   ))
 }
 
@@ -111,6 +147,12 @@ citius_events <- function() {
     d("50m Butterfly",     "swim_sprint",   0.008),
     d("100m Butterfly",    "swim_sprint",   0.008),
     d("200m Butterfly",    "swim_middle",   0.010),
+    # 100m IM is short-course only -- not on the Olympic or Commonwealth
+    # programme -- but it is contested at the World Short Course Championships
+    # and accounts for 2,069 harvested swims. The registry covers the union of
+    # Games programmes, not the Olympic subset; the same omission previously
+    # cost 296 Commonwealth swims in the 50m stroke events.
+    d("100m Individual Medley", "swim_sprint", 0.009),
     d("200m Individual Medley", "swim_im",  0.009),
     d("400m Individual Medley", "swim_im",  0.010)
   ))
@@ -171,6 +213,12 @@ match_event <- function(discipline, sex) {
   x <- gsub("\\bmetres\\b|\\bmeters\\b|\\bmetre\\b|\\bmeter\\b", "m", x)
   x <- gsub("\\bkilometres\\b|\\bkilometers\\b", "km", x)
   x <- gsub("\\bindividual medley\\b", "im", x)
+  # World Aquatics results say "200m Medley" where entry lists say "200m
+  # Individual Medley". Without this alias 7,024 swims -- four Olympic events,
+  # 200m and 400m IM for both sexes -- silently failed to match and were dropped
+  # from every model. The relay guard is essential: "4x100m Medley Relay" is a
+  # different event entirely and must NOT collapse onto the individual one.
+  x <- ifelse(grepl("\\brelay\\b", x), x, gsub("\\bmedley\\b", "im", x))
   # World Athletics writes "Mile"; Games programmes write "One Mile".
   x <- gsub("^one mile$|^1 mile$", "mile", x)
   x <- gsub("\\bsteeplechase\\b", "sc", x)
