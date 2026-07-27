@@ -260,7 +260,16 @@ competition_results <- function(competition_id, days = 1:12) {
     lapply(ev$races %||% list(), function(rc) {
       results <- rc$results %||% list()
       if (!length(results)) return(NULL)
-      race_key <- paste(competition_id, ev$eventId %||% disc, rc$raceId %||% rc$race, sep = "|")
+      # `raceId` identifies the ROUND, not the race: all 11 heats of a 100m
+      # carry the same one. `raceNumber` is the per-heat discriminator. Without
+      # it every heat of an event collapsed into a single race_key, so
+      # decompose_races() fitted one shared condition effect across heats that
+      # were run separately -- at Glasgow 2026 the wind across those 11 heats
+      # ranged 0.6 to 3.9 m/s. Between-heat variation then had nowhere to go but
+      # the residual, deflating condition_sd and inflating sigma_within.
+      race_key <- paste(competition_id, ev$eventId %||% disc,
+                        rc$raceId %||% rc$race, .race_discriminator(rc),
+                        sep = "|")
 
       data.table::rbindlist(lapply(results, function(x) {
         ath <- (x$athletes %||% list())[[1]] %||% list()
@@ -314,7 +323,75 @@ competition_results <- function(competition_id, days = 1:12) {
   reg <- .citius_event_registry[, c("event_id", "orientation")]
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
   dt[, perf := to_perf(mark, data.table::fifelse(is.na(orientation), -1L, orientation))]
+  .warn_implausible_fields(dt)
   dt[]
+}
+
+
+#' Per-race discriminator within a round
+#'
+#' `raceNumber` separates the heats of a round, but some competitions supply
+#' `-1` for it (a not-available sentinel) on every race, which collapses the
+#' round back into one key — the exact bug this is meant to prevent.
+#'
+#' The fallback derives an id from the race's own field. It must be **content**
+#' derived rather than positional: day pages overlap, so the same race arrives
+#' more than once, and a positional index would give it two different keys and
+#' defeat the deduplication in [competition_results()]. The same athletes always
+#' hash the same way, however many times the race is fetched.
+#'
+#' Two heats of one round would have to contain athlete ids summing identically
+#' to collide, which is not a realistic risk within a single round.
+#'
+#' @param rc One `races` element from the feed.
+#' @return A length-1 character discriminator.
+#' @keywords internal
+#' @noRd
+.race_discriminator <- function(rc) {
+  rn <- suppressWarnings(as.integer(rc$raceNumber %||% NA))
+  if (!is.na(rn) && rn > 0L) return(as.character(rn))
+  ids <- vapply(rc$results %||% list(), function(x) {
+    a <- (x$athletes %||% list())[[1]] %||% list()
+    as.character(a$id %||% NA)
+  }, character(1))
+  ids <- ids[!is.na(ids) & ids != "NA"]
+  if (!length(ids)) return("NA")
+  paste0("f", sum(as.numeric(ids)) %% 1e9, "n", length(ids))
+}
+
+
+#' Warn when a race key holds more athletes than can be in the race
+#'
+#' A race key is only meaningful if it identifies one physical race, and nothing
+#' else in the pipeline checks that. `raceId` was once used as the key and turned
+#' out to identify the *round*: every heat of an event collapsed into a single
+#' 76-athlete "race", which [decompose_races()] then fitted with one shared
+#' condition effect. Nothing was duplicated or missing, so no test failed — the
+#' only visible symptom was a field size no track could hold.
+#'
+#' Only lane events are checked. Sprints and hurdles are bounded by lane count;
+#' everything else legitimately runs deep, a marathon into the hundreds.
+#'
+#' @param dt Parsed results carrying `race_key`, `event_id` and `round`.
+#' @return `dt`, invisibly. Called for its warning.
+#' @keywords internal
+#' @noRd
+.warn_implausible_fields <- function(dt) {
+  if (!all(c("race_key", "event_id") %in% names(dt))) return(invisible(dt))
+  reg <- .citius_event_registry
+  lane <- reg$event_id[reg$family %in% c("sprint", "hurdles")]
+  d <- dt[!is.na(race_key) & event_id %in% lane]
+  if (!nrow(d)) return(invisible(dt))
+  # 10 rather than 9: a dead heat or a reinstated athlete can add a lane.
+  bad <- d[, .N, by = race_key][N > 10L]
+  if (nrow(bad)) {
+    cli::cli_warn(c(
+      "{nrow(bad)} lane-event race{?s} hold more than 10 athletes (largest {max(bad$N)}).",
+      i = "A race key must identify one physical race; this usually means heats are pooled.",
+      i = "Check the feed's per-race discriminator - {.field raceId} is the round, {.field raceNumber} the race."
+    ), .frequency = "once", .frequency_id = "citius_pooled_races")
+  }
+  invisible(dt)
 }
 
 

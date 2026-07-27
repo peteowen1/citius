@@ -68,6 +68,103 @@ fit_context_effect <- function(results, covariate, by_event = TRUE, min_n = 30L)
 }
 
 
+#' Estimate the effect of a continuous covariate on marks
+#'
+#' The continuous counterpart to [fit_context_effect()]: fits a slope rather
+#' than per-level means. [fit_wind_effect()] is a specialisation of this for
+#' wind; use this for anything else measured on a scale, such as swimming
+#' reaction time.
+#'
+#' Fitted per event by default, because the same covariate can matter very
+#' differently across events — wind moves a 100m far more than a 200m, where
+#' half the race is on the bend.
+#'
+#' **Note on predictive use.** Some covariates are only known *after* the race.
+#' Reaction time is the clear case: you cannot know a future one. Such covariates
+#' still earn their place by cleaning historical marks — a swimmer who botched
+#' one start should not carry that in their ability estimate — but they cannot
+#' be supplied for a race yet to happen. The athlete's typical value is already
+#' inside their ability.
+#'
+#' @param results Canonical results.
+#' @param covariate Numeric column name.
+#' @param by_event Fit a separate slope per event.
+#' @param min_n Minimum marks for a slope to be fitted.
+#' @param trim Ignore values beyond this many SDs from the covariate mean;
+#'   extreme values are usually recording errors and would lever the slope.
+#' @return A `data.table` of `event_id`, `beta`, `n` and `r2`.
+#' @export
+fit_numeric_effect <- function(results, covariate, by_event = TRUE,
+                               min_n = 200L, trim = 5) {
+  dt <- data.table::as.data.table(results)
+  empty <- data.table::data.table(event_id = character(), beta = numeric(),
+                                  n = integer(), r2 = numeric())
+  if (!covariate %in% names(dt) ||
+      !all(c("perf", "event_id", "athlete_id") %in% names(dt))) return(empty)
+
+  dt[, xv := suppressWarnings(as.numeric(get(covariate)))]
+  dt <- dt[!is.na(perf) & !is.na(event_id) & !is.na(xv)]
+  if (!nrow(dt)) return(empty)
+
+  mu <- mean(dt$xv); s <- stats::sd(dt$xv)
+  if (is.finite(s) && s > 0) dt <- dt[abs(xv - mu) <= trim * s]
+  if (!nrow(dt)) return(empty)
+
+  dt[, athlete_id := as.character(athlete_id)]
+  # Within athlete-event: the slope is the effect on the *same* athlete, so it
+  # cannot absorb the fact that better athletes differ systematically on the
+  # covariate (faster swimmers also tend to have faster starts).
+  dt[, dev := perf - mean(perf), by = .(athlete_id, event_id)]
+  dt[, xdev := xv - mean(xv), by = .(athlete_id, event_id)]
+
+  grp <- if (by_event) "event_id" else character(0)
+  out <- dt[, {
+    if (.N < min_n || stats::sd(xdev) <= 0) {
+      .(beta = NA_real_, n = .N, r2 = NA_real_)
+    } else {
+      f <- stats::lm(dev ~ xdev)
+      .(beta = unname(stats::coef(f)[2]), n = .N, r2 = summary(f)$r.squared)
+    }
+  }, by = grp]
+  if (!by_event) out[, event_id := NA_character_]
+  out[is.finite(beta)][]
+}
+
+
+#' Remove a fitted continuous covariate effect from marks
+#'
+#' @param results Canonical results.
+#' @param numeric_effect A table from [fit_numeric_effect()].
+#' @param covariate Numeric column name; must match the fit.
+#' @return `results` with `perf` adjusted, relative to each athlete-event's own
+#'   mean covariate value, and `numeric_adj` recording the shift.
+#' @export
+adjust_numeric <- function(results, numeric_effect, covariate) {
+  dt <- data.table::copy(data.table::as.data.table(results))
+  if (is.null(numeric_effect) || !nrow(numeric_effect) || !covariate %in% names(dt)) {
+    dt[, numeric_adj := 0]
+    return(dt[])
+  }
+  dt[, xv := suppressWarnings(as.numeric(get(covariate)))]
+  dt[, athlete_id := as.character(athlete_id)]
+  # Adjust relative to the athlete's own typical value: their average start is
+  # part of who they are and belongs in ability, only the deviation is context.
+  dt[, xdev := xv - mean(xv, na.rm = TRUE), by = .(athlete_id, event_id)]
+
+  pooled <- all(is.na(numeric_effect$event_id))
+  b <- if (pooled) rep(numeric_effect$beta[1], nrow(dt)) else
+    numeric_effect$beta[match(dt$event_id, numeric_effect$event_id)]
+  b[!is.finite(b)] <- 0
+  x <- dt$xdev
+  x[!is.finite(x)] <- 0
+
+  dt[, numeric_adj := b * x]
+  dt[, perf := perf - numeric_adj]
+  dt[, c("xv", "xdev") := NULL]
+  dt[]
+}
+
+
 #' Remove a fitted context effect from marks
 #'
 #' @param results Canonical results.

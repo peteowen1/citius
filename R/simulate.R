@@ -285,15 +285,22 @@ prob_better_than <- function(sim, mark, who = c("each", "any")) {
 
 #' Rank each simulated race, best performance first
 #'
-#' Field sizes are small (a final is 8, a heats field rarely over 100) while the
-#' simulation count is large, so ranking is done by pairwise comparison across
-#' columns rather than by applying a sort to every row. Each comparison is a
-#' single vectorised operation over all simulations at once, which avoids an
-#' R-level loop over `n_sims` and is roughly two orders of magnitude faster.
+#' Ranking must never loop over `n_sims` at R level — that is what makes
+#' `apply(perf, 1, rank)` two orders of magnitude too slow. **Do not
+#' reintroduce it.** Instead the whole matrix is melted to one long vector and
+#' ranked within simulation by a single `frankv()` call, which is C code
+#' throughout.
+#'
+#' This replaced an all-pairs column comparison that was also loop-free over
+#' simulations but O(fields^2): correct, and fine at a final's 8 lanes, but
+#' 2.6s per 96-lane race against `frankv`'s 0.14s. Measured, `frankv` is faster
+#' at every field size from 8 up, so there is no crossover to preserve.
 #'
 #' Fouled athletes carry `-Inf` and would otherwise tie with each other; they
 #' are ranked among themselves at random so that no fouled athlete is
-#' systematically credited with a better placing than another.
+#' systematically credited with a better placing than another. Every returned
+#' row is a strict permutation of `1:n` — see the sentinel comment below for
+#' the floating-point trap that silently broke this.
 #'
 #' @param perf Numeric matrix, simulations by athletes.
 #' @return Integer matrix of ranks, 1 = winner.
@@ -303,22 +310,24 @@ prob_better_than <- function(sim, mark, who = c("each", "any")) {
   n_sims <- nrow(perf)
   n_ath <- ncol(perf)
 
-  # Break ties (including -Inf fouls) with a vanishingly small random offset.
-  jitter <- matrix(stats::runif(n_sims * n_ath, 0, 1e-9), nrow = n_sims)
-  key <- perf + jitter
+  tie <- matrix(stats::runif(n_sims * n_ath), nrow = n_sims)
+  key <- perf + tie * 1e-9
   fouled <- !is.finite(perf)
-  key[fouled] <- -1e300 + jitter[fouled]
+  # Fouls must sort below every valid mark while still being ordered randomly
+  # among themselves. The sentinel cannot be -1e300: a double's ULP there is
+  # ~1e284, so adding a small offset is annihilated and every fouled athlete
+  # collapses onto one tied rank -- which the pairwise ranker then handed out
+  # as duplicate placings, crediting all of them with a medal whenever enough
+  # of a small field fouled. Keys are log-scale marks and never approach -1e6,
+  # so this sits safely below them with the random order fully representable.
+  key[fouled] <- -1e6 - tie[fouled]
 
-  rank <- matrix(1L, nrow = n_sims, ncol = n_ath)
-  for (i in seq_len(n_ath)) {
-    beaten_by <- integer(n_sims)
-    for (j in seq_len(n_ath)) {
-      if (i == j) next
-      beaten_by <- beaten_by + (key[, j] > key[, i])
-    }
-    rank[, i] <- 1L + beaten_by
-  }
-  rank
+  # Rank within simulation: order by (sim, -key) and the position within each
+  # sim's block of n_ath is the placing. The jitter above has already made
+  # every key distinct, so ties.method is never actually exercised.
+  sim <- rep.int(seq_len(n_sims), n_ath)
+  flat <- data.table::frankv(list(sim, -as.vector(key)), ties.method = "first")
+  matrix(as.integer(flat - (sim - 1L) * n_ath), nrow = n_sims, ncol = n_ath)
 }
 
 

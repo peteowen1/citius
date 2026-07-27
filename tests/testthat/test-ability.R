@@ -110,6 +110,23 @@ test_that("trimming does not touch non-tactical events", {
   expect_equal(a$ability, b$ability)
 })
 
+test_that("round labels classify by the most specific pattern, not the last one", {
+  # Regression: .round_class() is a sequence of overwrites, so the last match
+  # wins. Round labels NEST -- the feed's real semi-final label is
+  # "Semifinal - Heat", containing HEAT, SEMI and FINAL. With "final" applied
+  # last, every semi-final classified as a FINAL: 14,764 results, 4.79% of the
+  # harvest, pooled into the reference context all other offsets are measured
+  # against. Nothing errored; the semi bucket was simply empty.
+  expect_equal(citius:::.round_class("Semifinal - Heat"), "semi")
+  expect_equal(citius:::.round_class(c("Semi Final", "Semi-Final", "Semifinal")),
+               rep("semi", 3))
+  expect_equal(citius:::.round_class("Quarter-Final"), "quarter")
+  # The plain cases must not regress while fixing the nested ones.
+  expect_equal(citius:::.round_class(c("Final", "Round 1 - Heat", "SF", "QF")),
+               c("final", "heat", "semi", "quarter"))
+  expect_equal(citius:::.round_class(c("Combined - Group", NA)), c("other", "other"))
+})
+
 test_that("context effects recover a planted round offset", {
   set.seed(21)
   base <- to_perf(9.90, -1L)

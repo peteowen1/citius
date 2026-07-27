@@ -231,10 +231,16 @@ estimate_context_effects <- function(results) {
 .round_class <- function(round) {
   r <- toupper(trimws(as.character(round)))
   out <- rep("other", length(r))
-  out[grepl("^H", r) | grepl("HEAT", r)] <- "heat"
-  out[grepl("^SF", r) | grepl("SEMI", r)] <- "semi"
-  out[grepl("^QF", r) | grepl("QUARTER", r)] <- "quarter"
+  # These are sequential overwrites, so the LAST match wins and the patterns
+  # must run least-specific to most-specific. Round labels nest: the feed's
+  # actual semi-final label is "Semifinal - Heat", which contains HEAT, SEMI
+  # and FINAL. With "final" applied last it classified as a FINAL -- all 14,764
+  # semi-final results (4.79% of the harvest) were pooled into the reference
+  # context that every other round's offset is measured against.
   out[grepl("^F", r) | grepl("FINAL", r)] <- "final"
+  out[grepl("^H", r) | grepl("HEAT", r)] <- "heat"
+  out[grepl("^QF", r) | grepl("QUARTER", r)] <- "quarter"
+  out[grepl("^SF", r) | grepl("SEMI", r)] <- "semi"
   out[is.na(r)] <- "other"
   out
 }
@@ -346,8 +352,21 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   }
 
   if (trim_tactical > 0) {
-    dt <- dt[, .SD[.trim_worst(perf, w, trim = data.table::first(tactical) * trim_tactical)],
-             by = .(athlete_id, event_id)]
+    # Vectorised rank-and-filter, not `.SD[...]` per group. The `.SD` form made
+    # data.table materialise a sub-table for every athlete-event group and cost
+    # 74% of this function's runtime; the work itself is just "drop the worst
+    # k marks", which needs no sub-table at all.
+    dt[, .keep := TRUE]
+    dt[tactical == TRUE, .grp_n := .N, by = .(athlete_id, event_id)]
+    dt[tactical == TRUE & .grp_n >= 4L,
+       .rk := data.table::frank(perf, ties.method = "first"),
+       by = .(athlete_id, event_id)]
+    # frank is ascending and perf is oriented so higher is better: rank 1 is the
+    # worst mark, which is what the tactical trim removes.
+    dt[tactical == TRUE & .grp_n >= 4L,
+       .keep := .rk > floor(.grp_n * trim_tactical)]
+    dt <- dt[.keep == TRUE]
+    dt[, c(".keep", ".grp_n", ".rk") := NULL]
   }
 
   ab <- dt[, {

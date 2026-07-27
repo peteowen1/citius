@@ -149,6 +149,37 @@ recovery. Neither threw an error.
    in field and combined events. `.resolve_mark()` now parses the display string
    first and falls back to the integer only when the string is unusable.
 
+4. **A tie-break offset can be annihilated by the sentinel it is added to.**
+   Fouled athletes were pushed below the field with `-1e300 + runif(0, 1e-9)`.
+   At that magnitude a double's ULP is ~1e284, so the offset vanished and every
+   fouled athlete held *exactly* `-1e300`. The pairwise ranker gave them all the
+   same placing, so a race could return ranks `1,2,3,3,3,3` — duplicated, with
+   the tail never awarded. Whenever `n - k + 1 <= 3`, **every fouled athlete was
+   credited with a medal**. Pole Vault M (13.9% no-marks) and 10,000m W (11.1%)
+   are where this bit. The sentinel is now `-1e6 - runif(0, 1)`: far below any
+   log-scale mark, with the random order fully representable. Invariants worth
+   asserting anywhere placings are produced — both now in `test-simulate.R`:
+   **every row is a strict permutation of `1:n`**, and **`sum(p_medal)` is
+   exactly `min(n, 3)`**.
+
+5. **Round labels nest, and `.round_class()` overwrites.** The feed's semi-final
+   label is `"Semifinal - Heat"` — it contains `HEAT`, `SEMI` *and* `FINAL`.
+   With the patterns applied heat → semi → quarter → final, the last match won
+   and every semi-final classified as a **final**: 14,764 results, 4.79% of the
+   harvest, folded into the reference context every other offset is measured
+   against. The `semi` bucket was simply empty and nothing said so. Patterns now
+   run least-specific to most-specific.
+
+   **Measured impact: negligible.** Round offsets moved by ~3e-6 on the log
+   scale (heat −0.002967 → −0.002964), because the recovered semi offset is
+   +0.000033 — semis and finals run at effectively the same speed in this
+   harvest. Worth fixing because the bucket now exists and the classifier is
+   correct for feeds that label rounds differently, **not** because it moved the
+   numbers. Round *precisions* are computed in `calibrate()`, not
+   `estimate_context_effects()`, and have not been re-measured — that is where
+   an effect is more plausible, since pooling more-predictable semis into finals
+   would inflate the final precision and over-weight finals.
+
 **The most important lesson from bug 3:** the Hampel filter in
 `flag_implausible()` was *hiding* it. Those "implausible" 0.03m vaults were real
 3.00m clearances. A robust outlier filter will absorb a systematic unit error
@@ -475,10 +506,26 @@ the athletics base URL as configuration, never a constant.
 
 ## Performance
 
-`simulate_event()` ranks by pairwise column comparison rather than sorting each
-row (`.rank_desc()`). Fields are small and simulation counts large, so this
-avoids an R-level loop over `n_sims` — roughly 25x faster on the test suite.
-**Do not replace it with `apply(..., rank)`.**
+The rule in both hot paths is the same: **never loop at R level over the big
+dimension** — simulations in the simulator, groups in the estimator. Both were
+once written that way and both were several times slower for it.
+
+`.rank_desc()` melts the simulation matrix and ranks within race in one
+`frankv()` call. **Do not replace it with `apply(..., rank)`**, which loops over
+`n_sims` and is two orders of magnitude slower. It previously used an all-pairs
+column comparison — loop-free over simulations but O(field²); `frankv` measured
+faster at *every* field size from 8 up (96 lanes: 2.6s → 0.14s), so there is no
+crossover worth keeping.
+
+`estimate_ability()`'s tactical trim is a vectorised rank-and-filter, not
+`.SD[...]` per athlete-event group. The `.SD` form made data.table materialise a
+sub-table per group and cost **74% of the function's runtime** for work that is
+just "drop the worst k marks" (2.36s → 0.68s, output bit-identical). `.SD` with
+a function call per group is the first thing to suspect if this gets slow again.
+
+Backtest cost is dominated by the per-meet refit, so `backtest_athletics.R`
+restricts history to the meet's own events and to `HISTORY_DAYS` before the cut.
+Both are exact given the recency decay, not approximations.
 
 ## Conventions
 

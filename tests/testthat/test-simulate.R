@@ -62,6 +62,37 @@ test_that("fouls rank an athlete last without reading as a slow mark", {
   expect_true(all(is.finite(medal_probs(sim)$median_mark)))
 })
 
+test_that("fouled athletes get distinct placings, never a shared one", {
+  # Regression: the tie-break offset for fouls used to be added to a -1e300
+  # sentinel, where a double's ULP is ~1e284 -- so it was annihilated and every
+  # fouled athlete collapsed onto a single tied rank. The ranker then handed
+  # out duplicate placings, and once enough of a small field fouled, that tied
+  # rank was 3 or better and EVERY fouled athlete was credited with a medal.
+  # Nothing errored; only the invariants below catch it.
+  for (n in c(2L, 8L, 13L)) {
+    ab <- make_ability(times = seq(5.9, 5.2, length.out = n), event_id = "AT-PoleVault-M")
+    ab$ability <- to_perf(seq(5.9, 5.2, length.out = n), 1L)
+    for (fp in c(0.15, 0.9)) {
+      sim <- simulate_event(ab, n_sims = 1500, foul_prob = fp, seed = 5)
+      # Every row a strict permutation of 1:n -- no duplicates, none skipped.
+      expect_true(all(apply(sim$rank, 1L, function(r) identical(unname(sort(r)), seq_len(n)))))
+      # Exactly min(n, 3) medals per race, however many athletes fouled.
+      expect_equal(sum(medal_probs(sim)$p_medal), min(n, 3), tolerance = 1e-8)
+    }
+  }
+})
+
+test_that("fouls are ordered at random, not by entry order", {
+  # Identical athletes fouling at 50%: any systematic advantage to whoever is
+  # listed first shows up as a gradient in p_gold across entry order.
+  ab <- make_ability(times = rep(5.8, 8L), event_id = "AT-PoleVault-M")
+  ab$ability <- to_perf(rep(5.8, 8L), 1L)
+  mp <- medal_probs(simulate_event(ab, n_sims = 30000, foul_prob = 0.5, seed = 9))
+  p <- mp[order(match(mp$athlete_id, ab$athlete_id))]$p_gold
+  expect_lt(abs(stats::cor(p, seq_along(p))), 0.6)
+  expect_lt(diff(range(p)), 0.02)
+})
+
 test_that("simulate_event rejects an unusable field", {
   expect_error(simulate_event(make_ability(times = 9.8), n_sims = 100), "at least 2")
   bad <- make_ability()[, c("athlete_id", "event_id")]
