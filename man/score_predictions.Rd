@@ -7,17 +7,17 @@
 score_predictions(predictions, outcomes, prob_col = "p_gold")
 }
 \arguments{
-\item{predictions}{A \code{data.table} with \code{event_id}, \code{athlete_id} and a
+\item{predictions}{A \code{data.table} with \code{race_id}, \code{athlete_id} and a
 probability column.}
 
-\item{outcomes}{A \code{data.table} with \code{event_id}, \code{athlete_id} and a logical
+\item{outcomes}{A \code{data.table} with \code{race_id}, \code{athlete_id} and a logical
 \code{hit} marking what actually happened.}
 
 \item{prob_col}{Name of the probability column.}
 }
 \value{
 A list with \code{overall} (Brier, log loss, skill against baseline),
-\code{by_event}, and \code{reliability} bins.
+\code{by_race}, and \code{reliability} bins.
 }
 \description{
 Reports the two things that matter for a probability forecast — whether it is
@@ -25,12 +25,24 @@ Reports the two things that matter for a probability forecast — whether it is
 claims) — plus a skill comparison against the only defensible baseline.
 }
 \details{
-The baseline is deliberately uniform-within-event (\code{1/field_size}), not a
+The baseline is deliberately uniform-within-race (\code{1/field_size}), not a
 global constant. A model that beats "everyone equally likely" has learned
 something about who is fast; one that does not has learned nothing, no matter
 how good its Brier score looks in absolute terms. Absolute Brier scores are
-close to meaningless on their own here, because an event with 30 entrants
+close to meaningless on their own here, because a race with 30 entrants
 scores far better than one with 8 purely from having lower base rates.
+
+Report the \strong{pooled} figures. Brier is a proper scoring rule and is meant to
+be aggregated; summarising \code{by_race$skill} as a median is not a fair summary,
+because the penalty for confidence is asymmetric. A model that knows the true
+probabilities exactly still loses to the uniform baseline on roughly a third
+of individual races.
+
+Scoring is per \strong{race} — one running of a phase, e.g. the Paris 2024 men's
+100m final — not per event type. See \code{DICTIONARY.md}. The key is \code{race_id}
+precisely so this cannot be confused again: an earlier version keyed on
+\code{event_id} while being passed a meet-plus-event composite, which made a
+report of 50 individual finals read as 50 event types.
 }
 \seealso{
 \code{\link[=reliability_table]{reliability_table()}}

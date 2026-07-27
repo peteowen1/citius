@@ -309,6 +309,34 @@ purely from base rates.
 close configurations. It is enough to say the model beats "everyone equally
 likely"; it is not enough to rank two calibrations against each other.
 
+### Swimming backtest: validated at scale, over-confident at the top
+
+59,642 swims / 8,141 athletes / 57 World Aquatics meets, 2017–2025. Backtest:
+**895 scoreable races**, gold skill **+0.234**, medal skill **+0.417**. Coverage
+92% (athletics 78%) because World Aquatics carries a stable `PersonId`, so
+cross-meet athlete linking is exact rather than name-matched. Beats baseline on
+600 of 895 races (67%), against the ~64% a perfect model manages.
+
+**Calibration fails in the opposite direction from athletics.** Below 30% the
+gap is +0.010; above 30% it is −0.094, reaching −0.23 in the top bin — when
+swimming says 94%, the athlete wins 72%.
+
+Diagnosis, not yet fixed: `sigma_within` for swimming is measured across heats,
+semis and finals *within one meet*, but the backtest predicts a final from
+*prior meets*. Between-meet variation — form change, taper timing — is larger
+than within-meet variation, so the model treats favourites as far safer than
+they are. Athletics avoids this because its harvest spans years per athlete, so
+its sigma already reflects between-meet spread.
+
+**Do not fix this by inflating sigma by hand.** The right move is to estimate
+within-meet and between-meet components separately.
+
+Other measured swimming values: `tail_df` 20; shared-condition share 0.59–0.78,
+far above athletics' 0.28 — in a pool that is session effects, not weather;
+heats run 1.12% slower than finals. Half-life for sprint and middle distance
+still pins to the 90-day grid floor and is flagged unidentified — swimming form
+appears to decay faster than the grid can currently express.
+
 ### Tail weight is fitted, and kurtosis is the wrong tool
 
 `fit_tail_df()` chooses the t degrees of freedom by matching observed

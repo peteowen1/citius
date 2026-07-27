@@ -4,20 +4,32 @@
 #' *sharp* (confident) and whether it is *calibrated* (right as often as it
 #' claims) — plus a skill comparison against the only defensible baseline.
 #'
-#' The baseline is deliberately uniform-within-event (`1/field_size`), not a
+#' The baseline is deliberately uniform-within-race (`1/field_size`), not a
 #' global constant. A model that beats "everyone equally likely" has learned
 #' something about who is fast; one that does not has learned nothing, no matter
 #' how good its Brier score looks in absolute terms. Absolute Brier scores are
-#' close to meaningless on their own here, because an event with 30 entrants
+#' close to meaningless on their own here, because a race with 30 entrants
 #' scores far better than one with 8 purely from having lower base rates.
 #'
-#' @param predictions A `data.table` with `event_id`, `athlete_id` and a
+#' Report the **pooled** figures. Brier is a proper scoring rule and is meant to
+#' be aggregated; summarising `by_race$skill` as a median is not a fair summary,
+#' because the penalty for confidence is asymmetric. A model that knows the true
+#' probabilities exactly still loses to the uniform baseline on roughly a third
+#' of individual races.
+#'
+#' Scoring is per **race** — one running of a phase, e.g. the Paris 2024 men's
+#' 100m final — not per event type. See `DICTIONARY.md`. The key is `race_id`
+#' precisely so this cannot be confused again: an earlier version keyed on
+#' `event_id` while being passed a meet-plus-event composite, which made a
+#' report of 50 individual finals read as 50 event types.
+#'
+#' @param predictions A `data.table` with `race_id`, `athlete_id` and a
 #'   probability column.
-#' @param outcomes A `data.table` with `event_id`, `athlete_id` and a logical
+#' @param outcomes A `data.table` with `race_id`, `athlete_id` and a logical
 #'   `hit` marking what actually happened.
 #' @param prob_col Name of the probability column.
 #' @return A list with `overall` (Brier, log loss, skill against baseline),
-#'   `by_event`, and `reliability` bins.
+#'   `by_race`, and `reliability` bins.
 #' @seealso [reliability_table()]
 #' @export
 score_predictions <- function(predictions, outcomes, prob_col = "p_gold") {
@@ -26,18 +38,26 @@ score_predictions <- function(predictions, outcomes, prob_col = "p_gold") {
   if (!prob_col %in% names(p)) {
     cli::cli_abort("{.arg predictions} has no column {.field {prob_col}}.")
   }
+  for (nm in c("race_id")) {
+    if (!nm %in% names(p) || !nm %in% names(o)) {
+      cli::cli_abort(c(
+        "{.arg predictions} and {.arg outcomes} must both have {.field race_id}.",
+        i = "One race is one running of a phase - see {.file DICTIONARY.md}."
+      ))
+    }
+  }
 
   p[, athlete_id := as.character(athlete_id)]
   o[, athlete_id := as.character(athlete_id)]
-  d <- merge(p[, .(event_id, athlete_id, prob = get(prob_col))],
-             o[, .(event_id, athlete_id, hit)],
-             by = c("event_id", "athlete_id"))
+  d <- merge(p[, .(race_id, athlete_id, prob = get(prob_col))],
+             o[, .(race_id, athlete_id, hit)],
+             by = c("race_id", "athlete_id"))
   if (!nrow(d)) {
     cli::cli_abort("No predictions matched an outcome; check {.field athlete_id} keys.")
   }
 
   d[, hit := as.integer(hit)]
-  d[, field := .N, by = event_id]
+  d[, field := .N, by = race_id]
   d[, base := 1 / field]
 
   eps <- 1e-15
@@ -46,14 +66,14 @@ score_predictions <- function(predictions, outcomes, prob_col = "p_gold") {
   d[, logloss := -(hit * log(pmax(prob, eps)) + (1 - hit) * log(pmax(1 - prob, eps)))]
   d[, logloss_base := -(hit * log(pmax(base, eps)) + (1 - hit) * log(pmax(1 - base, eps)))]
 
-  by_event <- d[, .(field = data.table::first(field),
-                    brier = mean(brier), brier_base = mean(brier_base),
-                    hits = sum(hit)), by = event_id]
-  by_event[, skill := 1 - brier / brier_base]
+  by_race <- d[, .(field = data.table::first(field),
+                   brier = mean(brier), brier_base = mean(brier_base),
+                   hits = sum(hit)), by = race_id]
+  by_race[, skill := 1 - brier / brier_base]
 
   overall <- list(
     n_predictions = nrow(d),
-    n_events = data.table::uniqueN(d$event_id),
+    n_races = data.table::uniqueN(d$race_id),
     brier = mean(d$brier),
     brier_baseline = mean(d$brier_base),
     brier_skill = 1 - mean(d$brier) / mean(d$brier_base),
@@ -63,7 +83,7 @@ score_predictions <- function(predictions, outcomes, prob_col = "p_gold") {
     observed_rate = mean(d$hit)
   )
 
-  list(overall = overall, by_event = by_event[], reliability = reliability_table(d))
+  list(overall = overall, by_race = by_race[], reliability = reliability_table(d))
 }
 
 
@@ -102,7 +122,7 @@ reliability_table <- function(d, bins = 10L) {
 print.citius_score <- function(x, ...) {
   o <- x$overall
   cli::cli_h3("citius scoring")
-  cli::cli_text("{o$n_predictions} prediction{?s} across {o$n_events} event{?s}")
+  cli::cli_text("{o$n_predictions} prediction{?s} across {o$n_races} race{?s}")
   cli::cli_text("Brier {signif(o$brier, 4)} vs baseline {signif(o$brier_baseline, 4)} (skill {signif(o$brier_skill, 3)})")
   cli::cli_text("Log loss {signif(o$logloss, 4)} vs baseline {signif(o$logloss_baseline, 4)}")
   invisible(x)
