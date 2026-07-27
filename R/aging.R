@@ -36,6 +36,11 @@ fit_aging_curve <- function(results, min_results = 200L, k = 6,
   dt <- dt[!is.na(perf) & !is.na(age) & is.finite(age) & age > 10 & age < 50]
   if (!nrow(dt)) return(.empty_aging())
 
+  # Drop any pre-existing `family` before merging. Otherwise the join creates
+  # family.x/family.y, the NSE below falls through to stats::family, and the
+  # error is "cannot coerce type 'closure'" - which points nowhere near the
+  # cause. Callers reusing enriched data hit this easily.
+  if ("family" %in% names(dt)) dt[, family := NULL]
   reg <- .citius_event_registry[, c("event_id", "family")]
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
   dt <- dt[!is.na(family)]

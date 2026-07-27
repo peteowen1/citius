@@ -149,3 +149,13 @@ test_that("a correctly-referenced projection produces a small shift", {
   out <- project_ability(ok, ag)
   expect_lt(abs(out$age_shift), 0.02)
 })
+
+test_that("fit_aging_curve tolerates data that already has a family column", {
+  # Reusing enriched data used to produce "cannot coerce type 'closure'": the
+  # merge made family.x/family.y and the NSE fell through to stats::family.
+  d <- synthetic_careers(peak = 26)
+  d[, family := "sprint"]
+  ag <- fit_aging_curve(d)
+  expect_s3_class(ag, "citius_aging")
+  expect_lt(abs(ag$peaks[family == "sprint"]$peak_age - 26), 1.5)
+})
