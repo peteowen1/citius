@@ -93,19 +93,30 @@ From 58,711 performances / 643 athletes / 9,551 multi-athlete races (2026-07-27)
 
 ### Measured aging curves
 
-Peak ages from within-athlete variation (58k performances). Six of eight
-families are identified; two are not and are flagged as such.
+Peak ages from within-athlete variation. Refit on the 246k-performance
+competition harvest (2026-07-28); **all nine families are now identified**,
+including hurdles and road, which were boundary maxima on the old 58k
+athlete-level harvest.
 
-| Family | Peak | Plateau | Identified |
-|--------|------|---------|-----------|
-| sprint | 25.2 | 23.4–27.8 | yes |
-| jump | 26.0 | 24.6–27.7 | yes |
-| distance | 26.6 | 25.0–33.5 | yes |
-| middle | 27.6 | 25.9–33.2 | yes |
-| throw | 30.9 | 28.6–33.4 | yes |
-| walk | 32.9 | 30.7–35.5 | yes |
-| hurdles | 33.6 | — | **no** |
-| road | 44.2 | — | **no** |
+| Family | Peak | Plateau | n |
+|--------|------|---------|---|
+| sprint | 25.5 | 19.6–30.0 | 36,992 |
+| jump | 25.0 | 22.2–28.2 | 26,920 |
+| middle | 26.1 | 22.1–30.4 | 20,589 |
+| throw | 26.3 | 24.1–28.8 | 18,146 |
+| hurdles | 24.9 | 22.2–29.8 | 13,924 |
+| distance | 25.4 | 21.7–32.3 | 9,162 |
+| combined | 26.2 | 24.4–28.5 | 885 |
+| walk | 24.8 | 21.8–35.4 | 1,907 |
+| road | 34.3 | 28.7–40.9 | 1,836 |
+
+Peaks compressed sharply against the old figures — throw 30.9 → 26.3 and walk
+32.9 → 24.8 — because a competition harvest covers whole fields rather than a
+few hundred elite careers, and elite careers are exactly the selected sample
+that reads as longevity.
+
+**`walk` is fragile**: its peak moved 3.5 years on a 210-performance increase,
+and its plateau spans 13 years. Treat it as unresolved rather than measured.
 
 Three things about this fit are load-bearing:
 
@@ -170,15 +181,23 @@ recovery. Neither threw an error.
    against. The `semi` bucket was simply empty and nothing said so. Patterns now
    run least-specific to most-specific.
 
-   **Measured impact: negligible.** Round offsets moved by ~3e-6 on the log
-   scale (heat −0.002967 → −0.002964), because the recovered semi offset is
-   +0.000033 — semis and finals run at effectively the same speed in this
-   harvest. Worth fixing because the bucket now exists and the classifier is
-   correct for feeds that label rounds differently, **not** because it moved the
-   numbers. Round *precisions* are computed in `calibrate()`, not
-   `estimate_context_effects()`, and have not been re-measured — that is where
-   an effect is more plausible, since pooling more-predictable semis into finals
-   would inflate the final precision and over-weight finals.
+   **Impact on offsets: negligible.** They moved ~3e-6 on the log scale, because
+   the recovered semi offset is +0.0017 — semis and finals run at nearly the
+   same speed.
+
+   **Impact on weighting: substantial, and this is the part that mattered.**
+   Measured round precisions (inverse residual variance):
+
+   | | pooled | separated |
+   |---|--------|-----------|
+   | heat | 1.929 | 2.085 |
+   | **final** | **0.783** | **0.646** |
+   | semi | *(inside final)* | **1.654** |
+
+   Semis are far more predictable than finals (sd 0.0113 vs 0.0181), so pooling
+   them **inflated the final precision by 17.5%** and finals were over-weighted
+   in every ability estimate. The lesson: a misclassification can be invisible
+   in the means and still matter through the variances.
 
 **The most important lesson from bug 3:** the Hampel filter in
 `flag_implausible()` was *hiding* it. Those "implausible" 0.03m vaults were real
