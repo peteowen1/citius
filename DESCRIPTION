@@ -1,0 +1,39 @@
+Package: citius
+Title: Performance Modelling and Outcome Simulation for Major Games Athletics and Swimming
+Version: 0.1.0
+Authors@R:
+    person("Pete", "Owen", , "pete.owen1@hotmail.co.uk", role = c("aut", "cre", "cph"))
+Description: Estimates latent athlete ability from competition result
+    histories and simulates event outcomes for major multi-sport games
+    (Olympic, Commonwealth, World Championships). Combines decay-weighted
+    empirical-Bayes ability estimation with event-specific performance
+    variance, aging curves, shared race-condition effects and round
+    progression (heats, semi-finals, finals) in a Monte Carlo engine that
+    returns finishing-position, medal and mark-threshold probabilities.
+    Data is sourced from World Athletics and World Aquatics.
+License: MIT + file LICENSE
+Depends:
+    R (>= 4.3.0)
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports:
+    cli,
+    data.table (>= 1.14.0),
+    httr2,
+    jsonlite,
+    rlang,
+    stats
+Suggests:
+    arrow (>= 10.0.0),
+    ggplot2,
+    knitr,
+    mgcv,
+    piggyback,
+    rmarkdown,
+    testthat (>= 3.0.0),
+    withr
+Config/testthat/edition: 3
+VignetteBuilder: knitr
+URL: https://github.com/peteowen1/citius, https://peteowen1.github.io/citius/
+BugReports: https://github.com/peteowen1/citius/issues

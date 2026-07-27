@@ -1,0 +1,318 @@
+#' Magnitude of shared race-condition effects
+#'
+#' Returns the standard deviation of the *common* shock applied to every athlete
+#' in a race, on the log performance scale. Wind, track surface, temperature,
+#' altitude and pace-setting move an entire field together; pool conditions
+#' barely move a field at all.
+#'
+#' The value is **measured**, not assumed. Supply a `calibration` from
+#' [calibrate()] and the shock is the de-biased standard deviation of fitted
+#' race effects for that event. Only the *shared* component belongs here;
+#' athlete-specific variation is carried by `sigma` from [estimate_ability()].
+#'
+#' Without a calibration, or for an event with too few observed fields, this
+#' falls back to the registry's `cv_prior` — a coarse placeholder that exists
+#' only so the simulator runs before any data has been harvested. Fallback
+#' values are not estimates and should not be treated as such; check
+#' `calibration$events$calibrated` to see which events are on real numbers.
+#'
+#' @param event_id Character vector of canonical event ids.
+#' @param calibration Optional `citius_calibration` from [calibrate()].
+#' @return Numeric vector of shared-shock standard deviations.
+#' @seealso [calibrate()]
+#' @export
+race_conditions <- function(event_id, calibration = NULL) {
+  reg <- .citius_event_registry
+  idx <- match(event_id, reg$event_id)
+  fallback <- reg$cv_prior[idx] * 0.25
+  fallback[is.na(fallback)] <- 0.003
+
+  vapply(seq_along(event_id), function(i) {
+    .calibrated_value(calibration, event_id[i], "condition_sd", fallback[i])
+  }, numeric(1))
+}
+
+
+#' Athlete-specific sensitivity to shared race conditions
+#'
+#' Returns a multiplier per athlete describing how strongly each is moved by the
+#' shared condition shock drawn in [simulate_event()]. A value of `1` means the
+#' athlete is affected exactly as much as the field average; `1.5` means half
+#' again as much; `0` means unaffected.
+#'
+#' This function is what makes conditions capable of changing *placings*. The
+#' shared shock on its own is a main effect and cancels out of every pairwise
+#' comparison, so it can only move absolute marks. Sensitivity turns it into an
+#' interaction: if athletes respond differently to a headwind, a cold pool or a
+#' slow pace, then conditions genuinely reorder the field.
+#'
+#' @param ability A `data.table` of entrants as passed to [simulate_event()].
+#' @param event_id Canonical event id for the race.
+#' @param calibration Optional `citius_calibration` from [calibrate()]. Without
+#'   one, every athlete is assigned a sensitivity of 1, which makes the shock a
+#'   pure main effect that cannot reorder the field.
+#' @return Numeric vector of multipliers, one per row of `ability`, in the same
+#'   order. Rescaled so the field mean is 1, preserving the magnitude
+#'   [race_conditions()] intends.
+#' @seealso [calibrate()]
+#' @export
+condition_sensitivity <- function(ability, event_id, calibration = NULL) {
+  n <- nrow(ability)
+  if (is.null(calibration) || is.null(calibration$athlete) ||
+      !"sensitivity" %in% names(calibration$athlete)) {
+    return(rep(1, n))
+  }
+
+  s <- calibration$athlete[, c("athlete_id", "sensitivity")]
+  idx <- match(as.character(ability$athlete_id), s$athlete_id)
+  out <- s$sensitivity[idx]
+  out[!is.finite(out)] <- 1
+
+  # Renormalise to mean 1: the field-average response is already represented by
+  # race_conditions(), so sensitivity must carry only the relative differences.
+  m <- mean(out)
+  if (is.finite(m) && m > 0) out <- out / m
+  out
+}
+
+
+#' Simulate an event and return outcome probabilities
+#'
+#' Runs a Monte Carlo over a single race. Each simulation draws one shared
+#' condition shock for the field, then one performance per athlete, then ranks
+#' them. Repeating this many times converts point estimates of ability into the
+#' distributional quantities that are actually interesting: medal chances,
+#' finishing-position spreads and the odds of beating a given mark.
+#'
+#' Athlete performances are drawn from a scaled t distribution rather than a
+#' normal. Elite results have fatter tails than Gaussian noise implies — the
+#' occasional breakthrough run and the occasional blow-up both happen more often
+#' than a normal would allow — and a t with modest degrees of freedom captures
+#' that without extra parameters.
+#'
+#' @param ability A `data.table` from [estimate_ability()], filtered to the
+#'   entrants in this race. Must contain `athlete_id`, `event_id`, `ability`
+#'   and `sigma`.
+#' @param n_sims Number of simulations.
+#' @param condition_sd Shared-shock standard deviation. Defaults to
+#'   [race_conditions()] for the event.
+#' @param df Degrees of freedom for the performance t distribution. Defaults to
+#'   the measured value from `calibration` (see [fit_tail_df()]), or 20.
+#' @param foul_prob Probability that an athlete records no valid performance —
+#'   a foul-out or no-height in a field event, a DNF or DNS on the track.
+#'   Defaults to the measured rate from `calibration`.
+#' @param taper Systematic shift applied to every athlete, on the log
+#'   performance scale. Positive values make the field faster; use this to
+#'   represent championship tapering.
+#' @param calibration Optional `citius_calibration` from [calibrate()]. Supplies
+#'   the measured shared-shock magnitude, per-athlete condition sensitivity and
+#'   foul rate. Without it the simulator falls back to registry placeholders.
+#' @param seed Optional integer seed for reproducibility.
+#' @return An object of class `citius_sim`: a list with the raw `perf` matrix
+#'   (`n_sims` x athletes), `rank` matrix, the `ability` input and the settings
+#'   used.
+#' @seealso [medal_probs()], [prob_better_than()]
+#' @examples
+#' ab <- data.frame(
+#'   athlete_id = c("a", "b", "c"),
+#'   event_id = "AT-100Metres-M",
+#'   ability = -log(c(9.8, 9.9, 10.0)),
+#'   sigma = 0.008
+#' )
+#' sim <- simulate_event(ab, n_sims = 2000, seed = 1)
+#' medal_probs(sim)
+#' @export
+simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
+                           df = NULL, foul_prob = NULL, taper = 0,
+                           calibration = NULL, seed = NULL) {
+  ab <- data.table::as.data.table(ability)
+  req <- c("athlete_id", "event_id", "ability", "sigma")
+  missing <- setdiff(req, names(ab))
+  if (length(missing)) {
+    cli::cli_abort("{.arg ability} is missing required column{?s}: {.field {missing}}.")
+  }
+  ab <- ab[!is.na(ability) & !is.na(sigma)]
+  n_ath <- nrow(ab)
+  if (n_ath < 2L) cli::cli_abort("Need at least 2 entrants with a valid ability estimate.")
+
+  event_id <- ab$event_id[1]
+  if (data.table::uniqueN(ab$event_id) > 1L) {
+    cli::cli_warn("Multiple events supplied; using {.val {event_id}} for condition and foul settings.")
+  }
+
+  if (is.null(condition_sd)) condition_sd <- race_conditions(event_id, calibration)
+  if (is.null(df)) {
+    # Measured tail weight where available. The previous hard-coded 6 put about
+    # three times too much mass beyond two standard deviations, manufacturing
+    # upsets and leaving favourites systematically under-rated.
+    df <- if (!is.null(calibration) && is.numeric(calibration$tail_df) &&
+              is.finite(calibration$tail_df)) calibration$tail_df else 20
+  }
+  reg_idx <- match(event_id, .citius_event_registry$event_id)
+  is_technical <- isTRUE(.citius_event_registry$technical[reg_idx])
+  orientation <- .citius_event_registry$orientation[reg_idx]
+  if (is.na(orientation)) orientation <- -1L
+  if (is.null(foul_prob)) {
+    # The measured rate of recording no valid performance. This is *not* a
+    # technical-events-only concern: a field athlete fouling out and a distance
+    # runner failing to finish are the same thing for ranking purposes, and
+    # championship distance races carry double-digit DNF rates that materially
+    # affect medal probabilities. Both are drawn from the same measured rate.
+    foul_prob <- .calibrated_value(calibration, event_id, "foul_rate", NA_real_)
+    if (!is.finite(foul_prob)) {
+      foul_prob <- 0
+      cli::cli_warn(
+        c("No calibrated no-mark rate for {.val {event_id}}; simulating with none.",
+          i = "Measure it with {.fn calibrate} on {.fn competition_results} output - the athlete endpoint omits no-marks."),
+        .frequency = "once", .frequency_id = "citius_no_foul_rate"
+      )
+    }
+  }
+
+  if (!is.null(seed)) set.seed(seed)
+  n_sims <- as.integer(n_sims)
+
+  # One shared shock per simulated race, common to the whole field.
+  cond <- stats::rnorm(n_sims, mean = 0, sd = condition_sd)
+
+  # Scaled t: unit-variance t, then scaled by each athlete's own sigma.
+  scale_t <- sqrt((df - 2) / df)
+  noise <- matrix(stats::rt(n_sims * n_ath, df = df) * scale_t,
+                  nrow = n_sims, ncol = n_ath)
+
+  # Sensitivity turns the shared shock from a main effect into an interaction,
+  # which is the only way conditions can reorder the field. See
+  # condition_sensitivity().
+  sens <- condition_sensitivity(ab, event_id, calibration)
+  if (length(sens) != n_ath || anyNA(sens)) {
+    cli::cli_abort("{.fn condition_sensitivity} must return one non-missing value per entrant.")
+  }
+
+  perf <- matrix(ab$ability, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
+    noise * matrix(ab$sigma, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
+    outer(cond, sens) + taper
+
+  if (foul_prob > 0) {
+    fouled <- matrix(stats::runif(n_sims * n_ath) < foul_prob,
+                     nrow = n_sims, ncol = n_ath)
+    perf[fouled] <- -Inf   # no valid mark: ranks last, does not read as a slow mark
+  }
+
+  rank <- .rank_desc(perf)
+  colnames(perf) <- colnames(rank) <- ab$athlete_id
+
+  structure(
+    list(
+      perf = perf, rank = rank, ability = ab, event_id = event_id,
+      orientation = orientation, n_sims = n_sims,
+      settings = list(condition_sd = condition_sd, df = df,
+                      foul_prob = foul_prob, taper = taper)
+    ),
+    class = "citius_sim"
+  )
+}
+
+
+#' Summarise a simulation into medal and placing probabilities
+#'
+#' @param sim A `citius_sim` from [simulate_event()].
+#' @param top_n Additional placing threshold to report. Default 8 (an Olympic
+#'   final's scoring places).
+#' @return A `data.table` ordered by win probability, with `p_gold`, `p_medal`,
+#'   `p_top_n`, `median_rank` and the median simulated mark.
+#' @export
+medal_probs <- function(sim, top_n = 8L) {
+  stopifnot(inherits(sim, "citius_sim"))
+  r <- sim$rank
+  p <- sim$perf
+
+  med_perf <- apply(p, 2L, function(x) stats::median(x[is.finite(x)]))
+
+  out <- data.table::data.table(
+    athlete_id  = colnames(r),
+    p_gold      = colMeans(r == 1L),
+    p_medal     = colMeans(r <= 3L),
+    p_top_n     = colMeans(r <= top_n),
+    median_rank = apply(r, 2L, stats::median),
+    median_mark = perf_to_mark(med_perf, sim$orientation)
+  )
+  data.table::setnames(out, "p_top_n", paste0("p_top", top_n))
+  data.table::setorder(out, -p_gold)
+  out[]
+}
+
+
+#' Probability of beating a mark
+#'
+#' Answers "what are the odds anyone goes under 9.80?" or "what is the chance
+#' this athlete clears 6 metres?".
+#'
+#' @param sim A `citius_sim` from [simulate_event()].
+#' @param mark Numeric threshold in the event's natural units (seconds, metres
+#'   or points).
+#' @param who Either `"each"` for per-athlete probabilities or `"any"` for the
+#'   probability that at least one athlete in the field beats the mark.
+#' @return A `data.table` for `"each"`, or a single numeric for `"any"`.
+#' @export
+prob_better_than <- function(sim, mark, who = c("each", "any")) {
+  stopifnot(inherits(sim, "citius_sim"))
+  who <- match.arg(who)
+  threshold <- to_perf(mark, sim$orientation)
+  beats <- sim$perf > threshold
+
+  if (who == "any") return(mean(rowSums(beats) > 0L))
+
+  data.table::data.table(
+    athlete_id = colnames(sim$perf),
+    prob = colMeans(beats)
+  )[order(-prob)][]
+}
+
+
+#' Rank each simulated race, best performance first
+#'
+#' Field sizes are small (a final is 8, a heats field rarely over 100) while the
+#' simulation count is large, so ranking is done by pairwise comparison across
+#' columns rather than by applying a sort to every row. Each comparison is a
+#' single vectorised operation over all simulations at once, which avoids an
+#' R-level loop over `n_sims` and is roughly two orders of magnitude faster.
+#'
+#' Fouled athletes carry `-Inf` and would otherwise tie with each other; they
+#' are ranked among themselves at random so that no fouled athlete is
+#' systematically credited with a better placing than another.
+#'
+#' @param perf Numeric matrix, simulations by athletes.
+#' @return Integer matrix of ranks, 1 = winner.
+#' @keywords internal
+#' @noRd
+.rank_desc <- function(perf) {
+  n_sims <- nrow(perf)
+  n_ath <- ncol(perf)
+
+  # Break ties (including -Inf fouls) with a vanishingly small random offset.
+  jitter <- matrix(stats::runif(n_sims * n_ath, 0, 1e-9), nrow = n_sims)
+  key <- perf + jitter
+  fouled <- !is.finite(perf)
+  key[fouled] <- -1e300 + jitter[fouled]
+
+  rank <- matrix(1L, nrow = n_sims, ncol = n_ath)
+  for (i in seq_len(n_ath)) {
+    beaten_by <- integer(n_sims)
+    for (j in seq_len(n_ath)) {
+      if (i == j) next
+      beaten_by <- beaten_by + (key[, j] > key[, i])
+    }
+    rank[, i] <- 1L + beaten_by
+  }
+  rank
+}
+
+
+#' @export
+print.citius_sim <- function(x, ...) {
+  cli::cli_h3("citius simulation: {x$event_id}")
+  cli::cli_text("{x$n_sims} sims across {ncol(x$perf)} athletes")
+  cli::cli_text("shared condition sd: {signif(x$settings$condition_sd, 3)} | df: {x$settings$df}")
+  print(utils::head(medal_probs(x), 8L))
+  invisible(x)
+}
