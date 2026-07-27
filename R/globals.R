@@ -32,3 +32,4 @@ utils::globalVariables(c("prob", "hit", "brier", "brier_base", "logloss",
                          "mean_predicted", "skill"))
 utils::globalVariables(c("z", "df", "comp_start", "comp_name", "hit_medal", "winner_present"))
 utils::globalVariables(c("ability_se"))
+utils::globalVariables(c("beta", "wind_adj", "r2", "dev"))

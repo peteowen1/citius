@@ -280,7 +280,11 @@ competition_results <- function(competition_id, days = 1:12) {
           place        = suppressWarnings(as.integer(x$place %||% NA_integer_)),
           wind         = as.numeric(x$wind %||% NA_real_),
           indoor       = isTRUE(loc$indoor),
-          legal        = TRUE,
+          # Wind legality is a property of the reading, not something to assume.
+          # Marks over +2.0 m/s are ineligible for records; hardcoding TRUE here
+          # silently treated 7,423 wind-aided marks as legal. They remain usable
+          # once wind-adjusted (see adjust_wind), but the flag must be honest.
+          legal        = is.na(x$wind %||% NA) | (as.numeric(x$wind %||% 0) <= 2.0),
           tier         = tier,
           venue_country = loc$country %||% NA_character_
         )
