@@ -174,6 +174,8 @@ athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) {
       legal         = isTRUE(r$legal),
       tier          = r$category %||% NA_character_,
       venue_country = loc$country %||% NA_character_,
+      venue_city    = loc$city %||% NA_character_,
+      venue_stadium = loc$stadium %||% NA_character_,
       result_score  = as.numeric(r$resultScore %||% NA_real_)
     )
   }), use.names = TRUE, fill = TRUE)
@@ -286,7 +288,13 @@ competition_results <- function(competition_id, days = 1:12) {
           # once wind-adjusted (see adjust_wind), but the flag must be honest.
           legal        = is.na(x$wind %||% NA) | (as.numeric(x$wind %||% 0) <= 2.0),
           tier         = tier,
-          venue_country = loc$country %||% NA_character_
+          venue_country = loc$country %||% NA_character_,
+          # City and stadium are needed for altitude, which is a real systematic
+          # effect - measured at roughly -0.3% over 5000m even through a crude
+          # country proxy. Country alone cannot resolve it, because most South
+          # African and Kenyan meets are at altitude but many are not.
+          venue_city   = loc$city %||% NA_character_,
+          venue_stadium = loc$stadium %||% NA_character_
         )
       }), use.names = TRUE, fill = TRUE)
     })
