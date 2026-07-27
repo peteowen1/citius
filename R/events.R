@@ -53,6 +53,11 @@ citius_events <- function() {
     d("400 Metres",              "sprint",   "seconds", -1L, FALSE, FALSE, 0.010),
     d("800 Metres",              "middle",   "seconds", -1L, TRUE,  FALSE, 0.013),
     d("1500 Metres",             "middle",   "seconds", -1L, TRUE,  FALSE, 0.016),
+    # The mile is 1609m, not 1500m. Contested at the Commonwealth Games and on
+    # the Diamond League circuit, and must never be matched onto the 1500m: a
+    # 7% distance difference would make every miler read as catastrophically
+    # slow against 1500m marks.
+    d("Mile",                    "middle",   "seconds", -1L, TRUE,  FALSE, 0.016),
     d("5000 Metres",             "distance", "seconds", -1L, TRUE,  FALSE, 0.020),
     d("10,000 Metres",           "distance", "seconds", -1L, TRUE,  FALSE, 0.022),
     d("Marathon",                "road",     "seconds", -1L, FALSE, FALSE, 0.030),
@@ -61,6 +66,8 @@ citius_events <- function() {
     d("400 Metres Hurdles",      "hurdles",  "seconds", -1L, FALSE, FALSE, 0.013),
     d("3000 Metres Steeplechase","distance", "seconds", -1L, TRUE,  FALSE, 0.020),
     d("20 Kilometres Race Walk", "walk",     "seconds", -1L, FALSE, FALSE, 0.025),
+    # Glasgow 2026 walks 10,000m rather than the Olympic 20km.
+    d("10,000 Metres Race Walk", "walk",     "seconds", -1L, FALSE, FALSE, 0.025),
     d("High Jump",               "jump",     "metres",   1L, FALSE, TRUE,  0.022),
     d("Pole Vault",              "jump",     "metres",   1L, FALSE, TRUE,  0.030),
     d("Long Jump",               "jump",     "metres",   1L, FALSE, TRUE,  0.025),
@@ -164,6 +171,8 @@ match_event <- function(discipline, sex) {
   x <- gsub("\\bmetres\\b|\\bmeters\\b|\\bmetre\\b|\\bmeter\\b", "m", x)
   x <- gsub("\\bkilometres\\b|\\bkilometers\\b", "km", x)
   x <- gsub("\\bindividual medley\\b", "im", x)
+  # World Athletics writes "Mile"; Games programmes write "One Mile".
+  x <- gsub("^one mile$|^1 mile$", "mile", x)
   x <- gsub("\\bsteeplechase\\b", "sc", x)
   x <- gsub("\\brace walk\\b|\\bracewalk\\b", "walk", x)
   x <- gsub("[^a-z0-9]+", "", x)
