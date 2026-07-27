@@ -219,7 +219,16 @@ athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) {
 #' everyone" — and that separation is the whole basis for estimating shared
 #' condition effects. Only whole fields make it identifiable.
 #'
+#' Results must be paged by competition day. The endpoint's default response is
+#' **not** the whole meet — it returns a single day's slice, and each `day`
+#' value yields a different set of events rather than filtering the default.
+#' For the 2025 World Championships the default gives 12 events and 541 results
+#' while paging days 1-10 gives 49 events and 3,153. Anything harvested without
+#' paging is capturing roughly a sixth of what is there.
+#'
 #' @param competition_id Integer competition id (see [find_competition()]).
+#' @param days Competition days to page through. The default spans the longest
+#'   championships; days beyond the meet return nothing and cost one request.
 #' @return A `data.table` in the canonical result schema with an additional
 #'   `race_key` uniquely identifying each race, and `athlete_name`.
 #' @examples
@@ -227,10 +236,17 @@ athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) {
 #' competition_results(7147633)  # XXII Commonwealth Games
 #' }
 #' @export
-competition_results <- function(competition_id) {
-  url <- paste0(athletics_base_url(), "/competitions/", as.integer(competition_id), "/results")
-  res <- citius_get_json(url)
-  events <- res$events %||% list()
+competition_results <- function(competition_id, days = 1:12) {
+  base <- paste0(athletics_base_url(), "/competitions/",
+                 as.integer(competition_id), "/results")
+
+  pages <- lapply(days, function(d) {
+    r <- tryCatch(citius_get_json(paste0(base, "?day=", d)), error = function(e) NULL)
+    r$events %||% list()
+  })
+  events <- unlist(pages, recursive = FALSE)
+  # Fall back to the unpaged call for competitions that ignore `day`.
+  if (!length(events)) events <- (citius_get_json(base) %||% list())$events %||% list()
   if (!length(events)) return(.empty_result_dt())
 
   rows <- lapply(events, function(ev) {
@@ -275,6 +291,9 @@ competition_results <- function(competition_id) {
   dt <- data.table::rbindlist(Filter(Negate(is.null), unlist(rows, recursive = FALSE)),
                               use.names = TRUE, fill = TRUE)
   if (!nrow(dt)) return(.empty_result_dt())
+
+  # Day pages overlap, so the same performance can arrive more than once.
+  dt <- unique(dt, by = c("race_key", "athlete_id", "mark_string", "place"))
 
   dt[, mark := .resolve_mark(mark_string, value_raw, is_technical)]
   dt[, age := as.numeric(date - birthdate) / 365.25]

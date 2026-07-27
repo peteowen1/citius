@@ -216,3 +216,49 @@ test_that("flag_implausible leaves clean data alone", {
   out <- flag_implausible(sim$data)
   expect_equal(sum(out$implausible), 0)
 })
+
+test_that("rows without a canonical event are dropped before decomposition", {
+  # Ability is grouped by athlete AND event, so NA-event rows for one athlete
+  # collapse together - pooling, say, a relay leg with a marathon. On a real
+  # harvest this inverted the round and tier offsets entirely.
+  good <- simulate_races(n_races = 60)$data
+  junk <- data.table::data.table(
+    race_key = paste0("junk", 1:200),
+    athlete_id = as.character(rep_len(1:30, 200)),
+    event_id = NA_character_, date = Sys.Date() - 1,
+    round = "F", tier = "OW",
+    perf = c(rep(to_perf(10, -1L), 100), rep(to_perf(7800, -1L), 100)))
+
+  clean_cal <- calibrate(good)
+  mixed_cal <- suppressWarnings(calibrate(rbind(good, junk, fill = TRUE)))
+
+  expect_equal(mixed_cal$events[event_id == "AT-100Metres-M"]$sigma_within,
+               clean_cal$events[event_id == "AT-100Metres-M"]$sigma_within,
+               tolerance = 0.001)
+  expect_false(any(is.na(mixed_cal$events$event_id)))
+})
+
+test_that("context offsets point the right way", {
+  # A sign error here passed every other test. Heats are slower than finals and
+  # minor meets slower than championships; anything else is a bug.
+  set.seed(63)
+  base <- to_perf(10, -1L)
+  d <- data.table::data.table(
+    race_key = rep(paste0("r", 1:120), each = 8),
+    athlete_id = as.character(rep_len(1:40, 960)),
+    event_id = "AT-100Metres-M", date = Sys.Date() - 1)
+  d[, round := rep(c("F", "H1"), each = 480)]
+  d[, tier := rep(c("OW", "F"), 480)]
+  # Heats planted 1% slower, low tier planted 3% slower
+  d[, perf := base +
+      ifelse(round == "H1", -0.01, 0) +
+      ifelse(tier == "F", -0.03, 0) +
+      stats::rnorm(.N, 0, 0.004)]
+
+  cal <- calibrate(d, min_races = 10L)
+  rounds <- stats::setNames(cal$round$offset, cal$round$round_class)
+  tiers <- stats::setNames(cal$tier$offset, cal$tier$tier_class)
+
+  expect_lt(rounds[["heat"]], 0)   # heats worse than finals
+  expect_lt(tiers[["low"]], 0)     # minor meets worse than top tier
+})

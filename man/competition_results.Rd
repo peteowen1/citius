@@ -4,10 +4,13 @@
 \alias{competition_results}
 \title{Fetch every result from a World Athletics competition}
 \usage{
-competition_results(competition_id)
+competition_results(competition_id, days = 1:12)
 }
 \arguments{
 \item{competition_id}{Integer competition id (see \code{\link[=find_competition]{find_competition()}}).}
+
+\item{days}{Competition days to page through. The default spans the longest
+championships; days beyond the meet return nothing and cost one request.}
 }
 \value{
 A \code{data.table} in the canonical result schema with an additional
@@ -19,6 +22,14 @@ athlete-by-athlete harvest can tell you how one person varies over time, but
 it cannot separate "this athlete had an off day" from "this race was slow for
 everyone" — and that separation is the whole basis for estimating shared
 condition effects. Only whole fields make it identifiable.
+}
+\details{
+Results must be paged by competition day. The endpoint's default response is
+\strong{not} the whole meet — it returns a single day's slice, and each \code{day}
+value yields a different set of events rather than filtering the default.
+For the 2025 World Championships the default gives 12 events and 541 results
+while paging days 1-10 gives 49 events and 3,153. Anything harvested without
+paging is capturing roughly a sixth of what is there.
 }
 \examples{
 \dontrun{

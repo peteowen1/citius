@@ -115,7 +115,21 @@ decompose_races <- function(results, max_iter = 50L, tol = 1e-8) {
   if (!"race_key" %in% names(dt)) {
     cli::cli_abort("{.arg results} must contain a {.field race_key} column; use {.fn competition_results}.")
   }
-  dt <- dt[!is.na(perf) & !is.na(athlete_id) & !is.na(race_key)]
+  # Rows without a canonical event must go. Ability is indexed by athlete *and*
+  # event, so every NA-event row for one athlete collapses into a single group —
+  # pooling, say, a relay leg with a marathon. The resulting residuals are
+  # enormous and poison every context offset computed downstream. On a real
+  # harvest this inverted the round and tier effects entirely, reporting heats
+  # as 14% faster than finals.
+  n_before <- nrow(dt)
+  dt <- dt[!is.na(perf) & !is.na(athlete_id) & !is.na(race_key) & !is.na(event_id)]
+  dropped <- n_before - nrow(dt)
+  if (dropped > 0.2 * n_before) {
+    cli::cli_warn(c(
+      "Dropped {dropped} of {n_before} row{?s} ({round(100 * dropped / n_before)}%) lacking a canonical event or performance.",
+      i = "Relays and unrecognised events resolve to {.code NA} {.field event_id} by design."
+    ), .frequency = "once", .frequency_id = "citius_decompose_dropped")
+  }
   if (!nrow(dt)) return(list(ability = NULL, race = NULL, data = dt, converged = TRUE))
 
   dt[, athlete_id := as.character(athlete_id)]
