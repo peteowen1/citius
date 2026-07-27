@@ -4,19 +4,29 @@
 #' shock in [calibrate()]: a race effect captures conditions on one day, but
 #' cannot learn that a particular stadium has been quick for fifteen years.
 #'
-#' Measured on a championship harvest, venue explains **9.1%** of within-athlete
-#' variance in the men's 1500m and 3.2% in the 100m — the former larger than the
-#' wind effect. Long jump shows none, which is the expected sanity check: track
-#' surface and pacing culture vary between venues, a sand pit does not.
+#' **Validated as NOT usable with `comp_name` as the key — read before adopting.**
+#' On the championship harvest the fitted "venue" effects are dominated by things
+#' already modelled elsewhere:
 #'
-#' Effects are estimated per event, from within-athlete deviations, and
-#' de-biased for sampling noise the same way [calibrate()] handles race effects:
-#' a venue seen a handful of times will show apparent spread from noise alone.
+#' - The fastest men's 1500m "venues" are Golden Gala, Herculis and Monaco —
+#'   elite meets with professional pacemakers. The slowest are World U20, USA
+#'   U20, the Youth Olympics and Polish U18. Those are not slow tracks, they are
+#'   junior fields, which the aging curve and tier offsets already capture.
+#' - Fitted variance shares exceed **100%** of sigma for several events, which is
+#'   impossible for a real variance component and proves the estimate is
+#'   absorbing other effects.
+#' - Adjusting for it shrinks sigma by **0.03%** — nothing, because the signal is
+#'   already accounted for.
+#'
+#' The function is correct and the target effect is real: surfaces and pools do
+#' differ. But `comp_name` identifies a *meet*, and a meet carries its tier, its
+#' field quality and its age profile. Use `venue_stadium` (captured from
+#' `0ce853e` onward) once a re-harvest supplies it, and fit it jointly with tier
+#' rather than alone.
 #'
 #' @param results Canonical results with a venue column.
-#' @param venue_col Column identifying the venue. Prefer `venue_stadium`;
-#'   `comp_name` is a serviceable proxy for harvests predating stadium capture,
-#'   because recurring meets return to the same venue.
+#' @param venue_col Column identifying the venue. Use `venue_stadium`.
+#'   `comp_name` is **not** an adequate proxy — see above.
 #' @param min_n Minimum marks for a venue-event to be estimated.
 #' @return A `data.table` of `event_id`, `venue`, `effect` and `n`.
 #' @seealso [adjust_venue()]
@@ -33,11 +43,24 @@ fit_venue_effect <- function(results, venue_col = "comp_name", min_n = 15L) {
 
   dt[, athlete_id := as.character(athlete_id)]
   dt[, venue := as.character(get(venue_col))]
-  # Centre within athlete-event so venue cannot absorb ability: fast athletes
-  # disproportionately race at fast meets.
-  dt[, dev := perf - mean(perf), by = .(athlete_id, event_id)]
 
-  out <- dt[, .(effect = mean(dev), n = .N), by = .(event_id, venue)][n >= min_n]
+  # Alternating fit rather than a single centring. Venue exposure is strongly
+  # unbalanced - fast athletes race disproportionately at fast meets - and
+  # centring once attenuates the effect by exactly that imbalance: an athlete
+  # racing fraction p at one venue carries only (1-p) of its effect in their
+  # deviation. See fit_context_effect() for the derivation.
+  dt[, ven_eff := 0]
+  for (i in 1:50) {
+    dt[, ath_eff := mean(perf - ven_eff), by = .(athlete_id, event_id)]
+    new <- dt[, .(ve = mean(perf - ath_eff)), by = .(event_id, venue)]
+    dt <- merge(dt, new, by = c("event_id", "venue"), all.x = TRUE, sort = FALSE)
+    delta <- max(abs(dt$ve - dt$ven_eff), na.rm = TRUE)
+    dt[, ven_eff := ve][, ve := NULL]
+    if (is.finite(delta) && delta < 1e-9) break
+  }
+
+  out <- dt[, .(effect = data.table::first(ven_eff), n = .N),
+            by = .(event_id, venue)][n >= min_n]
   if (!nrow(out)) return(empty)
 
   # Centre per event so venue effects are relative, not an extra intercept.

@@ -9,9 +9,8 @@ fit_venue_effect(results, venue_col = "comp_name", min_n = 15L)
 \arguments{
 \item{results}{Canonical results with a venue column.}
 
-\item{venue_col}{Column identifying the venue. Prefer \code{venue_stadium};
-\code{comp_name} is a serviceable proxy for harvests predating stadium capture,
-because recurring meets return to the same venue.}
+\item{venue_col}{Column identifying the venue. Use \code{venue_stadium}.
+\code{comp_name} is \strong{not} an adequate proxy — see above.}
 
 \item{min_n}{Minimum marks for a venue-event to be estimated.}
 }
@@ -24,14 +23,26 @@ shock in \code{\link[=calibrate]{calibrate()}}: a race effect captures condition
 cannot learn that a particular stadium has been quick for fifteen years.
 }
 \details{
-Measured on a championship harvest, venue explains \strong{9.1\%} of within-athlete
-variance in the men's 1500m and 3.2\% in the 100m — the former larger than the
-wind effect. Long jump shows none, which is the expected sanity check: track
-surface and pacing culture vary between venues, a sand pit does not.
+\strong{Validated as NOT usable with \code{comp_name} as the key — read before adopting.}
+On the championship harvest the fitted "venue" effects are dominated by things
+already modelled elsewhere:
+\itemize{
+\item The fastest men's 1500m "venues" are Golden Gala, Herculis and Monaco —
+elite meets with professional pacemakers. The slowest are World U20, USA
+U20, the Youth Olympics and Polish U18. Those are not slow tracks, they are
+junior fields, which the aging curve and tier offsets already capture.
+\item Fitted variance shares exceed \strong{100\%} of sigma for several events, which is
+impossible for a real variance component and proves the estimate is
+absorbing other effects.
+\item Adjusting for it shrinks sigma by \strong{0.03\%} — nothing, because the signal is
+already accounted for.
+}
 
-Effects are estimated per event, from within-athlete deviations, and
-de-biased for sampling noise the same way \code{\link[=calibrate]{calibrate()}} handles race effects:
-a venue seen a handful of times will show apparent spread from noise alone.
+The function is correct and the target effect is real: surfaces and pools do
+differ. But \code{comp_name} identifies a \emph{meet}, and a meet carries its tier, its
+field quality and its age profile. Use \code{venue_stadium} (captured from
+\verb{0ce853e} onward) once a re-harvest supplies it, and fit it jointly with tier
+rather than alone.
 }
 \seealso{
 \code{\link[=adjust_venue]{adjust_venue()}}
