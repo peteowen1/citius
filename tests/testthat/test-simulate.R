@@ -107,3 +107,48 @@ test_that("simulate_event warns when no-mark rate was never measured", {
     ability = to_perf(c(6.0, 5.9, 5.8, 5.7), 1L), sigma = 0.02)
   expect_warning(simulate_event(ab, n_sims = 500), "no-mark rate")
 })
+
+test_that("ability uncertainty widens the outcome distribution", {
+  # A point estimate treated as exact makes the simulator over-confident.
+  base <- data.table::data.table(
+    athlete_id = letters[1:6], event_id = "AT-100Metres-M",
+    ability = to_perf(seq(9.85, 10.10, length.out = 6), -1L),
+    sigma = 0.006)
+  certain <- base[, ability_se := 0]
+  uncertain <- data.table::copy(base)[, ability_se := 0.012]
+
+  a <- medal_probs(simulate_event(certain, n_sims = 20000, foul_prob = 0, seed = 4))
+  b <- medal_probs(simulate_event(uncertain, n_sims = 20000, foul_prob = 0, seed = 4))
+  data.table::setorder(a, athlete_id); data.table::setorder(b, athlete_id)
+
+  # The favourite must be less certain once ability itself is uncertain
+  expect_gt(max(a$p_gold), max(b$p_gold))
+})
+
+test_that("zero ability_se reproduces the old behaviour", {
+  ab <- data.table::data.table(
+    athlete_id = letters[1:4], event_id = "AT-100Metres-M",
+    ability = to_perf(c(9.9, 10.0, 10.1, 10.2), -1L), sigma = 0.01,
+    ability_se = 0)
+  no_col <- data.table::copy(ab)[, ability_se := NULL]
+  a <- medal_probs(simulate_event(ab, n_sims = 8000, foul_prob = 0, seed = 6))
+  b <- medal_probs(simulate_event(no_col, n_sims = 8000, foul_prob = 0, seed = 6))
+  data.table::setorder(a, athlete_id); data.table::setorder(b, athlete_id)
+  expect_equal(a$p_gold, b$p_gold, tolerance = 0.02)
+})
+
+test_that("estimate_ability reports a larger SE for sparser histories", {
+  h <- rbind(
+    data.table::data.table(athlete_id = "deep", event_id = "AT-100Metres-M",
+      date = Sys.Date() - seq(10, 400, by = 20), tier = "OW", round = "F",
+      perf = to_perf(10, -1L) + stats::rnorm(20, 0, 0.01)),
+    data.table::data.table(athlete_id = "thin", event_id = "AT-100Metres-M",
+      date = Sys.Date() - c(20, 40), tier = "OW", round = "F",
+      perf = to_perf(10, -1L) + stats::rnorm(2, 0, 0.01)),
+    data.table::rbindlist(lapply(1:8, function(i)
+      data.table::data.table(athlete_id = paste0("o", i), event_id = "AT-100Metres-M",
+        date = Sys.Date() - seq(10, 300, by = 30), tier = "OW", round = "F",
+        perf = to_perf(10.2, -1L) + stats::rnorm(10, 0, 0.01)))))
+  ab <- estimate_ability(h, adjust_context = FALSE, half_life = 365)
+  expect_gt(ab[athlete_id == "thin"]$ability_se, ab[athlete_id == "deep"]$ability_se)
+})

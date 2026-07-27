@@ -404,9 +404,17 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   ab[, shrinkage := kappa / (w_total + kappa)]
   ab[, ability := (1 - shrinkage) * ability_raw + shrinkage * prior_mu]
 
+  # Standard error of the ability estimate — the empirical-Bayes posterior sd.
+  # This is *not* the same as sigma: sigma is how much an athlete varies around
+  # their own true ability, while this is how little we know that ability. Both
+  # belong in a forecast. Omitting it makes the simulator treat a point estimate
+  # as exact, which shows up as over-confidence in fields where performance
+  # noise is small relative to what we do not know.
+  ab[, ability_se := sigma / sqrt(w_total + kappa)]
+
   ab[, c("athlete_id", "event_id", "ability", "ability_raw", "sigma",
-         "n", "n_eff", "w_total", "shrinkage", "age_ref", "last_date"),
-     with = FALSE][]
+         "ability_se", "n", "n_eff", "w_total", "shrinkage", "age_ref",
+         "last_date"), with = FALSE][]
 }
 
 

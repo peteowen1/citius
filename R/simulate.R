@@ -188,7 +188,21 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
     cli::cli_abort("{.fn condition_sensitivity} must return one non-missing value per entrant.")
   }
 
+  # Two distinct uncertainties, both required:
+  #   sigma      - how much an athlete varies around their own true ability
+  #   ability_se - how little we know that ability (the EB posterior sd)
+  # Treating the point estimate as exact makes the simulator over-confident
+  # wherever performance noise is small, which is most acute in swimming: with
+  # ~75% of race variation shared (and shared shocks not reordering a field),
+  # sigma alone leaves almost nothing to separate the contenders.
+  ability_se <- if ("ability_se" %in% names(ab)) ab$ability_se else rep(0, n_ath)
+  ability_se[!is.finite(ability_se)] <- 0
+
+  est_error <- matrix(stats::rnorm(n_sims * n_ath), nrow = n_sims, ncol = n_ath) *
+    matrix(ability_se, nrow = n_sims, ncol = n_ath, byrow = TRUE)
+
   perf <- matrix(ab$ability, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
+    est_error +
     noise * matrix(ab$sigma, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
     outer(cond, sens) + taper
 

@@ -328,8 +328,37 @@ than within-meet variation, so the model treats favourites as far safer than
 they are. Athletics avoids this because its harvest spans years per athlete, so
 its sigma already reflects between-meet spread.
 
-**Do not fix this by inflating sigma by hand.** The right move is to estimate
-within-meet and between-meet components separately.
+**Fixed by simulating ability uncertainty, not by inflating sigma.**
+`estimate_ability()` now returns `ability_se`, the empirical-Bayes posterior sd
+(`sigma / sqrt(w_total + kappa)`), and `simulate_event()` draws it alongside
+performance noise. The two are different quantities and both belong in a
+forecast: `sigma` is how much an athlete varies around their own true ability,
+`ability_se` is how little we know that ability.
+
+Swimming, 895 races, before → after:
+
+| | before | after |
+|---|--------|-------|
+| gold skill | +0.234 | **+0.253** |
+| medal skill | +0.417 | **+0.443** |
+| mean \|gap\| | 0.0735 | **0.0345** |
+| gap above 30% | −0.094 | **−0.023** |
+| top bin | 0.94 → 0.72 | 0.93 → 0.96 |
+| races beating baseline | 67% | **70%** |
+
+Calibration *and* skill both improved. That is the signature of a correct
+modelling fix; a tuning knob trades one against the other.
+
+**Rejected hypothesis, recorded so it is not retried:** heat seeding. Swimming
+heats are seeded by ability, so it looked like race effects might be absorbing
+ability rather than conditions. Testing finals-only *raised* the shared share
+(0.75 vs 0.71) instead of lowering it — the shared effect is real, and the
+problem was the missing uncertainty term.
+
+Athletics is inconclusive on this change: gold skill 0.125 → 0.120, medal
+0.233 → 0.249, with only 26 predictions above 30%. Its `w_total` is much smaller
+(short fitted half-life), so `ability_se` is proportionally larger there. Revisit
+once backtest coverage improves.
 
 Other measured swimming values: `tail_df` 20; shared-condition share 0.59–0.78,
 far above athletics' 0.28 — in a pool that is session effects, not weather;
