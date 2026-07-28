@@ -279,7 +279,7 @@ estimate_context_effects <- function(results) {
 #' variance, so sparse histories regress heavily and deep ones barely move.
 #'
 #' @param results A `data.table` of results in the canonical schema, as returned
-#'   by [athlete_results()] or [aquatics_results()].
+#'   by [athletics_athlete_results()] or [aquatics_results()].
 #' @param as_of Reference date for recency weighting. Defaults to today.
 #' @param half_life Either a single number of days, or a fitted table from
 #'   [fit_half_life()] giving a per-family half-life. Prefer the fitted table:

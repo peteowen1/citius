@@ -167,7 +167,7 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
       foul_prob <- 0
       cli::cli_warn(
         c("No calibrated no-mark rate for {.val {event_id}}; simulating with none.",
-          i = "Measure it with {.fn calibrate} on {.fn competition_results} output - the athlete endpoint omits no-marks."),
+          i = "Measure it with {.fn calibrate} on {.fn athletics_competition_results} output - the athlete endpoint omits no-marks."),
         .frequency = "once", .frequency_id = "citius_no_foul_rate"
       )
     }

@@ -66,13 +66,13 @@ flag_implausible <- function(results, k = 5) {
 #' most championship fields. Races left with a single athlete contribute nothing
 #' to the shared-shock estimate and are simply carried through.
 #'
-#' @param results Canonical results from [athlete_results()] or
+#' @param results Canonical results from [athletics_athlete_results()] or
 #'   [aquatics_results()], typically stacked across many athletes.
 #' @return The input with a `race_key` column added.
 #' @seealso [calibrate()]
 #' @examples
 #' \dontrun{
-#' histories <- rbindlist(lapply(ids, athlete_results))
+#' histories <- rbindlist(lapply(ids, athletics_athlete_results))
 #' cal <- calibrate(add_race_key(histories))
 #' }
 #' @export
@@ -113,7 +113,7 @@ add_race_key <- function(results) {
 decompose_races <- function(results, max_iter = 50L, tol = 1e-8) {
   dt <- data.table::as.data.table(results)
   if (!"race_key" %in% names(dt)) {
-    cli::cli_abort("{.arg results} must contain a {.field race_key} column; use {.fn competition_results}.")
+    cli::cli_abort("{.arg results} must contain a {.field race_key} column; use {.fn athletics_competition_results}.")
   }
   # Rows without a canonical event must go. Ability is indexed by athlete *and*
   # event, so every NA-event row for one athlete collapses into a single group —
@@ -244,7 +244,7 @@ calibrate <- function(results, min_races = 8L) {
   #
   # 1. The input must be *unfiltered*. A no-mark is an NA performance, so
   #    dropping NAs first makes every event look clean.
-  # 2. The input must come from [competition_results()]. The athlete-level
+  # 2. The input must come from [athletics_competition_results()]. The athlete-level
   #    endpoint silently omits results with no valid mark — an elite pole
   #    vaulter's 209-result history contains zero, which cannot be true — so an
   #    athlete-only harvest always measures zero no matter how large it is.
@@ -255,7 +255,7 @@ calibrate <- function(results, min_races = 8L) {
   if (nrow(ev) && all(ev$foul_rate == 0, na.rm = TRUE)) {
     cli::cli_warn(
       c("No missing performances anywhere; no-mark rates will all be zero.",
-        i = "Harvest with {.fn competition_results} and do not filter {.code NA} marks before calibrating."),
+        i = "Harvest with {.fn athletics_competition_results} and do not filter {.code NA} marks before calibrating."),
       .frequency = "once", .frequency_id = "citius_no_missing_perf"
     )
   }

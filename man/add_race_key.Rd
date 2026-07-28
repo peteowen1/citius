@@ -7,7 +7,7 @@
 add_race_key(results)
 }
 \arguments{
-\item{results}{Canonical results from \code{\link[=athlete_results]{athlete_results()}} or
+\item{results}{Canonical results from \code{\link[=athletics_athlete_results]{athletics_athlete_results()}} or
 \code{\link[=aquatics_results]{aquatics_results()}}, typically stacked across many athletes.}
 }
 \value{
@@ -28,7 +28,7 @@ to the shared-shock estimate and are simply carried through.
 }
 \examples{
 \dontrun{
-histories <- rbindlist(lapply(ids, athlete_results))
+histories <- rbindlist(lapply(ids, athletics_athlete_results))
 cal <- calibrate(add_race_key(histories))
 }
 }

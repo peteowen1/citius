@@ -25,10 +25,10 @@ athletics_base_url <- function() {
 #'   `birthdate`, `distance` (Levenshtein). Zero rows if nothing matched.
 #' @examples
 #' \dontrun{
-#' find_athlete("Ingebrigtsen")
+#' athletics_find_athlete("Ingebrigtsen")
 #' }
 #' @export
-find_athlete <- function(name) {
+athletics_find_athlete <- function(name) {
   url <- paste0(athletics_base_url(), "/athletes/search?name=", utils::URLencode(name, reserved = TRUE))
   res <- citius_get_json(url)
   if (is.null(res) || !length(res)) return(.empty_athlete_dt())
@@ -98,10 +98,10 @@ find_athlete <- function(name) {
 #'   `country`, `sex` and `birthdate`, or zero rows if not found.
 #' @examples
 #' \dontrun{
-#' athlete_profile(14536762)
+#' athletics_athlete_profile(14536762)
 #' }
 #' @export
-athlete_profile <- function(athlete_id) {
+athletics_athlete_profile <- function(athlete_id) {
   url <- paste0(athletics_base_url(), "/athletes/", as.integer(athlete_id))
   a <- citius_get_json(url)
   if (is.null(a)) return(.empty_athlete_dt()[0])
@@ -128,7 +128,7 @@ athlete_profile <- function(athlete_id) {
 #' needed to resolve canonical events and to place a performance on an aging
 #' curve. They are looked up from the athlete profile unless supplied.
 #'
-#' @param athlete_id Integer World Athletics athlete id (see [find_athlete()]).
+#' @param athlete_id Integer World Athletics athlete id (see [athletics_find_athlete()]).
 #' @param sex Optional `"M"`/`"W"`. Looked up from the profile when `NULL`.
 #' @param birthdate Optional `Date`. Looked up from the profile when `NULL`;
 #'   used to compute `age` at each performance.
@@ -138,12 +138,12 @@ athlete_profile <- function(athlete_id) {
 #'   `result_score`. Zero rows if the athlete has no results.
 #' @examples
 #' \dontrun{
-#' athlete_results(14653717)
+#' athletics_athlete_results(14653717)
 #' }
 #' @export
-athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) {
+athletics_athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) {
   if (is.null(sex) || is.null(birthdate)) {
-    prof <- athlete_profile(athlete_id)
+    prof <- athletics_athlete_profile(athlete_id)
     if (nrow(prof)) {
       sex <- sex %||% prof$sex
       birthdate <- birthdate %||% prof$birthdate
@@ -228,17 +228,17 @@ athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) {
 #' while paging days 1-10 gives 49 events and 3,153. Anything harvested without
 #' paging is capturing roughly a sixth of what is there.
 #'
-#' @param competition_id Integer competition id (see [find_competition()]).
+#' @param competition_id Integer competition id (see [athletics_find_competition()]).
 #' @param days Competition days to page through. The default spans the longest
 #'   championships; days beyond the meet return nothing and cost one request.
 #' @return A `data.table` in the canonical result schema with an additional
 #'   `race_key` uniquely identifying each race, and `athlete_name`.
 #' @examples
 #' \dontrun{
-#' competition_results(7147633)  # XXII Commonwealth Games
+#' athletics_competition_results(7147633)  # XXII Commonwealth Games
 #' }
 #' @export
-competition_results <- function(competition_id, days = 1:12) {
+athletics_competition_results <- function(competition_id, days = 1:12) {
   base <- paste0(athletics_base_url(), "/competitions/",
                  as.integer(competition_id), "/results")
 
@@ -375,7 +375,7 @@ competition_results <- function(competition_id, days = 1:12) {
 #' The fallback derives an id from the race's own field. It must be **content**
 #' derived rather than positional: day pages overlap, so the same race arrives
 #' more than once, and a positional index would give it two different keys and
-#' defeat the deduplication in [competition_results()]. The same athletes always
+#' defeat the deduplication in [athletics_competition_results()]. The same athletes always
 #' hash the same way, however many times the race is fetched.
 #'
 #' Two heats of one round would have to contain athlete ids summing identically
@@ -453,12 +453,12 @@ competition_results <- function(competition_id, days = 1:12) {
 #'   calibrating — they are the no-mark signal.
 #' @examples
 #' \dontrun{
-#' harvest_competitions(c(7190593, 7153115))
+#' athletics_harvest_competitions(c(7190593, 7153115))
 #' }
 #' @export
-harvest_competitions <- function(competition_ids) {
+athletics_harvest_competitions <- function(competition_ids) {
   out <- lapply(competition_ids, function(cid) {
-    r <- tryCatch(competition_results(cid), error = function(e) {
+    r <- tryCatch(athletics_competition_results(cid), error = function(e) {
       cli::cli_alert_warning("Competition {cid} failed: {conditionMessage(e)}")
       NULL
     })
@@ -482,10 +482,10 @@ harvest_competitions <- function(competition_ids) {
 #'   `name`, `city`, `country`, `start`, `end`, `tier`, `has_results`.
 #' @examples
 #' \dontrun{
-#' find_competition("XXIII Commonwealth Games")
+#' athletics_find_competition("XXIII Commonwealth Games")
 #' }
 #' @export
-find_competition <- function(name) {
+athletics_find_competition <- function(name) {
   url <- paste0(athletics_base_url(), "/competitions?name=", utils::URLencode(name, reserved = TRUE))
   res <- citius_get_json(url)
   if (is.null(res) || !length(res)) {

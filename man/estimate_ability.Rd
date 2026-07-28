@@ -16,7 +16,7 @@ estimate_ability(
 }
 \arguments{
 \item{results}{A \code{data.table} of results in the canonical schema, as returned
-by \code{\link[=athlete_results]{athlete_results()}} or \code{\link[=aquatics_results]{aquatics_results()}}.}
+by \code{\link[=athletics_athlete_results]{athletics_athlete_results()}} or \code{\link[=aquatics_results]{aquatics_results()}}.}
 
 \item{as_of}{Reference date for recency weighting. Defaults to today.}
 
