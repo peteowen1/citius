@@ -4,13 +4,14 @@
 \alias{clean_results}
 \title{Resolve duplicate and impossible records}
 \usage{
-clean_results(results, age_range = c(10, 70))
+clean_results(results, age_range = c(5, 100))
 }
 \arguments{
 \item{results}{Canonical results.}
 
-\item{age_range}{Plausible competitor ages. Generous by design — this catches
-corrupt birthdates, not unusual athletes.}
+\item{age_range}{Plausible competitor ages. Wide by design — this catches
+corrupt birthdates, not unusual athletes. Masters competition runs well past
+70 and youth meets well below 14; both are real and must survive.}
 }
 \value{
 The input with duplicates collapsed and impossible ages cleared.
@@ -28,10 +29,22 @@ athlete per race — \code{decompose_races()} fits a single athlete effect per r
 so a duplicate silently double-weights that athlete in the race effect. The
 best mark is kept, since that is what the placing reflects.
 
-\strong{Impossible ages} (3 cases, including a 5000m runner born in 1884). A bad
-birthdate corrupts the aging curve, but the performance itself is fine, so
-\code{age} and \code{birthdate} are cleared rather than the row dropped. Discarding the
-mark would lose real data to fix a metadata error.
+\strong{Impossible ages.} A bad birthdate corrupts the aging curve, but the
+performance itself is fine, so \code{age} and \code{birthdate} are cleared rather than
+the row dropped. Discarding the mark would lose real data to fix a metadata
+error.
+
+The default range is deliberately \strong{wide}, because athletics is not confined
+to open-age athletes. An audit of the harvest found genuine competitors at
+both extremes: 1,708 results from 821 athletes aged 14 or under (youth 1000m
+races), and masters race walkers and marathoners aged 60-79 who finish last
+in their events — exactly what a real masters athlete looks like. A 10-70
+bound, which sounds eminently sensible, would have deleted every one of them
+to fix a \strong{single} bad birthdate: a 5000m runner recorded as born in 1884
+and therefore 141 years old.
+
+The lesson is the same one the mark-bounds check learned: a range tuned to
+the typical competitor turns a plausibility check into an outlier filter.
 
 Both are reported rather than done quietly: a cleaning step that silently
 changes row counts is how a harvest bug hides.

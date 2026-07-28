@@ -33,16 +33,28 @@ test_that("a duplicated athlete keeps a real mark over a no-mark", {
   expect_false(is.na(out$perf))
 })
 
+test_that("a genuine masters athlete survives the age filter", {
+  # 1,708 harvested results come from athletes aged 14 or under, and masters
+  # race walkers compete into their 80s. A 10-70 bound would delete all of them
+  # to fix one birthdate recorded as 1884.
+  dt <- data.table::data.table(
+    race_key = c("r1", "r2"), athlete_id = c("a", "b"),
+    perf = to_perf(c(5127, 938), -1L), age = c(79.4, 10.9),
+    birthdate = as.Date(c("1946-05-02", "2015-03-01")))
+  out <- clean_results(dt)
+  expect_equal(sum(is.na(out$age)), 0L)
+})
+
 test_that("impossible ages are cleared but their marks are kept", {
   dt <- data.table::data.table(
     race_key = c("r1", "r2", "r3"), athlete_id = c("a", "b", "c"),
     perf = to_perf(c(10.1, 10.2, 10.3), -1L),
-    age = c(25, 141.4, 8),
-    birthdate = as.Date(c("2000-01-01", "1884-12-10", "2018-01-01"))
+    age = c(25, 141.4, 79),
+    birthdate = as.Date(c("2000-01-01", "1884-12-10", "1946-05-02"))
   )
   out <- clean_results(dt)
   expect_equal(nrow(out), 3L)                      # no row dropped
-  expect_equal(sum(is.na(out$age)), 2L)            # 141.4 and 8 cleared
+  expect_equal(sum(is.na(out$age)), 1L)            # only 141.4 cleared
   expect_true(all(!is.na(out$perf)))               # marks untouched
   expect_true(is.na(out[athlete_id == "b"]$birthdate))
 })
