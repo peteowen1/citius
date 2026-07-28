@@ -25,10 +25,19 @@
 #' @export
 athlete_key <- function(x) {
   x <- toupper(as.character(x))
-  # Punctuation is REMOVED, not replaced with a space. Substituting a space
-  # splits "O'BRIEN" into two tokens, which then sort apart and give
-  # "BRIENOSEAN" instead of "OBRIENSEAN". Feeds disagree on apostrophes and
-  # hyphens for the same athlete ("O'BRIEN"/"OBRIEN", "AL-SAID"/"AL SAID").
+  # Hyphens and apostrophes need OPPOSITE treatment, because feeds disagree
+  # about them in opposite ways.
+  #
+  # Apostrophes are REMOVED, never replaced with a space: substituting one
+  # splits "O'BRIEN" into two tokens which sort apart, giving "BRIENOSEAN"
+  # instead of "OBRIENSEAN". No feed writes "O BRIEN".
+  #
+  # Hyphens are SPLIT, because feeds genuinely disagree hyphen-vs-space for the
+  # same person: "Imara-Bella Patricia THORPE" at the Commonwealth Games is
+  # "THORPE Imara Bella Patricia" at World Aquatics. Removing the hyphen makes
+  # "IMARABELLA", which can never equal {IMARA, BELLA}, and a semi-finalist
+  # already present in both corpora stayed unmatched because of it.
+  x <- gsub("-", " ", x)
   x <- gsub("[^A-Z ]", "", x)
   parts <- strsplit(trimws(x), "\\s+")
   vapply(parts, function(p) {

@@ -43,6 +43,37 @@ citius_get_json <- function(url, max_tries = 4L, throttle = 0.25) {
   jsonlite::fromJSON(httr2::resp_body_string(resp), simplifyVector = FALSE)
 }
 
+#' Perform an HTML GET with retry and a descriptive user agent
+#'
+#' The sibling of [citius_get_json()] for feeds that render HTML rather than
+#' serving JSON. Retry, throttle and user-agent policy live in one place so a
+#' new source cannot quietly adopt a different one.
+#'
+#' @inheritParams citius_get_json
+#' @return A parsed `xml_document`, or `NULL` on a definitive 404.
+#' @keywords internal
+#' @noRd
+citius_get_html <- function(url, max_tries = 4L, throttle = 0.25) {
+  req <- httr2::request(url)
+  req <- httr2::req_user_agent(req, "citius R package (https://github.com/peteowen1/citius)")
+  req <- httr2::req_timeout(req, 60)
+  req <- httr2::req_throttle(req, rate = 1 / throttle)
+  req <- httr2::req_retry(
+    req,
+    max_tries = max_tries,
+    is_transient = function(resp) httr2::resp_status(resp) %in% c(408, 425, 429, 500, 502, 503, 504)
+  )
+  req <- httr2::req_error(req, is_error = function(resp) FALSE)
+
+  resp <- httr2::req_perform(req)
+  status <- httr2::resp_status(resp)
+  if (status == 404L) return(NULL)
+  if (status >= 400L) {
+    cli::cli_abort("Request to {.url {url}} failed with status {status}.")
+  }
+  xml2::read_html(httr2::resp_body_string(resp))
+}
+
 #' @keywords internal
 #' @noRd
 as_date_safe <- function(x) {
