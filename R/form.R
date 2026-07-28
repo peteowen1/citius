@@ -77,7 +77,8 @@ fit_form_sd <- function(results, calibration = NULL, half_life = 730,
     ab <- estimate_ability(past, as_of = cut, half_life = half_life,
                            calibration = calibration)
     if (!nrow(ab)) next
-    m <- merge(blk[, .(athlete_id = as.character(athlete_id), event_id, perf)],
+    m <- merge(blk[, .(athlete_id = as.character(athlete_id), event_id, perf,
+                       race_id = race_key)],
                ab[, .(athlete_id, event_id, ability, sigma, ability_se)],
                by = c("athlete_id", "event_id"))
     if (nrow(m)) out[[i]] <- m
@@ -85,9 +86,28 @@ fit_form_sd <- function(results, calibration = NULL, half_life = 730,
   res <- data.table::rbindlist(Filter(Negate(is.null), out))
   if (!nrow(res)) return(.empty_form_fit())
 
+  # Residuals are centred WITHIN RACE, and that choice is the whole method.
+  #
+  # A raw residual perf - ability contains the shared race shock, which does not
+  # reorder a field -- it cancels from every pairwise comparison. Measuring
+  # total residual variance therefore answers a question about marks, when the
+  # question is about placings. Two earlier attempts failed on exactly this:
+  # excluding the shock from base_var made tau absorb it (the simulator then
+  # added it twice, over-dispersing the middle of the reliability curve);
+  # including it made the residuals look under-dispersed and tau collapse to
+  # zero. Both were measuring the wrong quantity.
+  #
+  # Centring within race removes the shock by construction and leaves exactly
+  # the athlete-specific variation that decides who wins. Singleton races carry
+  # no information once centred and are dropped; the (n-1)/n factor corrects
+  # the degree of freedom that centring consumes.
   res[, base_var := sigma^2 + ability_se^2]
   res <- res[is.finite(base_var) & base_var > 0 & is.finite(perf) & is.finite(ability)]
+  res[, raw := perf - ability]
+  res[, n_r := .N, by = race_id]
+  res <- res[n_r > 1L]
   if (nrow(res) < 100L) return(.empty_form_fit())
+  res[, centred := (raw - mean(raw)) * sqrt(n_r / (n_r - 1)), by = race_id]
 
   # Solve for the tau that makes standardised residuals unit variance, rather
   # than moment-matching `var(resid) - mean(base_var)`. Those are NOT the same
@@ -96,7 +116,7 @@ fit_form_sd <- function(results, calibration = NULL, half_life = 730,
   # little to the unweighted variance. The moment-matched version returned zero
   # on data whose standardised residuals had sd 1.34 -- an estimator that
   # disagrees with its own target.
-  r2 <- (res$perf - res$ability)^2
+  r2 <- res$centred^2
   ez2 <- function(tau) mean(r2 / (res$base_var + tau^2)) - 1
   form_sd <- if (ez2(0) <= 0) {
     0                                   # already dispersed enough; nothing to add
@@ -105,8 +125,8 @@ fit_form_sd <- function(results, calibration = NULL, half_life = 730,
     if (ez2(hi) > 0) hi else stats::uniroot(ez2, c(0, hi), tol = 1e-6)$root
   }
 
-  z0 <- (res$perf - res$ability) / sqrt(res$base_var)
-  z1 <- (res$perf - res$ability) / sqrt(res$base_var + form_sd^2)
+  z0 <- res$centred / sqrt(res$base_var)
+  z1 <- res$centred / sqrt(res$base_var + form_sd^2)
   data.table::data.table(form_sd = form_sd, n = nrow(res),
                          sd_before = stats::sd(z0), sd_after = stats::sd(z1))
 }
