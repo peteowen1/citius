@@ -98,6 +98,7 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
 fit_half_life <- function(results,
                           candidates = c(90, 180, 270, 365, 540, 730, 1095, 1825, 3650),
                           min_history = 3L) {
+  results <- .drop_best_only(results, "fit_half_life()")
   dt <- data.table::as.data.table(results)
   dt <- dt[!is.na(perf) & !is.na(event_id) & !is.na(date)]
   if (!nrow(dt)) {

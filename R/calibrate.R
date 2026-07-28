@@ -201,6 +201,7 @@ decompose_races <- function(results, max_iter = 50L, tol = 1e-8) {
 #' @seealso [race_conditions()], [condition_sensitivity()], [estimate_ability()]
 #' @export
 calibrate <- function(results, min_races = 8L) {
+  results <- .drop_best_only(results, "calibrate()")
   dec <- decompose_races(results)
   if (is.null(dec$race) || !nrow(dec$race)) {
     return(.empty_calibration())
@@ -313,7 +314,7 @@ calibrate <- function(results, min_races = 8L) {
 fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, Inf),
                         probes = c(1.5, 2, 2.5, 3), clip = 8) {
   d <- if (is.list(results) && !is.null(results$data)) results$data else {
-    dec <- decompose_races(results); dec$data
+    dec <- decompose_races(.drop_best_only(results, "fit_tail_df()")); dec$data
   }
   d <- data.table::as.data.table(d)
   if (!nrow(d) || !"resid" %in% names(d)) {

@@ -50,6 +50,7 @@
 #' @export
 fit_form_sd <- function(results, calibration = NULL, half_life = 730,
                         n_meets = 150L, min_history = 2000L) {
+  results <- .drop_best_only(results, "fit_form_sd()")
   dt <- data.table::as.data.table(results)
   need <- c("perf", "event_id", "date", "competition_id", "round")
   if (!all(need %in% names(dt))) {

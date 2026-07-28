@@ -74,6 +74,43 @@ citius_get_html <- function(url, max_tries = 4L, throttle = 0.25) {
   xml2::read_html(httr2::resp_body_string(resp))
 }
 
+#' Drop ranked-list rows before estimating any variance
+#'
+#' Some sources supply an athlete's **best** mark for a period rather than every
+#' mark — Swim England's rankings are one row per swimmer per event per season.
+#' Those rows are fine for estimating *where* an athlete sits, and useless for
+#' estimating how much they vary: a maximum is truncated at the good end by
+#' construction, so its spread is not the athlete's spread.
+#'
+#' Feeding them to a variance estimator understates `sigma_within`, which makes
+#' favourites look safer than they are. The swimming backtest was already
+#' over-confident at the top — 94% predicted against 72% actual before
+#' `ability_se` was added — and this would push it back the same way.
+#'
+#' Rows are dropped rather than down-weighted, and the drop is announced once,
+#' because a silent filter is how a source quietly stops contributing.
+#'
+#' @param results Results table, possibly carrying an `is_best` flag.
+#' @param who Name of the calling function, for the message.
+#' @return `results` with any `is_best` rows removed.
+#' @keywords internal
+#' @noRd
+.drop_best_only <- function(results, who) {
+  if (!"is_best" %in% names(results)) return(results)
+  n_best <- sum(isTRUE_vec(results$is_best))
+  if (!n_best) return(results)
+  cli::cli_inform(c(
+    "!" = "{who}: dropping {format(n_best, big.mark = ',')} ranked-list row{?s} \\
+           ({round(100 * n_best / nrow(results))}% of input).",
+    "i" = "Ranked lists are truncated at the good end, so they cannot support \\
+           variance estimation. They remain available to {.fn estimate_ability}."))
+  results[!isTRUE_vec(results$is_best)]
+}
+
+#' @keywords internal
+#' @noRd
+isTRUE_vec <- function(x) !is.na(x) & as.logical(x)
+
 #' @keywords internal
 #' @noRd
 as_date_safe <- function(x) {
