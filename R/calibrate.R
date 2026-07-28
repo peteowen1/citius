@@ -110,7 +110,7 @@ add_race_key <- function(results) {
 #' @return A list with an `ability` table (one row per athlete-event), a `race`
 #'   effect table, the augmented `data` carrying `resid`, and `converged`.
 #' @export
-decompose_races <- function(results, max_iter = 50L, tol = 1e-8) {
+decompose_races <- function(results, max_iter = 400L, tol = 1e-8) {
   dt <- data.table::as.data.table(results)
   if (!"race_key" %in% names(dt)) {
     cli::cli_abort("{.arg results} must contain a {.field race_key} column; use {.fn athletics_competition_results}.")
@@ -181,7 +181,30 @@ decompose_races <- function(results, max_iter = 50L, tol = 1e-8) {
   # the athlete and is estimated separately across all their events.
   ability <- dt[, .(a_i = data.table::first(a_i), n = .N), by = .(athlete_id, event_id)]
 
-  list(ability = ability[], race = race[], data = dt[], converged = converged)
+  # A decomposition that has not converged is a weaker foundation than every
+  # variance estimate built on it assumes -- sigma_within, condition_sd, the
+  # round precisions and tail_df are all computed from these residuals. The flag
+  # was returned from the start and read by nobody, so it silently reported
+  # FALSE on the swimming corpus while the numbers were quoted as measured.
+  # Report the shortfall against the scale that matters rather than in the
+  # abstract: 1e-3 is meaningless next to an athletics sigma of 0.038 and is a
+  # fifth of a swimming sigma of 0.0073.
+  # Measured on the swimming corpus: at the old default of 50 sweeps
+  # condition_sd came out 7.4% LOW and sigma_within 0.6% high; by 400 both are
+  # within 0.5% of their converged values. The absolute tolerance of 1e-8 is not
+  # reachable in any practical number of sweeps -- alternating projections
+  # converge linearly and this data contracts at ~0.98 per sweep -- so 400 is
+  # chosen from where the estimates stop moving, not from where delta stops.
+  if (!converged) {
+    sigma_hint <- stats::sd(dt$resid, na.rm = TRUE)
+    cli::cli_warn(c(
+      "Two-way decomposition did not converge in {max_iter} sweep{?s}.",
+      "!" = "Race effects still moving by {signif(delta, 3)}              ({round(100 * delta / sigma_hint)}% of the residual sd).",
+      i = "Every variance estimate downstream is computed from these residuals."
+    ), .frequency = "once", .frequency_id = "citius_decompose_converge")
+  }
+  list(ability = ability[], race = race[], data = dt[], converged = converged,
+       delta = delta, sweeps = i)
 }
 
 
