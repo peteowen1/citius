@@ -282,7 +282,23 @@ calibrate <- function(results, min_races = 8L) {
   #    endpoint silently omits results with no valid mark — an elite pole
   #    vaulter's 209-result history contains zero, which cannot be true — so an
   #    athlete-only harvest always measures zero no matter how large it is.
+  # 3. When competition-level and athlete-level rows are pooled into one corpus,
+  #    only the competition rows can carry a no-mark at all, so the athlete rows
+  #    act as a mass of clean denominators and drive every rate toward zero.
+  #    Nothing errors and the output is still a plausible-looking rate. A
+  #    `nomark_observable` column marks the rows where an absent mark is
+  #    information rather than an absence of data; where it is present the
+  #    denominator is restricted to those rows.
   raw <- data.table::as.data.table(results)
+  if ("nomark_observable" %in% names(raw)) {
+    obs <- raw[nomark_observable %in% TRUE]
+    if (nrow(obs)) {
+      cli::cli_inform(
+        "No-mark rates measured on {format(nrow(obs), big.mark = ',')} of {format(nrow(raw), big.mark = ',')} rows where a no-mark is observable."
+      )
+      raw <- obs
+    }
+  }
   fouls <- raw[, .(foul_rate = mean(is.na(perf))), by = event_id]
   ev <- merge(ev, fouls, by = "event_id", all.x = TRUE)
 

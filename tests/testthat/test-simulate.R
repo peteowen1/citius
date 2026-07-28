@@ -129,6 +129,33 @@ test_that("a calibrated no-mark rate is picked up for any event type", {
   expect_lt(cal$events$foul_rate[1], 0.15)
 })
 
+test_that("pooled athlete-level rows do not dilute the no-mark rate", {
+  # The athlete endpoint drops no-marks, so in a corpus that pools both routes
+  # only the competition rows can carry one. Without a restricted denominator
+  # the athlete rows are clean by construction and the measured rate collapses
+  # toward zero -- silently, since the output is still a plausible rate.
+  comp <- data.table::data.table(
+    race_key = rep(paste0("r", 1:40), each = 6),
+    athlete_id = as.character(rep_len(1:12, 240)),
+    event_id = "AT-PoleVault-M", date = Sys.Date() - 1,
+    round = "F", tier = "OW", mark = 5.5, nomark_observable = TRUE)
+  comp[, perf := to_perf(mark, 1L)]
+  comp[seq_len(24), perf := NA_real_]                  # 10% no-marks
+  career <- data.table::copy(comp)[, `:=`(
+    race_key = paste0("c", rep(1:40, each = 6)),
+    nomark_observable = FALSE, perf = to_perf(5.5, 1L))]
+
+  pooled <- calibrate(rbind(comp, career), min_races = 5L)
+  expect_gt(pooled$events$foul_rate[1], 0.05)
+  expect_lt(pooled$events$foul_rate[1], 0.15)
+
+  # Drop the marker and the same corpus halves the rate -- the failure this
+  # guards against.
+  naive <- calibrate(rbind(comp, career)[, nomark_observable := NULL],
+                     min_races = 5L)
+  expect_lt(naive$events$foul_rate[1], pooled$events$foul_rate[1] / 1.5)
+})
+
 test_that("simulate_event warns when no-mark rate was never measured", {
   # The warning is rate-limited to once per session so it does not spam long
   # runs; reset it so this test sees it regardless of what ran before.
