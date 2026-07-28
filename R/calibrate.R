@@ -144,22 +144,32 @@ decompose_races <- function(results, max_iter = 50L, tol = 1e-8) {
   dt[, shared := n_in_race >= 2L]
   dt[, c_r := 0]
 
+  # Group once, outside the loop. Both groupings key on character columns, which
+  # data.table must re-hash on every sweep; integer group ids make each sweep a
+  # radix pass instead.
+  dt[, ae_id := .GRP, by = .(athlete_id, event_id)]
+  dt[, rk_id := .GRP, by = race_key]
+
   converged <- FALSE
   for (i in seq_len(max_iter)) {
     # Ability is per athlete *per event*: a sprinter's 100m and 200m marks live
     # on entirely different scales, and pooling them puts the gap between the
     # two distances into the residual, where it masquerades as day-to-day noise.
-    dt[, a_i := mean(perf - c_r), by = .(athlete_id, event_id)]
-    new_c <- dt[shared == TRUE, .(c_new = mean(perf - a_i)), by = race_key]
+    dt[, a_i := mean(perf - c_r), by = ae_id]
+    new_c <- dt[shared == TRUE, .(c_new = mean(perf - a_i)), by = rk_id]
     if (!nrow(new_c)) { converged <- TRUE; break }
     new_c[, c_new := c_new - mean(c_new)]        # centre: resolves the confounding
-    dt <- merge(dt, new_c, by = "race_key", all.x = TRUE, sort = FALSE)
-    dt[is.na(c_new), c_new := 0]
+    # An update join, NOT a merge. `merge()` here rebuilt the entire table --
+    # every row, every column -- on each of up to 50 sweeps, purely to attach one
+    # number per race. This writes in place.
+    dt[, c_new := 0]                             # races with no fitted effect
+    dt[new_c, on = "rk_id", c_new := i.c_new]
     delta <- max(abs(dt$c_new - dt$c_r), na.rm = TRUE)
-    dt[, c_r := c_new][, c_new := NULL]
+    dt[, c_r := c_new]
     if (is.finite(delta) && delta < tol) { converged <- TRUE; break }
   }
 
+  dt[, c("c_new", "ae_id", "rk_id") := NULL]
   dt[, resid := perf - a_i - c_r]
 
   race <- dt[shared == TRUE, .(c_r = data.table::first(c_r), n_in_race = .N,
