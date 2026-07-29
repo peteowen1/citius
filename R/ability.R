@@ -387,6 +387,28 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
       wind_val[!is.finite(wind_val)] <- 0
       dt[, perf := perf - wind_beta * wind_val]
     }
+
+    # Race momentum: an exponentially decayed count of recent race days. Same
+    # adjustment layer as round, tier and wind, but note what it is NOT.
+    #
+    # Wind is a property of the RACE. Momentum is a property of the ATHLETE at a
+    # moment, so stripping it here makes ability "momentum-neutral" -- what the
+    # athlete is worth in an average state of readiness -- and the athlete's
+    # momentum ON THE DAY has to be added back at prediction time. Strip only,
+    # and every forecast is of an athlete in average form, which is wrong for
+    # exactly the athletes who peak for a championship.
+    #
+    # See `apply_momentum()` for the other half.
+    if (!is.null(calibration$momentum) && nrow(calibration$momentum) &&
+        "momentum" %in% names(dt)) {
+      reg_f <- .citius_event_registry[, c("event_id", "family")]
+      fam <- reg_f$family[match(dt$event_id, reg_f$event_id)]
+      mb <- calibration$momentum$beta[match(fam, calibration$momentum$family)]
+      mb[!is.finite(mb)] <- 0
+      mv <- dt$momentum
+      mv[!is.finite(mv)] <- 0
+      dt[, perf := perf - mb * mv]
+    }
   }
 
   if (trim_tactical > 0) {
@@ -554,4 +576,62 @@ condition_prior <- function(ability, field = NULL, weight = 1) {
   v <- sum(w * (x - mu)^2) / (sum(w) - sum(w^2) / sum(w))
   if (!is.finite(v) || v < 0) return(NA_real_)
   sqrt(v)
+}
+
+#' Add an athlete's current momentum back to a momentum-neutral ability
+#'
+#' [estimate_ability()] strips the momentum each past mark was set under, so the
+#' ability it returns describes an athlete in an average state of readiness.
+#' That is the right thing to average over a career and the wrong thing to
+#' forecast with: a championship field is not in average form, and the athletes
+#' who arrive having raced hardest are systematically under-rated by it.
+#'
+#' This restores the other half — the momentum the athlete actually carries into
+#' the race being predicted.
+#'
+#' Measured per family on the athletics harvest, going from a decayed race count
+#' of 1 to 5: throw +2.19%, road +1.98%, middle +0.95%, hurdles +0.89%,
+#' jump +0.84%, sprint +0.65%, distance +0.54%, walk +0.44%. Field events gain
+#' most from being in rhythm.
+#'
+#' @param ability An ability table from [estimate_ability()], carrying
+#'   `event_id`.
+#' @param momentum Named numeric vector of current momentum, indexed by
+#'   `athlete_id`, or a table with `athlete_id` and `momentum`.
+#' @param calibration A calibration carrying a `momentum` table.
+#' @return `ability` with `ability` shifted and a `momentum_now` column added.
+#' @seealso [estimate_ability()]
+#' @export
+apply_momentum <- function(ability, momentum, calibration) {
+  ab <- data.table::copy(data.table::as.data.table(ability))
+  if (is.null(calibration$momentum) || !nrow(calibration$momentum)) return(ab[])
+  if (!nrow(ab)) return(ab[])
+  mv <- if (is.numeric(momentum)) {
+    data.table::data.table(athlete_id = names(momentum),
+                           momentum_now = as.numeric(momentum))
+  } else {
+    m <- data.table::copy(data.table::as.data.table(momentum))
+    # Accept either column name. setnames() errors when `old` is zero-length, so
+    # it cannot be used as a soft rename however tempting `skip_absent` looks.
+    if (!"momentum_now" %in% names(m) && "momentum" %in% names(m)) {
+      data.table::setnames(m, "momentum", "momentum_now")
+    }
+    if (!"momentum_now" %in% names(m)) {
+      cli::cli_abort("{.arg momentum} needs a {.field momentum} or {.field momentum_now} column.")
+    }
+    m[, .(athlete_id = as.character(athlete_id), momentum_now)]
+  }
+  ab[, athlete_id := as.character(athlete_id)]
+  ab[mv, on = "athlete_id", momentum_now := i.momentum_now]
+  ab[is.na(momentum_now), momentum_now := 0]
+  reg <- .citius_event_registry[, c("event_id", "family")]
+  fam <- reg$family[match(ab$event_id, reg$event_id)]
+  b <- calibration$momentum$beta[match(fam, calibration$momentum$family)]
+  b[!is.finite(b)] <- 0
+  # Scale by (1 - shrinkage) for the same reason ageing is: applying a form
+  # adjustment to a number that is mostly the event mean adjusts the population,
+  # not the athlete.
+  if ("shrinkage" %in% names(ab)) b <- b * (1 - ab$shrinkage)
+  ab[, ability := ability + b * momentum_now]
+  ab[]
 }

@@ -277,3 +277,26 @@ test_that("wind is stripped from ability, and the local name does not shadow `w`
              truth, by = "athlete_id")
   expect_lt(abs(mean(m$ability - m$true)), 0.001)
 })
+
+test_that("apply_momentum accepts every input form and respects shrinkage", {
+  ab <- data.table::data.table(
+    athlete_id = c("a", "b", "c"), event_id = "AT-ShotPut-M",
+    ability = c(1, 1, 1), shrinkage = c(0, 0, 0.5))
+  cal <- list(momentum = data.table::data.table(family = "throw", beta = 0.005))
+
+  r1 <- apply_momentum(ab, c(a = 4, b = 0, c = 4), cal)
+  r2 <- apply_momentum(ab, data.table::data.table(
+    athlete_id = c("a", "b", "c"), momentum = c(4, 0, 4)), cal)
+  r3 <- apply_momentum(ab, data.table::data.table(
+    athlete_id = c("a", "b", "c"), momentum_now = c(4, 0, 4)), cal)
+  expect_equal(r1$ability, r2$ability)
+  expect_equal(r1$ability, r3$ability)
+
+  # Zero momentum must not move the estimate.
+  expect_equal(r1$ability[2], 1)
+  # A half-shrunk athlete gets half the shift: applying a form adjustment to a
+  # number that is mostly the event mean would adjust the population.
+  expect_equal((r1$ability[3] - 1) * 2, r1$ability[1] - 1)
+  # No momentum table on the calibration is a no-op, not an error.
+  expect_equal(apply_momentum(ab, c(a = 4), list())$ability, ab$ability)
+})
