@@ -4,7 +4,12 @@
 \alias{estimate_context_effects}
 \title{Estimate systematic round and tier offsets from the data}
 \usage{
-estimate_context_effects(results, min_cell = 2000L, shrink = TRUE)
+estimate_context_effects(
+  results,
+  min_cell = 2000L,
+  shrink = TRUE,
+  per_family = FALSE
+)
 }
 \arguments{
 \item{results}{Canonical results, as passed to \code{\link[=estimate_ability]{estimate_ability()}}.}
@@ -13,9 +18,19 @@ estimate_context_effects(results, min_cell = 2000L, shrink = TRUE)
 all. Cells below this fall back to the pooled offset.}
 
 \item{shrink}{Shrink per-family offsets toward the pooled offset by an
-empirical-Bayes weight whose strength is fitted out of sample. Applying
-them raw was measurably worse than omitting them entirely — see the note in
-the body and \code{\link[=.fit_context_shrink]{.fit_context_shrink()}}.}
+empirical-Bayes weight whose strength is fitted out of sample. Only
+consulted when \code{per_family} is on. Note that this fitter validated round
+offsets at k = 0 and the backtest still refuted them, so it is a filter on
+the parameterisation rather than a licence for it.}
+
+\item{per_family}{Compute per-family round and tier offsets alongside the
+pooled ones. \strong{Off by default: two backtest arms refuted it.} \code{cstack}
+(round + tier) lost to wind-only on MAE 2.2795\% to 2.3205\%, and \code{cround}
+(round alone, tier pooled) lost by more, 2.2795\% to 2.3024\% with gold and
+medal Brier both degraded and bias worse in every family. Kept behind a flag
+rather than deleted because the underlying observation is real — road's tier
+ordering genuinely inverts — but the parameterisation does not transfer.
+The distinction that DOES survive is \code{\link[=fit_championship_effect]{fit_championship_effect()}}.}
 }
 \value{
 A list with \code{round} and \code{tier} named numeric vectors of offsets on

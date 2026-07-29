@@ -329,13 +329,13 @@ two_context <- function(n_ath = 400, gap_a = 0.03, gap_b = 0.01, sigma = 0.002,
 }
 
 test_that("per-family offsets carry raw and shrink_k so the adjustment is auditable", {
-  ctx <- estimate_context_effects(two_context(), min_cell = 50L)
+  ctx <- estimate_context_effects(two_context(), min_cell = 50L, per_family = TRUE)
   skip_if(is.null(ctx$tier_family) || !nrow(ctx$tier_family))
   expect_true(all(c("raw", "shrink_k", "offset", "n") %in% names(ctx$tier_family)))
 })
 
 test_that("a shrunk offset lies between its raw value and the pooled one", {
-  ctx <- estimate_context_effects(two_context(), min_cell = 50L)
+  ctx <- estimate_context_effects(two_context(), min_cell = 50L, per_family = TRUE)
   tf <- data.table::as.data.table(ctx$tier_family)
   skip_if(!nrow(tf) || !all(is.finite(tf$shrink_k)) || all(tf$shrink_k == 0))
   pooled <- ctx$tier[match(tf$tier_class, names(ctx$tier))]
@@ -344,8 +344,8 @@ test_that("a shrunk offset lies between its raw value and the pooled one", {
 })
 
 test_that("shrink = FALSE leaves the offsets raw", {
-  on_ <- estimate_context_effects(two_context(), min_cell = 50L, shrink = TRUE)
-  off <- estimate_context_effects(two_context(), min_cell = 50L, shrink = FALSE)
+  on_ <- estimate_context_effects(two_context(), min_cell = 50L, shrink = TRUE, per_family = TRUE)
+  off <- estimate_context_effects(two_context(), min_cell = 50L, shrink = FALSE, per_family = TRUE)
   skip_if(is.null(off$tier_family) || !nrow(off$tier_family))
   expect_false("shrink_k" %in% names(off$tier_family))
   expect_true("shrink_k" %in% names(on_$tier_family))

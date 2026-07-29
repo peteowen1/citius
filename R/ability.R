@@ -205,16 +205,26 @@ fit_half_life <- function(results,
 #' @param results Canonical results, as passed to [estimate_ability()].
 #' @param min_cell Minimum marks for a family-context cell to be estimated at
 #'   all. Cells below this fall back to the pooled offset.
+#' @param per_family Compute per-family round and tier offsets alongside the
+#'   pooled ones. **Off by default: two backtest arms refuted it.** `cstack`
+#'   (round + tier) lost to wind-only on MAE 2.2795% to 2.3205%, and `cround`
+#'   (round alone, tier pooled) lost by more, 2.2795% to 2.3024% with gold and
+#'   medal Brier both degraded and bias worse in every family. Kept behind a flag
+#'   rather than deleted because the underlying observation is real — road's tier
+#'   ordering genuinely inverts — but the parameterisation does not transfer.
+#'   The distinction that DOES survive is [fit_championship_effect()].
 #' @param shrink Shrink per-family offsets toward the pooled offset by an
-#'   empirical-Bayes weight whose strength is fitted out of sample. Applying
-#'   them raw was measurably worse than omitting them entirely — see the note in
-#'   the body and [.fit_context_shrink()].
+#'   empirical-Bayes weight whose strength is fitted out of sample. Only
+#'   consulted when `per_family` is on. Note that this fitter validated round
+#'   offsets at k = 0 and the backtest still refuted them, so it is a filter on
+#'   the parameterisation rather than a licence for it.
 #' @return A list with `round` and `tier` named numeric vectors of offsets on
 #'   the log performance scale, plus the `n` behind each. When `shrink` is on,
 #'   the per-family tables also carry `raw` (the unshrunk offset) and
 #'   `shrink_k`, so the correction applied is auditable.
 #' @export
-estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE) {
+estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
+                                     per_family = FALSE) {
   dt <- data.table::as.data.table(results)
   dt <- dt[!is.na(perf) & !is.na(event_id)]
   empty <- list(round = c(final = 0), tier = c(top = 0),
@@ -251,7 +261,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE) {
   reg <- .citius_event_registry[, c("event_id", "family")]
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
   rf <- tf <- NULL
-  if ("family" %in% names(dt) && any(!is.na(dt$family))) {
+  if (per_family && "family" %in% names(dt) && any(!is.na(dt$family))) {
     fd <- dt[!is.na(family)]
     rf <- fd[, .(eff = mean(resid), n = .N), by = .(family, round_class)]
     rf[, ref := eff[round_class == "final"][1], by = family]
