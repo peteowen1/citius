@@ -191,3 +191,50 @@ adjust_context <- function(results, context_effect, covariate) {
   dt[, perf := perf - context_adj]
   dt[]
 }
+
+#' Measure the indoor/outdoor offset
+#'
+#' Indoor athletics is run on a banked 200 m track with tighter bends and no
+#' wind, and the effect differs in SIGN by event family — sprinters and
+#' middle-distance runners are slower indoors, distance runners are **faster**.
+#' A single global offset would cancel those against each other.
+#'
+#' Measured on the athletics corpus (within-athlete, after round and tier):
+#' middle −0.57%, sprint −0.37%, distance **+0.37%**, jump −0.19%, with hurdles,
+#' throws and combined events showing nothing.
+#'
+#' This is a **race-level** property — constant across everyone in a race — so it
+#' belongs with the round and tier offsets and is screened the same way, on
+#' within-athlete residuals. Screening it within-race would remove it entirely by
+#' construction. (Contrast an athlete-level covariate such as race momentum,
+#' which must be screened within-race precisely because it can be confounded with
+#' meet quality.)
+#'
+#' @param results Canonical results with `perf`, `indoor` and `event_id`.
+#' @param min_n Minimum marks in each of indoor and outdoor for a family to be
+#'   fitted; below it the offset is zero rather than noise.
+#' @return A `data.table` of `family` and `offset`, where `offset` is subtracted
+#'   from `perf` for indoor marks.
+#' @export
+fit_indoor_effect <- function(results, min_n = 2000L) {
+  dt <- data.table::as.data.table(results)
+  need <- c("perf", "indoor", "event_id", "athlete_id")
+  miss <- setdiff(need, names(dt))
+  if (length(miss)) cli::cli_abort("{.arg results} is missing {.field {miss}}.")
+  dt <- dt[!is.na(perf) & !is.na(event_id) & !is.na(indoor)]
+  if ("family" %in% names(dt)) dt[, family := NULL]
+  reg <- .citius_event_registry[, c("event_id", "family")]
+  dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
+  dt <- dt[!is.na(family)]
+  if (!nrow(dt)) return(data.table::data.table(family = character(), offset = numeric()))
+  # Within athlete-event, so ability is removed and what remains is the setting.
+  dt[, .n := .N, by = c("athlete_id", "event_id")]
+  dt <- dt[.n >= 4L]
+  dt[, .r := perf - mean(perf), by = c("athlete_id", "event_id")]
+  out <- dt[, {
+    ins <- .r[indoor %in% TRUE]; out_ <- .r[!(indoor %in% TRUE)]
+    if (length(ins) < min_n || length(out_) < min_n) .(offset = 0, n_indoor = length(ins))
+    else .(offset = mean(ins) - mean(out_), n_indoor = length(ins))
+  }, by = family]
+  out[]
+}

@@ -203,13 +203,22 @@ fit_half_life <- function(results,
 #' finals would be absorbed into the "final effect".
 #'
 #' @param results Canonical results, as passed to [estimate_ability()].
+#' @param min_cell Minimum marks for a family-context cell to be estimated at
+#'   all. Cells below this fall back to the pooled offset.
+#' @param shrink Shrink per-family offsets toward the pooled offset by an
+#'   empirical-Bayes weight whose strength is fitted out of sample. Applying
+#'   them raw was measurably worse than omitting them entirely — see the note in
+#'   the body and [.fit_context_shrink()].
 #' @return A list with `round` and `tier` named numeric vectors of offsets on
-#'   the log performance scale, plus the `n` behind each.
+#'   the log performance scale, plus the `n` behind each. When `shrink` is on,
+#'   the per-family tables also carry `raw` (the unshrunk offset) and
+#'   `shrink_k`, so the correction applied is auditable.
 #' @export
-estimate_context_effects <- function(results) {
+estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE) {
   dt <- data.table::as.data.table(results)
   dt <- dt[!is.na(perf) & !is.na(event_id)]
-  empty <- list(round = c(final = 0), tier = c(top = 0), n = 0L)
+  empty <- list(round = c(final = 0), tier = c(top = 0),
+                round_family = NULL, tier_family = NULL, n = 0L)
   if (!nrow(dt)) return(empty)
 
   dt[, athlete_id := as.character(athlete_id)]
@@ -230,11 +239,147 @@ estimate_context_effects <- function(results) {
   t_eff[, eff := eff - eff[tier_class == "top"][1]]
   if (!nrow(t_eff[tier_class == "top"])) t_eff[, eff := eff - max(eff)]
 
+  # Per-family offsets alongside the pooled ones. A pooled offset is a weighted
+  # average across events that behave completely differently: the low-tier
+  # penalty is -0.45% for road and -3.59% for throws, and road's tier order is
+  # INVERTED (a paced big-city marathon is faster than a tactical championship
+  # one). Applying the pooled -1.69% to road inflates its low-tier marks by
+  # ~1.2%, which is almost exactly the +0.95% forecast bias measured for road and
+  # +1.10% for walk.
+  #
+  # Thin cells fall back to the pooled value rather than fitting noise.
+  reg <- .citius_event_registry[, c("event_id", "family")]
+  dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
+  rf <- tf <- NULL
+  if ("family" %in% names(dt) && any(!is.na(dt$family))) {
+    fd <- dt[!is.na(family)]
+    rf <- fd[, .(eff = mean(resid), n = .N), by = .(family, round_class)]
+    rf[, ref := eff[round_class == "final"][1], by = family]
+    rf <- rf[!is.na(ref)]
+    if (nrow(rf)) rf[, eff := eff - ref]
+    rf <- rf[n >= min_cell, .(family, round_class, offset = eff, n)]
+
+    fd <- merge(fd, r_eff[, .(round_class, r_adj2 = eff)], by = "round_class", all.x = TRUE)
+    fd[is.na(r_adj2), r_adj2 := 0]
+    fd[, resid3 := resid - r_adj2]
+    tf <- fd[, .(eff = mean(resid3), n = .N), by = .(family, tier_class)]
+    tf[, ref := eff[tier_class == "top"][1], by = family]
+    tf <- tf[!is.na(ref)]
+    if (nrow(tf)) tf[, eff := eff - ref]
+    tf <- tf[n >= min_cell, .(family, tier_class, offset = eff, n)]
+
+    # Shrink each family offset toward the pooled one. Applying these raw was
+    # measurably worse than not having them at all (arm `cstack`, 2026-07-30):
+    # road and walk improved by ~80% -- they are the families whose tier order is
+    # genuinely inverted -- while throw and combined OVERCORRECTED, turning a
+    # +0.60% bias into +2.05%. Those two carry the most extreme fitted low-tier
+    # offsets on the thinnest cells, which is the signature of fitting noise.
+    #
+    # A family offset is a small-sample estimate of a quantity with a sensible
+    # pooled prior, so it belongs under the same empirical-Bayes treatment
+    # `estimate_ability()` already applies to athletes. `k` is FITTED by
+    # out-of-sample validation, not chosen -- see .fit_context_shrink().
+    if (shrink) {
+      if (!is.null(rf) && nrow(rf)) {
+        rf[, pooled := r_eff$eff[match(round_class, r_eff$round_class)]]
+        rf[!is.finite(pooled), pooled := 0]
+        k <- .fit_context_shrink(fd, "round_class", r_eff)
+        rf[, raw := offset]
+        rf[, `:=`(offset = pooled + (raw - pooled) * n / (n + k), shrink_k = k)]
+        rf[, pooled := NULL]
+      }
+      if (!is.null(tf) && nrow(tf)) {
+        tf[, pooled := t_eff$eff[match(tier_class, t_eff$tier_class)]]
+        tf[!is.finite(pooled), pooled := 0]
+        k <- .fit_context_shrink(fd, "tier_class", t_eff, resid_col = "resid3")
+        tf[, raw := offset]
+        tf[, `:=`(offset = pooled + (raw - pooled) * n / (n + k), shrink_k = k)]
+        tf[, pooled := NULL]
+      }
+    }
+  }
+
   list(
     round = stats::setNames(r_eff$eff, r_eff$round_class),
     tier  = stats::setNames(t_eff$eff, t_eff$tier_class),
+    round_family = rf,
+    tier_family  = tf,
     n     = nrow(dt)
   )
+}
+
+#' Fit the shrinkage weight for per-family context offsets
+#'
+#' Chooses `k` in the empirical-Bayes weight `n / (n + k)` by reproducing the job
+#' the offsets actually do: predict an athlete's TOP-TIER, FINAL performance from
+#' their performances in every other context.
+#'
+#' **Validating on corpus residuals instead gives the wrong answer, and this was
+#' established the expensive way.** A first version split the corpus by date and
+#' asked which `k` best reproduced each family-context cell in the held-out half.
+#' It returned `k = 0` — no shrinkage, per-family offsets are fine — while the
+#' `cstack` backtest showed those same offsets making forecasts *worse* (throw
+#' bias +0.60% to +2.05%). Both results were correct about different questions.
+#' The corpus is overwhelmingly low-tier, so a corpus-fit test asks "do these
+#' offsets describe low-tier meets?" (yes, they are fitted on them) rather than
+#' "do they carry a low-tier mark to a championship?" — which is the only use
+#' they have.
+#'
+#' So the split here is by CONTEXT, not by date: hold out each athlete's top-tier
+#' finals, predict them from the rest of that athlete's record, and score the
+#' offsets on that. Athletes contribute only if they appear on both sides.
+#'
+#' Returns the pooled-only limit (`Inf`) when there is too little data to
+#' validate, so the fallback is the behaviour that was already safe.
+#'
+#' @keywords internal
+#' @noRd
+.fit_context_shrink <- function(fd, class_col, pooled_eff, resid_col = "resid",
+                                min_cell = 200L) {
+  need <- c("athlete_id", "event_id", "family", "perf", class_col)
+  if (!all(need %in% names(fd))) return(Inf)
+  ref <- if (class_col == "round_class") "final" else "top"
+  d <- fd[!is.na(family) & !is.na(perf) & !is.na(get(class_col))]
+  if (nrow(d) < 10000L) return(Inf)
+
+  d[, is_ref := get(class_col) == ref]
+  d[, `:=`(n_ref = sum(is_ref), n_oth = sum(!is_ref)), by = .(athlete_id, event_id)]
+  d <- d[n_ref > 0L & n_oth > 0L]
+  if (nrow(d) < 5000L) return(Inf)
+
+  # Per-family offset for each non-reference context, fitted on the SAME data the
+  # caller fitted on, plus the pooled value it will be shrunk toward.
+  fam <- d[is_ref == FALSE, .(eff = mean(get(resid_col)), n = .N),
+           by = c("family", class_col)][n >= min_cell]
+  if (!nrow(fam)) return(Inf)
+  fam[, pooled := pooled_eff$eff[match(get(class_col), pooled_eff[[class_col]])]]
+  fam[!is.finite(pooled), pooled := 0]
+
+  target <- d[is_ref == TRUE, .(tgt = mean(perf)), by = .(athlete_id, event_id)]
+  oth <- merge(d[is_ref == FALSE], fam, by = c("family", class_col), all.x = FALSE)
+  if (!nrow(oth)) return(Inf)
+
+  # Collapse to one row per athlete-event-cell BEFORE sweeping k. The predictor
+  # is mean(perf - adj) and adj is constant within a cell, so the whole sweep
+  # reduces to sums of per-cell counts: sum(perf)/m - sum(cnt * adj)/m. Without
+  # this the grid re-groups five million rows once per candidate.
+  cells <- oth[, .(cnt = .N, sp = sum(perf)), by = c("athlete_id", "event_id", "family", class_col)]
+  cells <- merge(cells, fam, by = c("family", class_col), all.x = TRUE)
+  tot <- cells[, .(m = sum(cnt), sp = sum(sp)), by = .(athlete_id, event_id)]
+  tot <- merge(tot, target, by = c("athlete_id", "event_id"))
+  if (!nrow(tot)) return(Inf)
+  data.table::setkey(tot, athlete_id, event_id)
+
+  grid <- c(0, 10^seq(2, 7, by = 0.25), Inf)
+  sse <- vapply(grid, function(k) {
+    w <- if (is.infinite(k)) 0 else cells$n / (cells$n + k)
+    cells[, adjsum := cnt * (pooled + (eff - pooled) * w)]
+    a <- cells[, .(sa = sum(adjsum)), by = .(athlete_id, event_id)]
+    cmp <- a[tot, on = .(athlete_id, event_id)]
+    mean(((cmp$sp - cmp$sa) / cmp$m - cmp$tgt)^2, na.rm = TRUE)
+  }, numeric(1))
+  if (all(!is.finite(sse))) return(Inf)
+  grid[which.min(sse)]
 }
 
 #' @keywords internal
@@ -359,6 +504,24 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     tc <- .tier_class(if ("tier" %in% names(dt)) dt$tier else NA_character_)
     r_adj <- ctx$round[rc]; r_adj[is.na(r_adj)] <- 0
     t_adj <- ctx$tier[tc];  t_adj[is.na(t_adj)] <- 0
+    # Prefer the family's own offset where one was fitted; fall back to pooled.
+    # The pooled value averages over events that behave oppositely -- road's
+    # low-tier penalty is -0.45% against throws' -3.59% -- so applying it
+    # uniformly mis-adjusts both ends.
+    reg_c <- .citius_event_registry[, c("event_id", "family")]
+    fam_c <- reg_c$family[match(dt$event_id, reg_c$event_id)]
+    rfam <- if (!is.null(calibration$round_family)) calibration$round_family
+            else ctx$round_family
+    tfam <- if (!is.null(calibration$tier_family)) calibration$tier_family
+            else ctx$tier_family
+    if (!is.null(rfam) && nrow(rfam)) {
+      k <- match(paste(fam_c, rc), paste(rfam$family, rfam$round_class))
+      r_adj[!is.na(k)] <- rfam$offset[k[!is.na(k)]]
+    }
+    if (!is.null(tfam) && nrow(tfam)) {
+      k <- match(paste(fam_c, tc), paste(tfam$family, tfam$tier_class))
+      t_adj[!is.na(k)] <- tfam$offset[k[!is.na(k)]]
+    }
     dt[, perf := perf - unname(r_adj) - unname(t_adj)]
 
     # Wind, where the calibration carries a coefficient for the event. This is
@@ -408,6 +571,20 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
       mv <- dt$momentum
       mv[!is.finite(mv)] <- 0
       dt[, perf := perf - mb * mv]
+    }
+
+    # Indoor/outdoor. A race-level setting like round and tier, but the sign
+    # differs by family -- sprint and middle are slower indoors, distance is
+    # FASTER (no wind, better pacing) -- so a single global offset would cancel
+    # them against each other.
+    if (!is.null(calibration$indoor) && nrow(calibration$indoor) &&
+        "indoor" %in% names(dt)) {
+      reg_i <- .citius_event_registry[, c("event_id", "family")]
+      fam_i <- reg_i$family[match(dt$event_id, reg_i$event_id)]
+      io <- calibration$indoor$offset[match(fam_i, calibration$indoor$family)]
+      io[!is.finite(io)] <- 0
+      io[!(dt$indoor %in% TRUE)] <- 0
+      dt[, perf := perf - io]
     }
   }
 

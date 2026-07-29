@@ -300,3 +300,64 @@ test_that("apply_momentum accepts every input form and respects shrinkage", {
   # No momentum table on the calibration is a no-op, not an error.
   expect_equal(apply_momentum(ab, c(a = 4), list())$ability, ab$ability)
 })
+
+# Per-family context offsets, and the shrinkage that decides how far to trust
+# them. Shipping them raw was measurably WORSE than omitting them (arm `cstack`,
+# 2026-07-30): road and walk improved ~80% while throw overcorrected a +0.60%
+# bias into +2.05%.
+
+# Athletes with marks in a reference context and one other, where the gap
+# between the two is a planted per-family constant.
+two_context <- function(n_ath = 400, gap_a = 0.03, gap_b = 0.01, sigma = 0.002,
+                        seed = 7) {
+  set.seed(seed)
+  ev <- c(a = "AT-100Metres-M", b = "AT-ShotPut-M")
+  data.table::rbindlist(lapply(seq_len(n_ath), function(i) {
+    fam <- if (i %% 2L == 0L) "a" else "b"
+    gap <- if (fam == "a") gap_a else gap_b
+    ability <- stats::rnorm(1, 2.3, 0.05)
+    data.table::rbindlist(list(
+      data.table::data.table(
+        athlete_id = as.character(i), event_id = ev[[fam]], tier = "OW",
+        round = "F", date = as.Date("2020-01-01") + 1:6,
+        perf = ability + stats::rnorm(6, 0, sigma)),
+      data.table::data.table(
+        athlete_id = as.character(i), event_id = ev[[fam]], tier = "F",
+        round = "F", date = as.Date("2021-01-01") + 1:6,
+        perf = ability - gap + stats::rnorm(6, 0, sigma))))
+  }))
+}
+
+test_that("per-family offsets carry raw and shrink_k so the adjustment is auditable", {
+  ctx <- estimate_context_effects(two_context(), min_cell = 50L)
+  skip_if(is.null(ctx$tier_family) || !nrow(ctx$tier_family))
+  expect_true(all(c("raw", "shrink_k", "offset", "n") %in% names(ctx$tier_family)))
+})
+
+test_that("a shrunk offset lies between its raw value and the pooled one", {
+  ctx <- estimate_context_effects(two_context(), min_cell = 50L)
+  tf <- data.table::as.data.table(ctx$tier_family)
+  skip_if(!nrow(tf) || !all(is.finite(tf$shrink_k)) || all(tf$shrink_k == 0))
+  pooled <- ctx$tier[match(tf$tier_class, names(ctx$tier))]
+  # offset must never overshoot raw, which is what applying it unshrunk did.
+  expect_true(all(abs(tf$offset - pooled) <= abs(tf$raw - pooled) + 1e-9))
+})
+
+test_that("shrink = FALSE leaves the offsets raw", {
+  on_ <- estimate_context_effects(two_context(), min_cell = 50L, shrink = TRUE)
+  off <- estimate_context_effects(two_context(), min_cell = 50L, shrink = FALSE)
+  skip_if(is.null(off$tier_family) || !nrow(off$tier_family))
+  expect_false("shrink_k" %in% names(off$tier_family))
+  expect_true("shrink_k" %in% names(on_$tier_family))
+})
+
+test_that("the shrinkage fitter falls back to pooled when it cannot validate", {
+  # Too little data to hold out a context: the safe fallback is Inf (pooled
+  # only), never an unvalidated per-family offset.
+  tiny <- two_context(n_ath = 5)
+  tiny[, `:=`(family = "a", tier_class = "low", resid = 0.01)]
+  expect_equal(
+    citius:::.fit_context_shrink(tiny, "tier_class",
+                                 data.table::data.table(tier_class = "low", eff = 0)),
+    Inf)
+})

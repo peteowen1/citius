@@ -351,6 +351,8 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L) {
              error = function(e) NULL)
   } else NULL
 
+  cfam <- tryCatch(estimate_context_effects(results),
+                   error = function(e) list(round_family = NULL, tier_family = NULL))
   ctx <- .context_stats(d)
   athlete <- .athlete_sensitivity(d, ev)
   tail_fit <- fit_tail_df(list(data = d))
@@ -370,6 +372,10 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L) {
     form_sd = NULL,
     race = dec$race,
     wind = wind,
+    # Per-family round and tier offsets. The pooled versions average over events
+    # that behave oppositely -- the low-tier penalty is -0.45% for road and
+    # -3.59% for throws -- so a single value mis-adjusts both ends.
+    round_family = cfam$round_family, tier_family = cfam$tier_family,
     min_races = min_races,
     min_race_size = min_race_size,
     converged = dec$converged,
