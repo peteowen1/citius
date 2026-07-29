@@ -79,6 +79,30 @@ test_that("residual bias shrinks as fields get larger", {
   expect_gt(small$events$condition_sd[1], large$events$condition_sd[1])
 })
 
+test_that("min_race_size excludes pair races whose 'shock' is mostly their own noise", {
+  # The corpus recovers races from athlete histories, and most come back tiny --
+  # a median field of 2 on athletics. A two-athlete race fits its effect from two
+  # observations, so the de-biasing correction is both largest and noisiest there
+  # and leaves upward bias behind. Plant NO shock at all: anything the estimator
+  # reports is bias.
+  mixed <- rbind(
+    simulate_races(condition_sd = 0, sigma_e = 0.012, n_per = 2,
+                   n_races = 400, seed = 11)$data,
+    simulate_races(condition_sd = 0, sigma_e = 0.012, n_per = 8,
+                   n_races = 200, seed = 12)$data[, race_key := paste0("big_", race_key)]
+  )
+  loose <- calibrate(mixed, min_races = 5L, min_race_size = 2L)
+  tight <- calibrate(mixed, min_races = 5L, min_race_size = 5L)
+
+  expect_lt(tight$events$condition_sd[1], loose$events$condition_sd[1])
+
+  # Excluded races keep c_r = 0, so their deviation stays in the residual rather
+  # than being fitted away -- the same treatment singletons get.
+  dec <- decompose_races(mixed, min_race_size = 5L)
+  expect_true(all(dec$race$n_in_race >= 5L))
+  expect_equal(nrow(dec$data), nrow(mixed))
+})
+
 test_that("condition sensitivity is recovered when it genuinely varies", {
   n_ath <- 30
   planted <- c(rep(1.8, 10), rep(1.0, 10), rep(0.2, 10))

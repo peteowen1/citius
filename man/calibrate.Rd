@@ -4,13 +4,16 @@
 \alias{calibrate}
 \title{Estimate every model parameter from observed results}
 \usage{
-calibrate(results, min_races = 8L)
+calibrate(results, min_races = 8L, min_race_size = 2L)
 }
 \arguments{
 \item{results}{Canonical results with a \code{race_key} column.}
 
 \item{min_races}{Minimum races for an event to be calibrated from data
 rather than falling back to the registry prior.}
+
+\item{min_race_size}{Smallest field that may receive a fitted race effect,
+passed to \code{\link[=decompose_races]{decompose_races()}}.}
 }
 \value{
 An object of class \code{citius_calibration}.

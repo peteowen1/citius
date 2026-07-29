@@ -107,10 +107,16 @@ add_race_key <- function(results) {
 #'   which performances shared a race.
 #' @param max_iter Maximum alternating sweeps.
 #' @param tol Convergence tolerance on the maximum change in race effects.
+#' @param min_race_size Smallest field that may receive a fitted race effect.
+#'   Below it a race keeps `c_r = 0` and its deviation stays in the residual —
+#'   the same treatment singletons already get, for the same reason. Raising it
+#'   trades coverage of the shared shock for a less noisy estimate of it; see
+#'   the note on small fields in the details.
 #' @return A list with an `ability` table (one row per athlete-event), a `race`
 #'   effect table, the augmented `data` carrying `resid`, and `converged`.
 #' @export
-decompose_races <- function(results, max_iter = 400L, tol = 1e-8) {
+decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
+                            min_race_size = 2L) {
   dt <- data.table::as.data.table(results)
   if (!"race_key" %in% names(dt)) {
     cli::cli_abort("{.arg results} must contain a {.field race_key} column; use {.fn athletics_competition_results}.")
@@ -140,8 +146,14 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8) {
   # its residual to zero while still consuming a degree of freedom — which
   # silently inflates every variance estimate downstream. Such races keep a race
   # effect of zero, so their deviation stays honestly in the residual.
+  # The same argument extends past singletons. A two-athlete race fits its effect
+  # from two observations, so most of what it "measures" is the pair's own noise.
+  # The de-biasing step subtracts var(e)/n_r, but that correction is itself
+  # noisiest exactly where it is largest, and test-calibrate.R records residual
+  # upward bias that survives it at small field sizes. `min_race_size` is the
+  # threshold below which a race is treated like a singleton rather than trusted.
   dt[, n_in_race := .N, by = race_key]
-  dt[, shared := n_in_race >= 2L]
+  dt[, shared := n_in_race >= as.integer(min_race_size)]
   dt[, c_r := 0]
 
   # Group once, outside the loop. Both groupings key on character columns, which
@@ -230,12 +242,14 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8) {
 #' @param results Canonical results with a `race_key` column.
 #' @param min_races Minimum races for an event to be calibrated from data
 #'   rather than falling back to the registry prior.
+#' @param min_race_size Smallest field that may receive a fitted race effect,
+#'   passed to [decompose_races()].
 #' @return An object of class `citius_calibration`.
 #' @seealso [race_conditions()], [condition_sensitivity()], [estimate_ability()]
 #' @export
-calibrate <- function(results, min_races = 8L) {
+calibrate <- function(results, min_races = 8L, min_race_size = 2L) {
   results <- .drop_best_only(results, "calibrate()")
-  dec <- decompose_races(results)
+  dec <- decompose_races(results, min_race_size = min_race_size)
   if (is.null(dec$race) || !nrow(dec$race)) {
     return(.empty_calibration())
   }

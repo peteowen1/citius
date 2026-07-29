@@ -4,7 +4,7 @@
 \alias{decompose_races}
 \title{Split performances into athlete, race and residual components}
 \usage{
-decompose_races(results, max_iter = 400L, tol = 1e-08)
+decompose_races(results, max_iter = 400L, tol = 1e-08, min_race_size = 2L)
 }
 \arguments{
 \item{results}{Canonical results containing a \code{race_key} column identifying
@@ -13,6 +13,12 @@ which performances shared a race.}
 \item{max_iter}{Maximum alternating sweeps.}
 
 \item{tol}{Convergence tolerance on the maximum change in race effects.}
+
+\item{min_race_size}{Smallest field that may receive a fitted race effect.
+Below it a race keeps \code{c_r = 0} and its deviation stays in the residual —
+the same treatment singletons already get, for the same reason. Raising it
+trades coverage of the shared shock for a less noisy estimate of it; see
+the note on small fields in the details.}
 }
 \value{
 A list with an \code{ability} table (one row per athlete-event), a \code{race}
