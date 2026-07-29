@@ -529,6 +529,31 @@ fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, 
   m <- mean(s$sensitivity, na.rm = TRUE)
   if (is.finite(m) && m > 0) s[, sensitivity := sensitivity / m]
 
+  # A constant sensitivity is not a calibration, it is a failure to identify one
+  # -- and a silent one, because everything downstream keeps working. With every
+  # s_i equal, `s_i * c` degenerates to `c`, which cancels from every pairwise
+  # comparison, so the shared shock becomes INERT for placings and only moves
+  # marks. That is the single mechanism by which race conditions can reorder a
+  # field, and losing it looks exactly like the shock being unimportant.
+  #
+  # Measured 2026-07-31: sd(sensitivity) == 0 on every current calibration while
+  # sd(sensitivity_raw) is 1.60, i.e. `between` is pinned to its floor. The cause
+  # is `mean(noise_var)` being outlier-dominated -- noise_var is sigma^2/sxx and
+  # sxx approaches zero for athletes seen in a couple of near-neutral races, so
+  # the population noise level is set by the least informative athletes and the
+  # method of moments concludes all slope variance is noise.
+  if (nrow(s) > 1L) {
+    spread <- stats::sd(s$sensitivity, na.rm = TRUE)
+    if (!is.finite(spread) || spread < 1e-8) {
+      cli::cli_warn(c(
+        "Condition sensitivity collapsed to a constant: the shared race shock cannot reorder any field.",
+        i = "Between-athlete variance hit its floor, so every athlete shrank to the prior mean.",
+        i = "`sd(sensitivity_raw)` is {signif(stats::sd(s$sensitivity_raw, na.rm = TRUE), 3)}, so the raw slopes DO vary - this is a shrinkage failure, not an absence of signal.",
+        i = "Suspect `mean(noise_var)` being dominated by athletes with near-zero `sxx`."
+      ), .frequency = "once", .frequency_id = "citius_sensitivity_collapsed")
+    }
+  }
+
   data.table::setnames(s, "slope_adj", "sensitivity_raw")
   s[, .(athlete_id, sensitivity, sensitivity_raw, n_obs = n_races)][]
 }

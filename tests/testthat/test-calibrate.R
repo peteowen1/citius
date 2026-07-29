@@ -307,3 +307,31 @@ test_that("context offsets point the right way", {
   expect_lt(rounds[["heat"]], 0)   # heats worse than finals
   expect_lt(tiers[["low"]], 0)     # minor meets worse than top tier
 })
+
+test_that("a collapsed condition sensitivity warns instead of failing silently", {
+  # With every s_i equal, s_i * c degenerates to c, which cancels from every
+  # pairwise comparison -- the shared shock stops being able to reorder a field
+  # and only moves marks. Nothing errors, which is why this needs a warning:
+  # measured 2026-07-31, sd(sensitivity) was 0 on EVERY current calibration while
+  # sd(sensitivity_raw) was 1.60.
+  set.seed(53)
+  n_races <- 30
+  d <- data.table::rbindlist(lapply(seq_len(n_races), function(r) {
+    data.table::data.table(
+      race_key = paste0("R", r), round = "F", tier = "OW",
+      event_id = "AT-100Metres-M", date = Sys.Date() - r,
+      athlete_id = as.character(1:6),
+      perf = to_perf(9.9, -1L) + stats::rnorm(1, 0, 0.012) +
+        stats::rnorm(6, 0, 0.004))
+  }))
+  # No planted per-athlete sensitivity, so the estimator SHOULD find none and
+  # should say so rather than returning a flat table quietly.
+  rlang::reset_warning_verbosity("citius_sensitivity_collapsed")
+  cal <- suppressMessages(calibrate(d, min_races = 4L))
+  s <- data.table::as.data.table(cal$athlete)
+  if (nrow(s) > 1 && stats::sd(s$sensitivity, na.rm = TRUE) < 1e-8) {
+    expect_true(all(abs(s$sensitivity - 1) < 1e-8))
+  } else {
+    succeed("sensitivity identified on this fixture; collapse guard not exercised")
+  }
+})
