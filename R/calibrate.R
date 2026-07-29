@@ -163,6 +163,13 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
   dt[, rk_id := .GRP, by = race_key]
 
   converged <- FALSE
+  # Initialised because the loop can break before `delta` is ever assigned --
+  # when no race reaches `min_race_size`, `new_c` is empty on the first sweep.
+  # The return list reads `delta` unconditionally, so an all-singleton input
+  # errored with "object 'delta' not found" rather than reporting no race
+  # structure.
+  delta <- NA_real_
+  i <- 0L
   for (i in seq_len(max_iter)) {
     # Ability is per athlete *per event*: a sprinter's 100m and 200m marks live
     # on entirely different scales, and pooling them puts the gap between the

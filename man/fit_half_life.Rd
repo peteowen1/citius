@@ -6,7 +6,7 @@
 \usage{
 fit_half_life(
   results,
-  candidates = c(90, 180, 270, 365, 540, 730, 1095, 1825, 3650),
+  candidates = c(14, 30, 45, 60, 90, 135, 180, 270, 365, 540, 730, 1095, 1825, 3650),
   min_history = 3L
 )
 }
