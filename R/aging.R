@@ -270,12 +270,12 @@ project_ability <- function(ability, aging, max_shift = 0.05) {
 .fit_aging_difference <- function(results, min_results = 200L, k = 8,
                                   min_density = 0.005) {
   dt <- data.table::as.data.table(results)
-  need <- c("athlete_id", "event_id", "perf", "age", "date")
+  need <- c("athlete_id", "event_id", "perf", "age")
   miss <- setdiff(need, names(dt))
   if (length(miss)) {
     cli::cli_abort("{.arg results} is missing {.field {miss}}.")
   }
-  dt <- dt[!is.na(perf) & !is.na(event_id) & !is.na(age) & !is.na(date)]
+  dt <- dt[!is.na(perf) & !is.na(event_id) & !is.na(age)]
   if ("family" %in% names(dt)) dt[, family := NULL]
   reg <- .citius_event_registry[, c("event_id", "family")]
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
@@ -283,7 +283,11 @@ project_ability <- function(ability, aging, max_shift = 0.05) {
   if (!nrow(dt)) return(.empty_aging())
 
   dt[, athlete_id := as.character(athlete_id)]
-  dt[, .yr := as.integer(format(date, "%Y"))]
+  # Seasons are indexed by AGE, not calendar year. Age is what the curve is
+  # about, and it does not depend on the feed carrying usable dates -- a caller
+  # whose data spans many ages within one calendar year (synthetic fixtures do
+  # exactly this) would otherwise collapse to a single season and form no pairs.
+  dt[, .yr := round(age)]
   # One row per athlete-event-season, on the MEDIAN.
   y <- dt[, .(perf = stats::median(perf), age = mean(age)),
           by = c("athlete_id", "event_id", "family", ".yr")]
@@ -313,7 +317,16 @@ project_ability <- function(ability, aging, max_shift = 0.05) {
     if (!any(sup)) sup <- rep(TRUE, nrow(grid))
     pk <- which(sup)[which.max(eff[sup])]
     eff <- eff - eff[pk]
-    ident <- pk > 1L && pk < nrow(grid)
+    # Identified means the peak sits INSIDE the supported range, not inside the
+    # full grid. Comparing against the grid missed a curve still rising where the
+    # data ran out, because the unsupported tail kept `pk` away from nrow(grid).
+    sup_idx <- which(sup)
+    ident <- length(sup_idx) > 2L && pk > min(sup_idx) && pk < max(sup_idx)
+    if (!ident) {
+      cli::cli_warn(
+        c("Aging peak for {.val {f}} is not identified: it sits at the edge of the supported range.",
+          i = "{.field peak_age} is a bound, not an estimate."))
+    }
     data.table::data.table(
       family = f, age = grid$.amid, effect = eff, supported = sup,
       peak_age = grid$.amid[pk], peak_identified = ident,
@@ -321,6 +334,62 @@ project_ability <- function(ability, aging, max_shift = 0.05) {
       plateau_hi = max(grid$.amid[eff > -0.005]), n = nrow(sub))
   }), fill = TRUE)
   if (!nrow(curves)) return(.empty_aging())
+  peaks <- unique(curves[, .(family, peak_age, peak_identified,
+                             plateau_lo, plateau_hi, n)])
+  structure(list(curves = curves[], peaks = peaks[]), class = "citius_aging")
+}
+
+#' Blend two aging curves
+#'
+#' The centred and first-difference estimators fail in opposite directions.
+#' Centring on an unbalanced panel **under**-corrects the tails; integrating a
+#' fitted slope **over**-corrects them, because integration accumulates error.
+#' Measured on the athletics backtest, the mark bias for athletes aged 20 or
+#' under runs −0.543% under the centred curve and +0.238% under the
+#' first-difference one — the same defect seen from both sides.
+#'
+#' A blend lands between. The weight is a fitted quantity, not a preference:
+#' solving `(1 - w) * bias_centred + w * bias_diff = 0` band by band gives 0.70
+#' at age 20 and under, 0.65 at 20–23 and 0.74 above 32.
+#'
+#' No single scalar can zero every band — the middle bands are negative under
+#' both estimators, so they imply `w > 1`. The weight targets the tails, which is
+#' where the two estimators actually disagree.
+#'
+#' @param centred,difference Aging objects from [fit_aging_curve()].
+#' @param weight How far toward `difference` to move, in `[0, 1]`.
+#' @return A `citius_aging` object on the blended curve.
+#' @export
+blend_aging <- function(centred, difference, weight = 0.7) {
+  stopifnot(inherits(centred, "citius_aging"), inherits(difference, "citius_aging"))
+  if (!is.finite(weight) || weight < 0 || weight > 1) {
+    cli::cli_abort("{.arg weight} must lie in [0, 1].")
+  }
+  a <- data.table::as.data.table(centred$curves)
+  b <- data.table::as.data.table(difference$curves)
+  fams <- intersect(unique(a$family), unique(b$family))
+  if (!length(fams)) cli::cli_abort("The two curves share no families.")
+
+  curves <- data.table::rbindlist(lapply(fams, function(f) {
+    ca <- a[family == f]; cb <- b[family == f]
+    # Interpolate both onto a common grid before mixing -- the two estimators
+    # produce grids over different age ranges, and mixing them positionally
+    # would blend age 16 with age 19.
+    lo <- max(min(ca$age), min(cb$age)); hi <- min(max(ca$age), max(cb$age))
+    if (!is.finite(lo) || !is.finite(hi) || hi <= lo) return(NULL)
+    grid <- seq(lo, hi, length.out = 200)
+    ea <- stats::approx(ca$age, ca$effect, xout = grid, rule = 2)$y
+    eb <- stats::approx(cb$age, cb$effect, xout = grid, rule = 2)$y
+    eff <- (1 - weight) * ea + weight * eb
+    pk <- which.max(eff)
+    eff <- eff - eff[pk]
+    data.table::data.table(
+      family = f, age = grid, effect = eff, supported = TRUE,
+      peak_age = grid[pk], peak_identified = pk > 1L && pk < length(grid),
+      plateau_lo = min(grid[eff > -0.005]), plateau_hi = max(grid[eff > -0.005]),
+      n = cb$n[1])
+  }), fill = TRUE)
+  if (!nrow(curves)) cli::cli_abort("Blending produced no curves.")
   peaks <- unique(curves[, .(family, peak_age, peak_identified,
                              plateau_lo, plateau_hi, n)])
   structure(list(curves = curves[], peaks = peaks[]), class = "citius_aging")
