@@ -360,6 +360,33 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     r_adj <- ctx$round[rc]; r_adj[is.na(r_adj)] <- 0
     t_adj <- ctx$tier[tc];  t_adj[is.na(t_adj)] <- 0
     dt[, perf := perf - unname(r_adj) - unname(t_adj)]
+
+    # Wind, where the calibration carries a coefficient for the event. This is
+    # the same adjustment layer as round and tier, and it belongs here rather
+    # than in a pre-adjusted input file: `calibrate()` removes shared wind into
+    # the race effect, but ability estimation never sees a race effect, so
+    # between-race wind flows straight into the estimate.
+    #
+    # That channel is the large one. In the men's 100m the between-race wind
+    # spread is 1.28 m/s against 0.33 within a race, so wind contaminates an
+    # ability estimate by 48% of `sigma_within` while barely reordering any
+    # single race. Measured on the backtest: gold skill +0.237 -> +0.240, with
+    # the entire gain inside wind-legal events (t = +4.63 on 2,104 races) and
+    # exactly none outside them (t = -0.41 on 4,515).
+    # NOTE the variable names. `dt` already carries a column `w` — the recency
+    # and precision weight built above — so a local `w` is SHADOWED inside
+    # `dt[, ...]` and data.table silently uses the column instead. That subtracted
+    # `beta * weight` from every mark rather than `beta * wind`: a constant shift
+    # of 0.4% with the spread untouched, which no ranking test could ever catch.
+    # See the NSE shadowing note in C:/dev/.claude/rules.
+    if (!is.null(calibration$wind) && nrow(calibration$wind) &&
+        "wind" %in% names(dt)) {
+      wind_beta <- calibration$wind$beta[match(dt$event_id, calibration$wind$event_id)]
+      wind_beta[!is.finite(wind_beta)] <- 0
+      wind_val <- dt$wind
+      wind_val[!is.finite(wind_val)] <- 0
+      dt[, perf := perf - wind_beta * wind_val]
+    }
   }
 
   if (trim_tactical > 0) {

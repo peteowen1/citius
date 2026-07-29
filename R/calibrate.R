@@ -335,6 +335,15 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L) {
     )
   }
 
+  # Wind, fitted here so the calibration object carries EVERY measured effect and
+  # `estimate_ability()` has one place to read them from. Splitting the
+  # measurement from the application is what let a fitted wind coefficient sit
+  # unused while `adjust_wind()` appeared only inside a comment.
+  wind <- if ("wind" %in% names(results)) {
+    tryCatch(data.table::as.data.table(fit_wind_effect(results)),
+             error = function(e) NULL)
+  } else NULL
+
   ctx <- .context_stats(d)
   athlete <- .athlete_sensitivity(d, ev)
   tail_fit <- fit_tail_df(list(data = d))
@@ -353,6 +362,7 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L) {
     # which is the honest fallback rather than a guess.
     form_sd = NULL,
     race = dec$race,
+    wind = wind,
     min_races = min_races,
     min_race_size = min_race_size,
     converged = dec$converged,
@@ -551,7 +561,7 @@ fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, 
       event_id = character(), sigma_within = numeric(), condition_sd = numeric(),
       tactical_index = numeric(), cond_share = numeric(), calibrated = logical(),
       foul_rate = numeric(), n_results = integer(), n_races = integer()),
-    round = NULL, tier = NULL, athlete = NULL, race = NULL,
+    round = NULL, tier = NULL, athlete = NULL, race = NULL, wind = NULL,
     min_races = 8L, converged = TRUE
   ), class = "citius_calibration")
 }

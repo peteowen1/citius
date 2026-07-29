@@ -238,3 +238,42 @@ test_that("stale athletes shrink to the event mean without a cutoff", {
   # The stale athlete must not out-rank the active one on ancient form
   expect_lt(ab[athlete_id == "stale"]$ability, ab[athlete_id == "recent"]$ability)
 })
+
+test_that("wind is stripped from ability, and the local name does not shadow `w`", {
+  # Plant a known wind coefficient and check estimate_ability() recovers ability
+  # despite it. The trap this guards: `dt` carries a column `w` (the recency and
+  # precision weight), so a local variable named `w` is silently shadowed inside
+  # `dt[, ...]` and data.table uses the COLUMN. That subtracted beta * weight
+  # instead of beta * wind -- a constant 0.4% level shift with the spread
+  # untouched, invisible to any ranking test.
+  set.seed(4)
+  n_ath <- 30; beta <- 0.0045
+  ability <- stats::rnorm(n_ath, to_perf(10, -1L), 0.02)
+  rows <- data.table::rbindlist(lapply(seq_len(200), function(r) {
+    who <- sample(n_ath, 8); wind <- stats::rnorm(1, 0, 1.3)
+    data.table::data.table(
+      race_key = paste0("r", r), athlete_id = as.character(who),
+      event_id = "AT-100Metres-M", date = Sys.Date() - r,
+      round = "F", tier = "OW", wind = wind,
+      perf = ability[who] + beta * wind + stats::rnorm(8, 0, 0.008))
+  }))
+  cal <- calibrate(rows, min_races = 5L)
+  expect_equal(cal$wind$beta[1], beta, tolerance = 0.1)
+
+  truth <- data.table::data.table(athlete_id = as.character(seq_len(n_ath)),
+                                  true = ability)
+  err <- function(cl) {
+    m <- merge(estimate_ability(rows, as_of = Sys.Date(), calibration = cl),
+               truth, by = "athlete_id")
+    stats::sd(m$ability - m$true)
+  }
+  cal_off <- cal; cal_off$wind <- NULL
+  # Removing a real covariate must SHARPEN the estimate, not merely shift it.
+  expect_lt(err(cal), err(cal_off) * 0.9)
+
+  # A shadowed `w` shows up as a level shift with the spread unchanged, so test
+  # the level explicitly too.
+  m <- merge(estimate_ability(rows, as_of = Sys.Date(), calibration = cal),
+             truth, by = "athlete_id")
+  expect_lt(abs(mean(m$ability - m$true)), 0.001)
+})
