@@ -96,7 +96,17 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
 #' }
 #' @export
 fit_half_life <- function(results,
-                          candidates = c(90, 180, 270, 365, 540, 730, 1095, 1825, 3650),
+                          # 90 was the old floor, and four families pinned to it
+                          # and were reported unidentified. Adding points below
+                          # showed the minimum is genuinely AT 90 for sprint,
+                          # hurdles and throw — MAE rises again at 60 — so the
+                          # boundary test was flagging a real optimum as an
+                          # artefact purely because it equalled min(candidates).
+                          # With the grid widened all nine families identify, and
+                          # the four stop falling back to a pooled 207 days that
+                          # was too long for every one of them.
+                          candidates = c(14, 30, 45, 60, 90, 135, 180, 270, 365,
+                                         540, 730, 1095, 1825, 3650),
                           min_history = 3L) {
   results <- .drop_best_only(results, "fit_half_life()")
   dt <- data.table::as.data.table(results)
