@@ -4,14 +4,24 @@
 \alias{estimate_context_effects}
 \title{Estimate systematic round and tier offsets from the data}
 \usage{
-estimate_context_effects(results)
+estimate_context_effects(results, min_cell = 2000L, shrink = TRUE)
 }
 \arguments{
 \item{results}{Canonical results, as passed to \code{\link[=estimate_ability]{estimate_ability()}}.}
+
+\item{min_cell}{Minimum marks for a family-context cell to be estimated at
+all. Cells below this fall back to the pooled offset.}
+
+\item{shrink}{Shrink per-family offsets toward the pooled offset by an
+empirical-Bayes weight whose strength is fitted out of sample. Applying
+them raw was measurably worse than omitting them entirely — see the note in
+the body and \code{\link[=.fit_context_shrink]{.fit_context_shrink()}}.}
 }
 \value{
 A list with \code{round} and \code{tier} named numeric vectors of offsets on
-the log performance scale, plus the \code{n} behind each.
+the log performance scale, plus the \code{n} behind each. When \code{shrink} is on,
+the per-family tables also carry \code{raw} (the unshrunk offset) and
+\code{shrink_k}, so the correction applied is auditable.
 }
 \description{
 Athletes do not perform uniformly across contexts. Heats are coasted, minor

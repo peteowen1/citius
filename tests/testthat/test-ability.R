@@ -361,3 +361,63 @@ test_that("the shrinkage fitter falls back to pooled when it cannot validate", {
                                  data.table::data.table(tier_class = "low", eff = 0)),
     Inf)
 })
+
+# sigma is fitted across the pooled history but the forecast targets a top-tier
+# final, which is a narrower slice of conditions for field events and a wider one
+# for road. Measured ratios track the model's dispersion error closely (cor 0.80
+# across families), so the correction is applied to the sigma estimate_ability()
+# RETURNS -- the column simulate_event() reads. An earlier attempt that widened
+# calibration$events$sigma_within instead was bit-for-bit inert.
+
+test_that("fit_sigma_context recovers a planted championship/pooled ratio", {
+  set.seed(3)
+  n <- 300
+  rows <- data.table::rbindlist(lapply(seq_len(n), function(i) {
+    ab <- stats::rnorm(1, 2.3, 0.05)
+    data.table::rbindlist(list(
+      # Everyday racing: wide spread.
+      data.table::data.table(athlete_id = as.character(i), event_id = "AT-100Metres-M",
+                             tier = "C", round = "H", date = Sys.Date() - 1:10,
+                             perf = ab + stats::rnorm(10, 0, 0.02)),
+      # Championship finals: half the spread.
+      data.table::data.table(athlete_id = as.character(i), event_id = "AT-100Metres-M",
+                             tier = "OW", round = "F", date = Sys.Date() - 11:20,
+                             perf = ab + stats::rnorm(10, 0, 0.01))))
+  }))
+  sc <- fit_sigma_context(rows, min_n = 100L)
+  sprint <- sc[family == "sprint"]
+  expect_equal(nrow(sprint), 1L)
+  # Pooled spread mixes the two regimes, so it is sqrt(mean(0.02^2, 0.01^2)) and
+  # the recoverable ratio is 0.01 over that, ~0.63 -- NOT the 0.5 ratio of the
+  # two sds. Asserting 0.5 here would be asserting the wrong quantity.
+  expect_equal(sprint$ratio, 0.01 / sqrt((0.02^2 + 0.01^2) / 2), tolerance = 0.08)
+})
+
+test_that("a family with too few championship marks is left alone", {
+  set.seed(4)
+  rows <- data.table::data.table(
+    athlete_id = rep(as.character(1:50), each = 6), event_id = "AT-100Metres-M",
+    tier = "C", round = "H", date = Sys.Date() - 1:6,
+    perf = 2.3 + stats::rnorm(300, 0, 0.02))
+  sc <- fit_sigma_context(rows, min_n = 500L)
+  expect_true(all(sc$ratio == 1))     # ratio of 1 leaves sigma untouched
+})
+
+test_that("sigma_context reaches the sigma estimate_ability returns", {
+  h <- data.table::data.table(
+    athlete_id = rep(c("a", "b"), each = 8), event_id = "AT-100Metres-M",
+    tier = "OW", round = "F", date = Sys.Date() - rep(1:8, 2),
+    perf = to_perf(10, -1L) + stats::rnorm(16, 0, 0.01))
+  base <- estimate_ability(h, as_of = Sys.Date(), adjust_context = FALSE)
+  cal <- list(sigma_context = data.table::data.table(family = "sprint", ratio = 0.5))
+  scaled <- estimate_ability(h, as_of = Sys.Date(), adjust_context = FALSE,
+                             calibration = cal)
+  m <- merge(base[, .(athlete_id, s0 = sigma)], scaled[, .(athlete_id, s1 = sigma)],
+             by = "athlete_id")
+  expect_equal(m$s1, m$s0 * 0.5, tolerance = 1e-8)
+  # A ratio of 1 must be an exact no-op, so the feature can be disabled cleanly.
+  cal1 <- list(sigma_context = data.table::data.table(family = "sprint", ratio = 1))
+  none <- estimate_ability(h, as_of = Sys.Date(), adjust_context = FALSE,
+                           calibration = cal1)
+  expect_equal(none$sigma, base$sigma)
+})

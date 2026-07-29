@@ -649,6 +649,25 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # sample SD is close to meaningless on its own.
   ab[, sigma := (n_eff * sigma + 2 * cv_prior) / (n_eff + 2)]
 
+  # Rescale to the context being FORECAST. sigma is fitted across the pooled
+  # history, but the target is a top-tier final, and that is a narrower slice of
+  # conditions than the corpus average for field events and a wider one for road.
+  # Measured ratios of championship spread to pooled spread predict the model's
+  # dispersion error almost exactly (cor 0.80 across families; throw 0.681 vs a
+  # measured sd(z) of 0.698, road 1.141 vs 1.142).
+  #
+  # Applied HERE, to `ab$sigma`, because that is the column `simulate_event()`
+  # reads. A previous attempt to widen `calibration$events$sigma_within` was
+  # bit-for-bit inert for exactly that reason.
+  if (!is.null(calibration$sigma_context)) {
+    sc <- data.table::as.data.table(calibration$sigma_context)
+    reg <- .citius_event_registry[, c("event_id", "family")]
+    fam <- reg$family[match(ab$event_id, reg$event_id)]
+    ratio <- sc$ratio[match(fam, sc$family)]
+    ratio[!is.finite(ratio) | ratio <= 0] <- 1
+    ab[, sigma := sigma * ratio]
+  }
+
   ab[, sigma_between := data.table::fifelse(
     is.na(sigma_between) | sigma_between <= 0, sigma, sigma_between
   )]

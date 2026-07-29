@@ -238,3 +238,69 @@ fit_indoor_effect <- function(results, min_n = 2000L) {
   }, by = family]
   out[]
 }
+
+
+#' Measure how far championship spread departs from pooled spread
+#'
+#' `sigma_within` is fitted across an athlete's whole history, but a forecast
+#' targets a top-tier final. Those are not the same distribution. A championship
+#' throw final holds implement, circle and officiating far more constant than the
+#' corpus average, so the pooled spread is too wide for it; road running inverts,
+#' because a championship marathon is tactical while most corpus road races are
+#' paced time-trials.
+#'
+#' The ratio is the correction, measured rather than assumed. Against the
+#' standardised backtest error it lines up closely — throw 0.681 against a
+#' measured `sd(z)` of 0.698, road 1.141 against 1.142, correlation 0.80 across
+#' eight families.
+#'
+#' Fitted per family rather than per event: an event-level ratio is a variance
+#' ratio on a few thousand marks, and variance estimates are far noisier than
+#' means at the same sample size.
+#'
+#' @param results Canonical results with `perf`, `athlete_id`, `event_id`,
+#'   `tier` and `round`.
+#' @param min_history Minimum marks an athlete-event needs to contribute; below
+#'   this the within-athlete spread is mostly estimation noise.
+#' @param min_n Minimum championship marks for a family to be estimated. Families
+#'   below it get a ratio of 1, leaving `sigma` untouched.
+#' @return A `data.table` of `family`, `ratio`, `sigma_pooled`, `sigma_champ`
+#'   and the `n` behind each.
+#' @seealso [estimate_ability()], which applies this to the sigma it returns.
+#' @export
+fit_sigma_context <- function(results, min_history = 4L, min_n = 500L) {
+  dt <- data.table::as.data.table(results)
+  empty <- data.table::data.table(family = character(), ratio = numeric(),
+                                  sigma_pooled = numeric(), sigma_champ = numeric(),
+                                  n_pooled = integer(), n_champ = integer())
+  need <- c("perf", "athlete_id", "event_id")
+  if (!all(need %in% names(dt))) return(empty)
+  dt <- dt[!is.na(perf) & !is.na(event_id)]
+  if (!nrow(dt)) return(empty)
+
+  dt[, athlete_id := as.character(athlete_id)]
+  reg <- .citius_event_registry[, c("event_id", "family")]
+  dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
+  dt <- dt[!is.na(family)]
+  if (!nrow(dt)) return(empty)
+
+  dt[, rc := .round_class(if ("round" %in% names(dt)) round else NA_character_)]
+  dt[, tc := .tier_class(if ("tier" %in% names(dt)) tier else NA_character_)]
+
+  # Centre within athlete-event so what remains is performance spread, not
+  # ability differences. Athletes with a short record are excluded because their
+  # sample SD carries almost no information about their true spread.
+  dt[, nn := .N, by = .(athlete_id, event_id)]
+  d <- dt[nn >= min_history]
+  if (!nrow(d)) return(empty)
+  d[, r := perf - mean(perf), by = .(athlete_id, event_id)]
+
+  pooled <- d[, .(sigma_pooled = stats::sd(r), n_pooled = .N), by = family]
+  champ <- d[tc == "top" & rc == "final",
+             .(sigma_champ = stats::sd(r), n_champ = .N), by = family]
+  out <- merge(pooled, champ, by = "family", all.x = TRUE)
+  out[, ratio := sigma_champ / sigma_pooled]
+  out[!is.finite(ratio) | is.na(n_champ) | n_champ < min_n | sigma_pooled <= 0,
+      ratio := 1]
+  out[]
+}
