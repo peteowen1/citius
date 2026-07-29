@@ -84,3 +84,73 @@ test_that("unknown levels pass through untouched", {
 test_that("a missing covariate returns empty rather than erroring", {
   expect_equal(nrow(fit_context_effect(plant_context(), "nonexistent")), 0)
 })
+
+# Season phase. Validated out of sample before adoption (0.66% relative RMSE on
+# 2020+ top-tier finals from pre-2020 offsets) -- the check that per-family tier
+# offsets failed and venue effects nearly failed.
+
+test_that("a planted seasonal curve is recovered within athlete", {
+  set.seed(9)
+  # Every athlete peaks in July and is 2% down in January, on top of a large
+  # ability spread that a cross-sectional fit would absorb.
+  rows <- data.table::rbindlist(lapply(1:200, function(i) {
+    ab <- stats::rnorm(1, 2.3, 0.05)
+    m <- rep(3:11, 2)
+    data.table::data.table(
+      athlete_id = as.character(i), event_id = "AT-100Metres-M",
+      tier = "OW", round = "F", indoor = FALSE, venue_country = "GBR",
+      date = as.Date(sprintf("2021-%02d-15", m)),
+      perf = ab - 0.02 * ((m - 7) / 4)^2 + stats::rnorm(length(m), 0, 0.003))
+  }))
+  s <- fit_season_effect(rows, min_n = 50L)
+  sp <- s[family == "sprint" & hemi == "N"]
+  expect_gt(nrow(sp), 4)
+  expect_equal(sp$month[which.max(sp$offset)], 7L)
+  # March and November sit either side of the peak and must both be below it.
+  expect_lt(sp$offset[sp$month == 3L], max(sp$offset))
+  expect_lt(sp$offset[sp$month == 11L], max(sp$offset))
+})
+
+test_that("northern winter outdoor marks are excluded, not fitted as form", {
+  # Jan/Feb northern competition is 95-98% indoor and the outdoor remnant is the
+  # European winter throwing circuit -- cold, not early-season form. Planting a
+  # large January outdoor penalty must NOT produce a January offset.
+  set.seed(10)
+  base <- data.table::rbindlist(lapply(1:150, function(i) {
+    data.table::data.table(
+      athlete_id = as.character(i), event_id = "AT-100Metres-M", tier = "OW",
+      round = "F", indoor = FALSE, venue_country = "GBR",
+      date = as.Date(sprintf("2021-%02d-15", 5:10)),
+      perf = 2.3 + stats::rnorm(6, 0, 0.003))
+  }))
+  winter <- data.table::copy(base)[, `:=`(date = as.Date("2021-01-15"),
+                                          perf = perf - 0.05)]
+  s <- fit_season_effect(rbind(base, winter), min_n = 50L)
+  expect_false(1L %in% s[family == "sprint" & hemi == "N"]$month)
+})
+
+test_that("offsets are centred so they shift phase, not level", {
+  set.seed(11)
+  rows <- data.table::rbindlist(lapply(1:200, function(i) {
+    data.table::data.table(
+      athlete_id = as.character(i), event_id = "AT-100Metres-M", tier = "OW",
+      round = "F", indoor = FALSE, venue_country = "GBR",
+      date = as.Date(sprintf("2021-%02d-15", 4:10)),
+      perf = 2.3 + stats::rnorm(7, 0, 0.01))
+  }))
+  s <- fit_season_effect(rows, min_n = 50L)
+  expect_equal(stats::weighted.mean(s$offset, s$n), 0, tolerance = 1e-9)
+})
+
+test_that("missing venue_country degrades to a single calendar", {
+  set.seed(12)
+  rows <- data.table::rbindlist(lapply(1:150, function(i) {
+    data.table::data.table(
+      athlete_id = as.character(i), event_id = "AT-100Metres-M", tier = "OW",
+      round = "F", indoor = FALSE,
+      date = as.Date(sprintf("2021-%02d-15", 4:10)),
+      perf = 2.3 + stats::rnorm(7, 0, 0.01))
+  }))
+  s <- fit_season_effect(rows, min_n = 50L)
+  expect_true(all(s$hemi == "N"))
+})
