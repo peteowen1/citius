@@ -257,16 +257,27 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L) {
 
   # Residual variance per event, with a degrees-of-freedom correction for the
   # athlete and race effects that were fitted out.
-  ev_stats <- d[, {
+  # `sigma_within` is the spread that remains once the race effect is removed.
+  # Rows in races that never received a fitted effect — singletons, and anything
+  # under `min_race_size` — have had NOTHING removed, so their residual still
+  # carries the full shared shock. Pooling them inflates the estimate by exactly
+  # the quantity `condition_sd` is separately trying to measure, and the two then
+  # disagree. It also made raising `min_race_size` look useless: on the athletics
+  # corpus condition_sd fell 69% -> 10% while sigma_within rose 15% -> 25%, which
+  # is the same variance moving house rather than any bias being removed.
+  ev_stats <- d[shared == TRUE, {
     n <- .N
     # One fitted ability per athlete-event, not per athlete.
     n_a <- data.table::uniqueN(athlete_id)
-    # Only races that actually received a fitted effect cost a degree of freedom.
-    n_r <- data.table::uniqueN(race_key[shared])
+    n_r <- data.table::uniqueN(race_key)
     df <- max(n - n_a - n_r + 1L, 1L)
     .(sigma_within = sqrt(sum(resid^2) / df),
-      n_results = n, n_athletes = n_a, n_races = n_r)
+      n_shared = n, n_athletes = n_a, n_races = n_r)
   }, by = event_id]
+  # Total rows are still reported, so the share the estimate rests on is visible.
+  ev_stats <- merge(ev_stats, d[, .(n_results = .N), by = event_id],
+                    by = "event_id", all = TRUE)
+  ev_stats[is.na(n_shared), `:=`(n_shared = 0L, n_races = 0L)]
 
   # Shared-shock sd, de-biased for the sampling noise in each fitted race effect.
   race_stats <- merge(dec$race, ev_stats[, .(event_id, sigma_within)],
@@ -343,7 +354,12 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L) {
     form_sd = NULL,
     race = dec$race,
     min_races = min_races,
-    converged = dec$converged
+    min_race_size = min_race_size,
+    converged = dec$converged,
+    # Carried, not just warned about. The non-convergence warning is rate-limited
+    # to once per session, so comparing three settings in one run showed the
+    # delta from the FIRST only -- which is precisely when the number is needed.
+    delta = dec$delta, sweeps = dec$sweeps
   ), class = "citius_calibration")
 }
 

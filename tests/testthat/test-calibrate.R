@@ -103,6 +103,27 @@ test_that("min_race_size excludes pair races whose 'shock' is mostly their own n
   expect_equal(nrow(dec$data), nrow(mixed))
 })
 
+test_that("sigma_within excludes rows whose race effect was never fitted", {
+  # A row in an unshared race has had NOTHING removed, so its residual still
+  # carries the full shared shock. Pooling those rows inflates sigma_within by
+  # exactly the quantity condition_sd is separately trying to measure.
+  #
+  # Plant a LARGE shock and a small noise, then bury the races among singletons.
+  # If singletons are pooled, sigma_within reads closer to the shock than to the
+  # noise that actually generated it.
+  sim <- simulate_races(n_races = 300, n_per = 6, n_athletes = 40,
+                        condition_sd = 0.05, sigma_e = 0.008, seed = 21)
+  singles <- sim$data[, .SD[1], by = race_key][1:250]
+  singles[, race_key := paste0("solo_", race_key)]
+  mixed <- rbind(sim$data, singles)
+
+  cal <- calibrate(mixed, min_races = 5L)
+  # The truth is sigma_e = 0.008. The shock is 0.05 -- six times larger -- so a
+  # contaminated estimate is unmistakable.
+  expect_lt(cal$events$sigma_within[1], 0.012)
+  expect_gt(cal$events$sigma_within[1], 0.005)
+})
+
 test_that("condition sensitivity is recovered when it genuinely varies", {
   n_ath <- 30
   planted <- c(rep(1.8, 10), rep(1.0, 10), rep(0.2, 10))
