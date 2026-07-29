@@ -159,3 +159,36 @@ test_that("fit_aging_curve tolerates data that already has a family column", {
   expect_s3_class(ag, "citius_aging")
   expect_lt(abs(ag$peaks[family == "sprint"]$peak_age - 26), 1.5)
 })
+
+test_that("first differences recover an aging curve that centring flattens", {
+  # Centring within athlete-event is fixed effects on an UNBALANCED panel: the
+  # deviation at a given age depends on how much of the career was observed, so
+  # the tails -- where the span mix is most skewed -- get flattened. Plant a
+  # known curve on a deliberately unbalanced panel and check both estimators.
+  set.seed(11)
+  true_eff <- function(a) -0.004 * (a - 26)^2 / 4
+  rows <- data.table::rbindlist(lapply(1:900, function(i) {
+    start <- sample(16:32, 1); span <- sample(2:12, 1)
+    ages <- start:min(start + span, 38)
+    data.table::data.table(
+      athlete_id = as.character(i), event_id = "AT-100Metres-M",
+      age = ages, date = as.Date("2000-01-01") + (ages - 16) * 365,
+      perf = to_perf(10.2, -1L) + stats::rnorm(1, 0, 0.02) + true_eff(ages) +
+        stats::rnorm(length(ages), 0, 0.008))
+  }))
+  truth16 <- true_eff(16) - true_eff(26)
+
+  at <- function(f, a) {
+    cv <- data.table::as.data.table(f$curves)
+    cv[which.min(abs(age - a))]$effect
+  }
+  cen <- fit_aging_curve(rows, min_results = 50L, method = "centred")
+  dif <- fit_aging_curve(rows, min_results = 50L, method = "difference")
+
+  # Differencing must recover more of the planted tail than centring does.
+  expect_gt(abs(at(dif, 16)), abs(at(cen, 16)))
+  # And it must land near the true peak, which centring misses.
+  expect_lt(abs(dif$peaks$peak_age[1] - 26), 1.5)
+  # Sanity: it should not overshoot the planted effect wildly.
+  expect_lt(abs(at(dif, 16)), abs(truth16) * 1.5)
+})

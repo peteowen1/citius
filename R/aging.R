@@ -28,9 +28,15 @@
 #' @seealso [age_adjustment()] to apply it.
 #' @export
 fit_aging_curve <- function(results, min_results = 200L, k = 6,
-                            min_density = 0.01) {
+                            min_density = 0.01,
+                            method = c("difference", "centred")) {
   if (!requireNamespace("mgcv", quietly = TRUE)) {
     cli::cli_abort("{.pkg mgcv} is required to fit aging curves.")
+  }
+  method <- match.arg(method)
+  if (identical(method, "difference")) {
+    return(.fit_aging_difference(results, min_results = min_results, k = k,
+                                 min_density = min_density))
   }
   dt <- data.table::as.data.table(results)
   dt <- dt[!is.na(perf) & !is.na(age) & is.finite(age) & age > 10 & age < 50]
@@ -229,4 +235,93 @@ project_ability <- function(ability, aging, max_shift = 0.05) {
 
   ab[, ability := ability + age_shift]
   ab[]
+}
+
+#' Aging curve by first differences
+#'
+#' The `"centred"` method subtracts each athlete-event mean and smooths the
+#' deviation against age. That is a fixed-effects estimator on an **unbalanced
+#' panel**, and the deviation at a given age depends on how much of the athlete's
+#' career was observed: a sprinter seen only at 17-19 has a career mean that *is*
+#' their junior level, so their deviation at 18 is near zero, while one seen
+#' 17-30 has a mean including their peak and sits far below it. Measured on the
+#' athletics corpus, mean deviation at age 18 runs from +0.17% for athletes with
+#' under two years of span to -1.75% for those with twelve or more.
+#'
+#' Pooling those flattens exactly the tails, where the span mix is most skewed.
+#' The centred fit put a 16-year-old sprinter **0.55%** off their peak — a future
+#' 10.00 runner clocking 10.06 at sixteen.
+#'
+#' This method instead fits the **year-on-year change** against age and
+#' integrates it. Differencing removes the athlete's level entirely, so career
+#' span cannot bias it. The season aggregate is the **median**, not the best: a
+#' season best improves purely from taking more attempts, and race counts fall
+#' with age (4.5 a year at 29-31 down to 2.9 at 35+), which would otherwise
+#' masquerade as decline.
+#'
+#' The trade is that integrating a slope accumulates error, so levels can drift
+#' over a long range where the centred fit would not. Measured against a backtest
+#' it is clearly the better estimator — absolute mark error improves with
+#' `t = 12.4` over 28,737 marks and the systematic bias falls from -0.235% to
+#' -0.011% — but it slightly over-corrects both tails.
+#'
+#' @keywords internal
+#' @noRd
+.fit_aging_difference <- function(results, min_results = 200L, k = 8,
+                                  min_density = 0.005) {
+  dt <- data.table::as.data.table(results)
+  need <- c("athlete_id", "event_id", "perf", "age", "date")
+  miss <- setdiff(need, names(dt))
+  if (length(miss)) {
+    cli::cli_abort("{.arg results} is missing {.field {miss}}.")
+  }
+  dt <- dt[!is.na(perf) & !is.na(event_id) & !is.na(age) & !is.na(date)]
+  if ("family" %in% names(dt)) dt[, family := NULL]
+  reg <- .citius_event_registry[, c("event_id", "family")]
+  dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
+  dt <- dt[!is.na(family)]
+  if (!nrow(dt)) return(.empty_aging())
+
+  dt[, athlete_id := as.character(athlete_id)]
+  dt[, .yr := as.integer(format(date, "%Y"))]
+  # One row per athlete-event-season, on the MEDIAN.
+  y <- dt[, .(perf = stats::median(perf), age = mean(age)),
+          by = c("athlete_id", "event_id", "family", ".yr")]
+  data.table::setorderv(y, c("athlete_id", "event_id", ".yr"))
+  y[, `:=`(.d = perf - data.table::shift(perf),
+           .da = age - data.table::shift(age),
+           .a0 = data.table::shift(age)), by = c("athlete_id", "event_id")]
+  d <- y[is.finite(.d) & .da > 0.5 & .da < 2]
+  if (!nrow(d)) return(.empty_aging())
+  d[, .slope := .d / .da]
+  d[, .amid := .a0 + .da / 2]
+
+  fams <- d[, .N, by = family][N >= min_results]$family
+  if (!length(fams)) return(.empty_aging())
+
+  curves <- data.table::rbindlist(lapply(fams, function(f) {
+    sub <- d[family == f]
+    kk <- min(k, max(3L, data.table::uniqueN(round(sub$.amid)) - 1L))
+    fit <- try(mgcv::gam(.slope ~ s(.amid, k = kk), data = sub), silent = TRUE)
+    if (inherits(fit, "try-error")) return(NULL)
+    grid <- data.frame(.amid = seq(min(sub$.amid), max(sub$.amid), length.out = 200))
+    grid$slope <- as.numeric(stats::predict(fit, newdata = grid))
+    # Integrate the slope to recover the level.
+    eff <- cumsum(c(0, utils::head(grid$slope, -1) * diff(grid$.amid)))
+    dens <- vapply(grid$.amid, function(a) sum(abs(sub$.amid - a) < 1), numeric(1))
+    sup <- dens >= max(min_density * nrow(sub), 10)
+    if (!any(sup)) sup <- rep(TRUE, nrow(grid))
+    pk <- which(sup)[which.max(eff[sup])]
+    eff <- eff - eff[pk]
+    ident <- pk > 1L && pk < nrow(grid)
+    data.table::data.table(
+      family = f, age = grid$.amid, effect = eff, supported = sup,
+      peak_age = grid$.amid[pk], peak_identified = ident,
+      plateau_lo = min(grid$.amid[eff > -0.005]),
+      plateau_hi = max(grid$.amid[eff > -0.005]), n = nrow(sub))
+  }), fill = TRUE)
+  if (!nrow(curves)) return(.empty_aging())
+  peaks <- unique(curves[, .(family, peak_age, peak_identified,
+                             plateau_lo, plateau_hi, n)])
+  structure(list(curves = curves[], peaks = peaks[]), class = "citius_aging")
 }

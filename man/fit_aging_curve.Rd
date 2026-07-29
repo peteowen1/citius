@@ -4,7 +4,13 @@
 \alias{fit_aging_curve}
 \title{Estimate how performance varies with age}
 \usage{
-fit_aging_curve(results, min_results = 200L, k = 6, min_density = 0.01)
+fit_aging_curve(
+  results,
+  min_results = 200L,
+  k = 6,
+  min_density = 0.01,
+  method = c("difference", "centred")
+)
 }
 \arguments{
 \item{results}{Canonical results with an \code{age} column.}
