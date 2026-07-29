@@ -381,6 +381,10 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L) {
     # final, and those are different distributions -- narrower for field events,
     # wider for road. estimate_ability() applies this to the sigma it returns.
     sigma_context = tryCatch(fit_sigma_context(results), error = function(e) NULL),
+    # How a global championship final differs from another top-tier final. Round
+    # and tier offsets reference "final" and "top", so this distinction is
+    # otherwise inexpressible -- and it is not zero.
+    championship = tryCatch(fit_championship_effect(results), error = function(e) NULL),
     min_races = min_races,
     min_race_size = min_race_size,
     converged = dec$converged,

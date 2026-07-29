@@ -154,3 +154,94 @@ test_that("missing venue_country degrades to a single calendar", {
   s <- fit_season_effect(rows, min_n = 50L)
   expect_true(all(s$hemi == "N"))
 })
+
+# Championship effect. Round and tier offsets reference "final" and "top", so a
+# top-tier final gets a zero adjustment BY CONSTRUCTION and "global championship
+# vs Diamond League final" is currently inexpressible. It is not zero, and the
+# sign flips by family.
+
+champ_history <- function(n = 200, gap = 0.02, seed = 5) {
+  set.seed(seed)
+  data.table::rbindlist(lapply(seq_len(n), function(i) {
+    ab <- stats::rnorm(1, 2.3, 0.05)
+    data.table::rbindlist(list(
+      data.table::data.table(athlete_id = as.character(i), event_id = "AT-100Metres-M",
+                             tier = "GL", round = "F", date = Sys.Date() - 1:6,
+                             perf = ab + stats::rnorm(6, 0, 0.003)),
+      data.table::data.table(athlete_id = as.character(i), event_id = "AT-100Metres-M",
+                             tier = "OW", round = "F", date = Sys.Date() - 7:12,
+                             perf = ab + gap + stats::rnorm(6, 0, 0.003))))
+  }))
+}
+
+test_that("a planted championship gap is recovered", {
+  ce <- fit_championship_effect(champ_history(gap = 0.02), min_n = 50L)
+  expect_equal(nrow(ce[family == "sprint"]), 1L)
+  expect_equal(ce[family == "sprint"]$offset, 0.02, tolerance = 0.004)
+})
+
+test_that("a negative gap is recovered too, since the sign flips by family", {
+  ce <- fit_championship_effect(champ_history(gap = -0.015), min_n = 50L)
+  expect_lt(ce[family == "sprint"]$offset, 0)
+})
+
+test_that("round and tier are held constant, so heats cannot leak in", {
+  # A first version compared championships against ALL other marks and absorbed
+  # the round effect, producing offsets like throw +5.33%. Adding slow heats must
+  # not move the estimate.
+  h <- champ_history(gap = 0.02)
+  heats <- data.table::copy(h[tier == "GL"])[, `:=`(round = "H", perf = perf - 0.05)]
+  with_heats <- fit_championship_effect(rbind(h, heats), min_n = 50L)
+  expect_equal(with_heats[family == "sprint"]$offset,
+               fit_championship_effect(h, min_n = 50L)[family == "sprint"]$offset,
+               tolerance = 1e-9)
+})
+
+test_that("only athletes seen in both contexts identify the gap", {
+  # Championship-only athletes contribute their ability, not a comparison, so
+  # adding a very fast one must not inflate the offset.
+  h <- champ_history(gap = 0.02)
+  ringer <- data.table::data.table(
+    athlete_id = "zz", event_id = "AT-100Metres-M", tier = "OW", round = "F",
+    date = Sys.Date() - 1:6, perf = 2.9)
+  expect_equal(fit_championship_effect(rbind(h, ringer), min_n = 50L)$offset,
+               fit_championship_effect(h, min_n = 50L)$offset, tolerance = 1e-9)
+})
+
+test_that("the round trip is an identity for an all-championship record", {
+  # estimate_ability() removes the offset from championship history and
+  # project_championship() adds it back. An athlete whose record is entirely
+  # championships must land exactly where they started.
+  ce <- data.table::data.table(family = "sprint", offset = 0.02, n = 999L)
+  only_champ <- data.table::data.table(
+    athlete_id = rep(c("a", "b"), each = 6), event_id = "AT-100Metres-M",
+    tier = "OW", round = "F", date = Sys.Date() - rep(1:6, 2),
+    perf = to_perf(10, -1L) + stats::rnorm(12, 0, 0.002))
+  plain <- estimate_ability(only_champ, as_of = Sys.Date(), adjust_context = FALSE)
+  round_trip <- project_championship(
+    estimate_ability(only_champ, as_of = Sys.Date(), adjust_context = TRUE,
+                     calibration = list(championship = ce)),
+    list(championship = ce))
+  m <- merge(plain[, .(athlete_id, a0 = ability)],
+             round_trip[, .(athlete_id, a1 = ability)], by = "athlete_id")
+  expect_equal(m$a1, m$a0, tolerance = 1e-8)
+})
+
+test_that("an athlete with no championship record is moved by the full offset", {
+  ce <- data.table::data.table(family = "sprint", offset = 0.02, n = 999L)
+  no_champ <- data.table::data.table(
+    athlete_id = rep(c("a", "b"), each = 6), event_id = "AT-100Metres-M",
+    tier = "GL", round = "F", date = Sys.Date() - rep(1:6, 2),
+    perf = to_perf(10, -1L) + stats::rnorm(12, 0, 0.002))
+  base <- estimate_ability(no_champ, as_of = Sys.Date(), adjust_context = TRUE,
+                           calibration = list(championship = ce))
+  moved <- project_championship(base, list(championship = ce))
+  expect_equal(moved$ability - base$ability, rep(0.02, nrow(base)), tolerance = 1e-9)
+})
+
+test_that("no championship table is a no-op, not an error", {
+  ab <- data.table::data.table(athlete_id = "a", event_id = "AT-100Metres-M",
+                               ability = 2.3)
+  expect_equal(project_championship(ab, NULL)$ability, 2.3)
+  expect_equal(project_championship(ab, list(championship = NULL))$ability, 2.3)
+})

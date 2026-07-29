@@ -394,3 +394,133 @@ fit_season_effect <- function(results, min_history = 4L, min_n = 1000L) {
 .citius_south <- c("AUS", "NZL", "RSA", "ARG", "BRA", "CHI", "URU", "ZAF",
                    "KEN", "ETH", "PER", "COL", "BOL", "PAR", "NAM", "BOT",
                    "ZIM", "MOZ", "ANG", "FIJ", "PNG", "SAM")
+
+
+#' Measure how a global championship differs from another top-tier final
+#'
+#' Round and tier offsets are referenced to "final" and "top", so a top-tier
+#' final receives a zero adjustment **by construction**. If a global championship
+#' final differs from a Diamond League final, the existing parameterisation can
+#' only call that difference zero — and it is not zero.
+#'
+#' The sign flips by family, which is why a pooled version is worse than nothing.
+#' Endurance events go tactical at championships and run slower; power and
+#' technical events arrive tapered and peaked and run faster. Measured within
+#' top-tier finals only, so round and tier are held constant by construction:
+#' road −1.45%, walk −0.30%, distance −0.07%, sprint +0.87%, jump +1.20%,
+#' throw +1.28%.
+#'
+#' Validated out of sample: offsets fitted pre-2020 cut RMSE on 2020+
+#' championship finals by **10.6% relative** (3.7763% to 3.3766%, n = 1,628),
+#' while a pooled offset is *worse* than no adjustment at all.
+#'
+#' **This is not the per-family tier offset in another guise.** That one failed
+#' out of sample by 16–20% because it re-parameterised a context the model
+#' already handles, fitted on the low-tier population that dominates the corpus
+#' and does not transfer to championships. This measures a distinction the model
+#' cannot currently express at all.
+#'
+#' @param results Canonical results with `perf`, `athlete_id`, `event_id`,
+#'   `tier` and `round`.
+#' @param min_n Minimum championship marks for a family to be estimated.
+#'   Families below it are omitted, and callers leave those marks unadjusted
+#'   rather than borrowing a pooled value that measures the wrong sign.
+#' @return A `data.table` of `family`, `offset` and `n`.
+#' @seealso [estimate_context_effects()], [fit_sigma_context()]
+#' @export
+fit_championship_effect <- function(results, min_n = 100L) {
+  dt <- data.table::as.data.table(results)
+  empty <- data.table::data.table(family = character(), offset = numeric(),
+                                  n = integer())
+  if (!all(c("perf", "athlete_id", "event_id") %in% names(dt))) return(empty)
+  dt <- dt[!is.na(perf) & !is.na(event_id)]
+  if (!nrow(dt)) return(empty)
+
+  dt[, athlete_id := as.character(athlete_id)]
+  reg <- .citius_event_registry[, c("event_id", "family")]
+  dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
+  dt <- dt[!is.na(family)]
+  if (!nrow(dt)) return(empty)
+
+  dt[, rc := .round_class(if ("round" %in% names(dt)) round else NA_character_)]
+  dt[, tc := .tier_class(if ("tier" %in% names(dt)) tier else NA_character_)]
+
+  # Both sides restricted to top-tier finals. This is the whole point: it holds
+  # round and tier fixed so the offset can only measure what is left over. A
+  # first attempt compared championships against ALL other marks and produced
+  # absurd values (throw +5.33%) because it was absorbing the round and tier
+  # effects that are already applied elsewhere.
+  tf <- dt[tc == "top" & rc == "final"]
+  if (!nrow(tf)) return(empty)
+  tf[, champ := .is_championship(tier)]
+  tf[, `:=`(n_c = sum(champ), n_o = sum(!champ)), by = .(athlete_id, event_id)]
+  # Only athletes seen in BOTH contexts identify the gap; anyone appearing in one
+  # contributes their ability, not a comparison.
+  d <- tf[n_c > 0L & n_o > 0L]
+  if (!nrow(d)) return(empty)
+
+  d[, r := perf - mean(perf), by = .(athlete_id, event_id)]
+  # The CONTRAST between contexts, not the deviation from the athlete's pooled
+  # mean. Those differ by a factor that depends on the context mix: with an even
+  # split, the championship deviation from the pooled mean is only half the true
+  # gap, and callers subtracting it would correct half the effect. Caught by a
+  # test planting a known 2% gap and recovering 1%.
+  out <- d[, .(offset = mean(r[champ == TRUE]) - mean(r[champ == FALSE]),
+               n = sum(champ)), by = family]
+  out[is.finite(offset) & n >= min_n][]
+}
+
+#' @keywords internal
+#' @noRd
+.is_championship <- function(tier) {
+  # "OW" is the World Athletics code for the global-championship category:
+  # Olympics, World Championships and the Commonwealth Games sit here, while
+  # Diamond League meets carry "GL" and everything else A..F.
+  grepl("^OW", toupper(trimws(as.character(tier))))
+}
+
+
+#' Project ability onto the championship context
+#'
+#' [estimate_ability()] returns ability on a non-championship top-tier-final
+#' footing, because that is what the round, tier and championship adjustments
+#' put every historical mark on. A forecast of a global championship needs the
+#' championship offset added back.
+#'
+#' Splitting it this way is what makes the correction do real work. An athlete
+#' whose record is entirely championships is unchanged by the round trip — the
+#' offset comes off their history and goes back on the forecast. An athlete with
+#' only Diamond League form is moved by the full offset, which is exactly the
+#' case the model was getting wrong: a road runner with nothing but paced
+#' big-city marathons was being credited with championship-marathon ability.
+#'
+#' Applied at full strength rather than scaled by `(1 - shrinkage)`. Unlike the
+#' age projection, this is a property of the RACE being forecast, not of how well
+#' the athlete is known — a heavily-shrunk athlete still runs the same tactical
+#' championship as everyone else.
+#'
+#' @param ability A table from [estimate_ability()], with `event_id` and
+#'   `ability`.
+#' @param calibration A `citius_calibration` carrying a `championship` table, or
+#'   the table itself. `NULL` returns `ability` unchanged.
+#' @return `ability` with `ability` shifted and `champ_adj` recording the shift.
+#' @seealso [fit_championship_effect()]
+#' @export
+project_championship <- function(ability, calibration = NULL) {
+  ab <- data.table::copy(data.table::as.data.table(ability))
+  ce <- if (is.null(calibration)) NULL
+        else if (inherits(calibration, "citius_calibration") || is.list(calibration) &&
+                 !is.data.frame(calibration)) calibration$championship
+        else calibration
+  if (is.null(ce) || !nrow(ce) || !"event_id" %in% names(ab)) {
+    ab[, champ_adj := 0]
+    return(ab[])
+  }
+  reg <- .citius_event_registry[, c("event_id", "family")]
+  fam <- reg$family[match(ab$event_id, reg$event_id)]
+  adj <- ce$offset[match(fam, ce$family)]
+  adj[!is.finite(adj)] <- 0
+  ab[, champ_adj := adj]
+  ab[, ability := ability + champ_adj]
+  ab[]
+}

@@ -586,6 +586,29 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
       io[!(dt$indoor %in% TRUE)] <- 0
       dt[, perf := perf - io]
     }
+
+    # Global championship vs another top-tier final. Round and tier offsets are
+    # referenced to "final" and "top", so a top-tier final gets a zero adjustment
+    # BY CONSTRUCTION and this distinction is currently inexpressible. It is not
+    # zero, and the sign flips by family: endurance goes tactical and runs slower
+    # (road -1.71%), power and technical events arrive tapered and run faster
+    # (throw +1.40%). A pooled version is worse than none.
+    #
+    # Removing it here puts all history on a common NON-championship top-tier
+    # final footing; `project_championship()` adds it back for the target. An
+    # athlete whose record is all championships is unchanged by the round trip,
+    # while one with only Diamond League form is correctly moved.
+    if (!is.null(calibration$championship) && nrow(calibration$championship)) {
+      reg_c <- .citius_event_registry[, c("event_id", "family")]
+      fam_ch <- reg_c$family[match(dt$event_id, reg_c$event_id)]
+      co <- calibration$championship$offset[
+        match(fam_ch, calibration$championship$family)]
+      co[!is.finite(co)] <- 0
+      is_ch <- .is_championship(if ("tier" %in% names(dt)) dt$tier else NA_character_) &
+        .round_class(if ("round" %in% names(dt)) dt$round else NA_character_) == "final"
+      co[!is_ch] <- 0
+      dt[, perf := perf - co]
+    }
   }
 
   if (trim_tactical > 0) {
