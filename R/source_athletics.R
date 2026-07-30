@@ -292,7 +292,15 @@ athletics_competition_results <- function(competition_id, days = 1:12) {
                         sep = "|")
 
       data.table::rbindlist(lapply(results, function(x) {
-        ath <- (x$athletes %||% list())[[1]] %||% list()
+        # NOT `(x$athletes %||% list())[[1]]`: on an empty list that indexes
+        # out of bounds and throws BEFORE %||% can substitute, and the error
+        # kills the parse for the whole competition. Every result row needs an
+        # athletes array; a few do not have one, and until 2026-07-31 that cost
+        # us the Commonwealth Games (2018 and 2022), the 2022 and 2023 World
+        # Championships and the 2025 World Indoors -- all present in the feed,
+        # all failing here, the failure swallowed as a per-competition warning
+        # by athletics_harvest_competitions() so the sweep carried on.
+        ath <- if (length(x$athletes)) x$athletes[[1]] else list()
         loc <- x$location %||% list()
         data.table::data.table(
           athlete_id   = as.character(ath$id %||% NA),
@@ -391,7 +399,9 @@ athletics_competition_results <- function(competition_id, days = 1:12) {
   rn <- suppressWarnings(as.integer(rc$raceNumber %||% NA))
   if (isTRUE(use_number) && !is.na(rn) && rn > 0L) return(as.character(rn))
   ids <- vapply(rc$results %||% list(), function(x) {
-    a <- (x$athletes %||% list())[[1]] %||% list()
+    # Same unguarded index as the one fixed at the competition parser above:
+    # `list()[[1]]` throws rather than returning NULL.
+    a <- if (length(x$athletes)) x$athletes[[1]] else list()
     as.character(a$id %||% NA)
   }, character(1))
   ids <- ids[!is.na(ids) & ids != "NA"]
