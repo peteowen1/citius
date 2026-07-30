@@ -270,9 +270,20 @@ app obtains at runtime (interceptor sets `Authorization`, `If-None-Match:
 microplus`, `Cache-Control: Public` — replicating those headers is not enough).
 
 Do not build the pipeline on it, and **do not extract the token**. For athletics,
-World Athletics ingests Commonwealth results after the fact — Birmingham 2022
-(`7147633`) is fully present — so `competition_results(7187518)` will work once
-the feed populates. `citiusdata/scripts/watch_glasgow2026.R` polls for that.
+World Athletics ingests Commonwealth results after the fact — Birmingham 2022 is
+`7147633` — so `competition_results(7187518)` will work once the feed populates.
+`citiusdata/scripts/watch_glasgow2026.R` polls for that.
+
+**This entry said Birmingham was "fully present" until 2026-07-31, and it was
+not.** It was present in the FEED and absent from our harvest, because the parse
+threw on an unguarded `[[1]]` and `athletics_harvest_competitions()` swallows
+per-competition failures as warnings. Availability was recorded as coverage, and
+the error nobody read was the only thing that would have said otherwise. Two
+World Championships and both Commonwealth Games were missing for months.
+
+**Check coverage, never infer it.** `citiusdata/scripts/harvest_missing_majors.R`
+diffs the harvest against the feed's own competition list; run it after every
+sweep.
 
 For **swimming there is no federation route** — World Aquatics does not sanction
 the Commonwealth Games — so the CRS is the only source. The app renders results
@@ -505,6 +516,31 @@ ability, so the fact that better athletes reach more finals is not absorbed into
 the "final effect"), and `estimate_ability(adjust_context = TRUE)` puts every
 performance on a final-equivalent, top-tier footing. Measured on real 100m data:
 heats run ~0.9% slower than finals, low-tier meets ~3.3% slower.
+
+**But `tier` itself is not trustworthy, so the tier half of that adjustment is
+currently noise with a confident number attached.** It is per-RESULT, not
+per-competition, and varies WITHIN a single meet: the 2025 Weltklasse Zürich
+carries A, DF, F and GW across its own results, classifying as high, mid, low
+and top simultaneously. 189 of 1,055 competitions hold more than one tier code.
+
+The direction of the damage is the worst possible one. Diamond League marks —
+the strongest fields in the sport, measured at 92.0 field strength against the
+Olympics' 86.1 — are routinely labelled tier F, "low", and then adjusted
+*upward* by 1.69% as though set at a slow meet. That lands on exactly the
+athletes the model exists to rank.
+
+Use `class` and `strength` from `citiusdata/data/competition_catalogue.parquet`
+instead. **Do not fit anything new on `tier`.**
+
+### The correction runs one way
+
+`estimate_ability()` SUBTRACTS the round and tier offsets, and nothing adds the
+tier back for the race being predicted — `simulate.R` has no tier logic at all.
+So every race is forecast as though it were a top-tier final. Championship races
+are the reference and come out unbiased; lower-tier races are predicted too fast
+by 0.4–1.5%. `project_tier()` is the counterpart to `project_championship()` and
+exists for this, opt-in and shrunk 0.5 because the raw offsets overshoot on the
+races actually scored.
 
 ## Data sources
 
