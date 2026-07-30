@@ -470,7 +470,8 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                              trim_tactical = 0.25, min_results = 1L,
                              adjust_context = TRUE, calibration = NULL,
                              robust_sigma = TRUE,
-                             sigma_parts = c("estimator", "weight")) {
+                             sigma_parts = c("estimator", "weight"),
+                             sigma_mode = c("athlete", "event")) {
   if (!nrow(results)) {
     return(data.table::data.table(
       athlete_id = character(), event_id = character(), ability = numeric(),
@@ -514,7 +515,29 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
            tier  = stats::setNames(calibration$tier$offset, calibration$tier$tier_class))
     } else estimate_context_effects(dt)
     rc <- .round_class(if ("round" %in% names(dt)) dt$round else NA_character_)
-    tc <- .tier_class(if ("tier" %in% names(dt)) dt$tier else NA_character_)
+    # Tier class, from the MEET where one is supplied, otherwise from the feed's
+    # per-result `tier` code.
+    #
+    # The feed code is not trustworthy: it varies WITHIN a single meet -- the
+    # 2025 Weltklasse Zurich carries A, DF, F and GW across its own results,
+    # classifying as high, mid, low and top at once -- and 189 of 1,341
+    # competitions hold more than one. The direction of the damage is the worst
+    # available: Diamond League marks, the strongest fields in the sport, are
+    # routinely labelled "low" and then adjusted UPWARD by 1.69% as though set
+    # at a slow meet. Those are precisely the athletes and races that make up
+    # the T1 population the model is judged on.
+    #
+    # Pass `meet_tier` on the results (join it from
+    # citiusdata/data/competition_catalogue.parquet) and it is used instead.
+    tc <- if ("meet_tier" %in% names(dt)) {
+      mt <- as.character(dt$meet_tier)
+      out <- c(T1_elite = "top", T2_strong = "mid", T3_development = "low")[mt]
+      # anything unclassified falls back to the feed code rather than to a guess
+      fb <- .tier_class(if ("tier" %in% names(dt)) dt$tier else NA_character_)
+      unname(data.table::fifelse(is.na(out), fb, out))
+    } else {
+      .tier_class(if ("tier" %in% names(dt)) dt$tier else NA_character_)
+    }
     r_adj <- ctx$round[rc]; r_adj[is.na(r_adj)] <- 0
     t_adj <- ctx$tier[tc];  t_adj[is.na(t_adj)] <- 0
     # Prefer the family's own offset where one was fitted; fall back to pooled.
@@ -715,6 +738,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # fix is available here, but wrong-on-its-face and better-in-the-backtest are
   # separate claims: that is precisely what `csens` demonstrated the same day.
   # `target` ships only once an arm has measured it.
+  sigma_mode <- match.arg(sigma_mode)
   parts <- if (isTRUE(robust_sigma)) {
     match.arg(sigma_parts, c("estimator", "weight", "target"), several.ok = TRUE)
   } else character()
@@ -790,6 +814,18 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     ratio <- sc$ratio[match(fam, sc$family)]
     ratio[!is.finite(ratio) | ratio <= 0] <- 1
     ab[, sigma := sigma * ratio]
+  }
+
+  # `sigma_mode = "event"` gives every athlete their event's measured spread.
+  #
+  # Not a modelling preference -- a test. Per-athlete sigma REORDERS the field
+  # at the simulation stage: in the men's 100m, rank correlation with recent
+  # form falls from 0.736 at the ability stage to 0.573 at p_gold, because the
+  # win probability rewards being unpredictable. Lyles is rated 2nd on ability
+  # and 4th on p_gold; Seville 3rd and 13th. Flattening sigma asks whether that
+  # reordering carries information or destroys it.
+  if (identical(sigma_mode, "event")) {
+    ab[, sigma := sigma_target]
   }
 
   ab[, sigma_between := data.table::fifelse(

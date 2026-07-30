@@ -162,7 +162,16 @@ athletics_athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) 
       sport         = "Athletics",
       discipline    = r$discipline %||% NA_character_,
       competition   = r$competition %||% NA_character_,
-      competition_id = as.integer(r$competitionId %||% NA_integer_),
+      # ZERO IS NOT A COMPETITION. The athlete endpoint returns competitionId 0
+      # for results it cannot attribute to a meet -- 2,517,388 rows, about half
+      # the corpus, across 52,253 athletes. Stored as 0 it looks like a real id:
+      # it joins to nothing silently, and any group-by treats every one of those
+      # 2.5M rows as the SAME competition, which is how a sentinel becomes a
+      # phantom meet with fifty thousand athletes in it.
+      competition_id = {
+        .cid <- suppressWarnings(as.integer(r$competitionId %||% NA_integer_))
+        if (!length(.cid) || is.na(.cid) || .cid <= 0L) NA_integer_ else .cid
+      },
       # performanceValue is milliseconds for track, centimetres for field
       value_raw     = as.numeric(r$performanceValue %||% NA_real_),
       mark_string   = r$mark %||% NA_character_,
