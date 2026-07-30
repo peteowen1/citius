@@ -515,7 +515,42 @@ fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, 
   s[, noise_var := data.table::fifelse(sxx > 0, sigma_e^2 / sxx, NA_real_)]
   prior_mu <- stats::weighted.mean(s$slope_adj, 1 / s$noise_var, na.rm = TRUE)
   if (!is.finite(prior_mu)) prior_mu <- 1
-  between <- max(stats::var(s$slope_adj, na.rm = TRUE) - mean(s$noise_var, na.rm = TRUE), 1e-6)
+
+  # Between-athlete variance by DerSimonian-Laird, NOT by subtracting the mean
+  # noise from the observed spread.
+  #
+  # The naive moment estimator `var(slope_adj) - mean(noise_var)` is unusable
+  # here because `noise_var` is sigma^2/sxx and `sxx` -- the sum of squared race
+  # effects an athlete was exposed to -- approaches zero for anyone seen in a
+  # couple of near-neutral races. Measured on the corpus 2026-07-31:
+  #
+  #   median(noise_var)   0.107
+  #   mean(noise_var)   147000        <- 1.4 million times the median
+  #   max(noise_var)      5.6e9
+  #
+  # so the subtrahend was set entirely by the least informative athletes in the
+  # sample, `between` came out at -138000, pinned to its floor, and every
+  # athlete shrank to the prior mean. The estimator was behaving correctly given
+  # a corrupted noise estimate; the fault was using an unweighted mean over a
+  # quantity with an unbounded tail.
+  #
+  # DL weights each athlete by their own precision, so an athlete with no
+  # exposure to varying conditions contributes almost nothing instead of
+  # dominating. It is the standard heterogeneity estimator for exactly this
+  # shape of problem and introduces no tuned constant. Cross-check: it recovers
+  # sd(between) = 0.286 on the corpus against the 0.235 measured on the 58k
+  # harvest by the naive estimator back when that estimator still worked.
+  ok <- is.finite(s$noise_var) & s$noise_var > 0 & is.finite(s$slope_adj)
+  between <- 1e-6
+  if (sum(ok) > 1L) {
+    w <- 1 / s$noise_var[ok]
+    th <- s$slope_adj[ok]
+    mu_w <- sum(w * th) / sum(w)
+    Q <- sum(w * (th - mu_w)^2)
+    denom <- sum(w) - sum(w^2) / sum(w)
+    tau2 <- if (denom > 0) (Q - (sum(ok) - 1L)) / denom else 0
+    between <- max(tau2, 1e-6)
+  }
 
   s[, sensitivity := (slope_adj / noise_var + prior_mu / between) /
       (1 / noise_var + 1 / between)]
@@ -536,20 +571,21 @@ fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, 
   # marks. That is the single mechanism by which race conditions can reorder a
   # field, and losing it looks exactly like the shock being unimportant.
   #
-  # Measured 2026-07-31: sd(sensitivity) == 0 on every current calibration while
-  # sd(sensitivity_raw) is 1.60, i.e. `between` is pinned to its floor. The cause
-  # is `mean(noise_var)` being outlier-dominated -- noise_var is sigma^2/sxx and
-  # sxx approaches zero for athletes seen in a couple of near-neutral races, so
-  # the population noise level is set by the least informative athletes and the
-  # method of moments concludes all slope variance is noise.
+  # Measured 2026-07-31: sd(sensitivity) == 0 on every calibration built before
+  # that date, while sd(sensitivity_raw) was 1.60 -- `between` pinned to its
+  # floor because the old moment estimator subtracted an outlier-dominated
+  # `mean(noise_var)`. Fixed by the DerSimonian-Laird estimator above. If this
+  # warning fires again the cause is NOT that, so check first whether the race
+  # effects identify at all: `sxx` near zero for the whole population means the
+  # decomposition found no shared shock to regress against.
   if (nrow(s) > 1L) {
     spread <- stats::sd(s$sensitivity, na.rm = TRUE)
     if (!is.finite(spread) || spread < 1e-8) {
       cli::cli_warn(c(
         "Condition sensitivity collapsed to a constant: the shared race shock cannot reorder any field.",
         i = "Between-athlete variance hit its floor, so every athlete shrank to the prior mean.",
-        i = "`sd(sensitivity_raw)` is {signif(stats::sd(s$sensitivity_raw, na.rm = TRUE), 3)}, so the raw slopes DO vary - this is a shrinkage failure, not an absence of signal.",
-        i = "Suspect `mean(noise_var)` being dominated by athletes with near-zero `sxx`."
+        i = "`sd(sensitivity_raw)` is {signif(stats::sd(s$sensitivity_raw, na.rm = TRUE), 3)} and median `sxx` is {signif(stats::median(s$sxx, na.rm = TRUE), 3)}.",
+        i = "If the raw slopes vary this is a shrinkage failure; if `sxx` is ~0 throughout, the decomposition found no shared shock to regress against."
       ), .frequency = "once", .frequency_id = "citius_sensitivity_collapsed")
     }
   }

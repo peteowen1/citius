@@ -48,6 +48,53 @@ test_that("a shared shock does widen the distribution of marks", {
   expect_gt(stats::sd(wide$perf[, 1]), stats::sd(narrow$perf[, 1]))
 })
 
+test_that("an asymmetric draw reshapes the tails without moving the marks", {
+  # Performance is not symmetric: the bad-side spread is 1.36-1.81x the good
+  # side, measured within athlete across every event. The simulator must be able
+  # to express that, and it must do so as a PLACINGS change only -- the mean is
+  # corrected so `median_mark` cannot move. If this test fails on the median,
+  # any A/B built on it is confounded rather than successful.
+  cal <- structure(list(
+    events = data.table::data.table(event_id = "AT-100Metres-M", tail_df = 18,
+                                    sigma_within = 0.017, calibrated = TRUE),
+    asymmetry = data.table::data.table(event_id = "AT-100Metres-M",
+                                       family = "sprint", r_up = 0.72,
+                                       r_dn = 1.30, n_ath = 999L, n = 999L,
+                                       source = "event")
+  ), class = "citius_calibration")
+
+  sym  <- simulate_event(make_ability(), n_sims = 40000, seed = 12)
+  asym <- simulate_event(make_ability(), n_sims = 40000, calibration = cal, seed = 12)
+
+  # Location is preserved.
+  expect_equal(stats::median(asym$perf[, 1]), stats::median(sym$perf[, 1]),
+               tolerance = 0.004)
+  # The good tail is tighter and the bad tail is longer.
+  expect_lt(stats::quantile(asym$perf[, 1], 0.99),
+            stats::quantile(sym$perf[, 1], 0.99))
+  expect_lt(stats::quantile(asym$perf[, 1], 0.01),
+            stats::quantile(sym$perf[, 1], 0.01))
+})
+
+test_that("a narrower good tail sharpens the favourite", {
+  # The mechanism this is all for: an over-wide upside on the rest of the field
+  # steals probability from the best athlete, which is what mid-band
+  # under-confidence looks like from the inside.
+  cal <- structure(list(
+    events = data.table::data.table(event_id = "AT-100Metres-M", tail_df = 18,
+                                    sigma_within = 0.017, calibrated = TRUE),
+    asymmetry = data.table::data.table(event_id = "AT-100Metres-M",
+                                       family = "sprint", r_up = 0.72,
+                                       r_dn = 1.30, n_ath = 999L, n = 999L,
+                                       source = "event")
+  ), class = "citius_calibration")
+  ab <- make_ability()
+  sym  <- medal_probs(simulate_event(ab, n_sims = 40000, seed = 13))
+  asym <- medal_probs(simulate_event(ab, n_sims = 40000, calibration = cal, seed = 13))
+  data.table::setorder(sym, -p_gold); data.table::setorder(asym, -p_gold)
+  expect_gt(asym$p_gold[1], sym$p_gold[1])
+})
+
 test_that("prob_better_than is monotone in the threshold", {
   sim <- simulate_event(make_ability(), n_sims = 20000, seed = 4)
   expect_gt(prob_better_than(sim, 10.00, "any"), prob_better_than(sim, 9.70, "any"))

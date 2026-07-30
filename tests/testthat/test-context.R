@@ -245,3 +245,39 @@ test_that("no championship table is a no-op, not an error", {
   expect_equal(project_championship(ab, NULL)$ability, 2.3)
   expect_equal(project_championship(ab, list(championship = NULL))$ability, 2.3)
 })
+
+test_that("project_tier puts ability back onto the tier being predicted", {
+  # estimate_ability(adjust_context = TRUE) SUBTRACTS the tier offset to reach a
+  # top-tier footing. Nothing added it back, so every race was predicted as
+  # though it were a top-tier final. Measured cost on 3,696 backtest finals:
+  # lower-tier races -1.46% and pro -0.41% against championship races at ~0.
+  cal <- structure(list(tier = data.table::data.table(
+    tier_class = c("top", "high", "mid", "low"),
+    offset = c(0, -0.00695, -0.00982, -0.01689),
+    precision = c(1.208, 1.053, 1.091, 0.971))), class = "citius_calibration")
+  ab <- data.table::data.table(athlete_id = c("a", "b"),
+                               event_id = "AT-5000Metres-M",
+                               ability = c(-6.0, -6.1))
+
+  # Top tier is the reference: nothing moves.
+  expect_equal(project_tier(ab, "OW", cal)$ability, ab$ability)
+
+  # A low-tier race is genuinely slower, so the prediction must come down --
+  # by HALF the measured offset, because the offsets are fitted on all history
+  # while the races predicted are a faster, selected subset. Applying them in
+  # full overshoots low tier from -0.98% bias to +0.71%.
+  low <- project_tier(ab, "F", cal)
+  expect_true(all(low$ability < ab$ability))
+  expect_equal(unique(round(low$ability - ab$ability, 6)), -0.008445)
+  expect_equal(unique(round(project_tier(ab, "F", cal, shrink = 1)$ability -
+                             ab$ability, 5)), -0.01689)
+
+  # Without measured offsets there is nothing to add back, and guessing would be
+  # worse than doing nothing.
+  expect_equal(project_tier(ab, "F", NULL)$ability, ab$ability)
+
+  # It is the exact inverse of what estimate_ability() removed.
+  expect_equal(project_tier(project_tier(ab, "F", cal, shrink = 1), "F", cal,
+                            shrink = 1)$ability,
+               ab$ability + 2 * -0.01689)
+})

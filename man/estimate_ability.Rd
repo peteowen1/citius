@@ -11,7 +11,9 @@ estimate_ability(
   trim_tactical = 0.25,
   min_results = 1L,
   adjust_context = TRUE,
-  calibration = NULL
+  calibration = NULL,
+  robust_sigma = TRUE,
+  sigma_parts = c("estimator", "weight")
 )
 }
 \arguments{

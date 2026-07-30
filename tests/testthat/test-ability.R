@@ -421,3 +421,40 @@ test_that("sigma_context reaches the sigma estimate_ability returns", {
                            calibration = cal1)
   expect_equal(none$sigma, base$sigma)
 })
+
+test_that("one corrupt mark cannot buy an athlete a win probability", {
+  # Regression, 2026-07-31. A Commonwealth Games entrant had three recorded 100m
+  # marks -- 10.86, 17.33, 10.70 -- and the 17.33 is impossible. It gave him
+  # sigma 0.1397 against a field median of 0.0115, and because a race is decided
+  # by the BEST draw, the simulator turned that spread into 19% gold: second
+  # favourite, on a predicted mark of 10.97. Nothing errored. The published card
+  # simply had an athlete who could not break 10.7 as a live contender.
+  #
+  # The estimator must take its scale from the good side, where a mark that bad
+  # cannot reach.
+  ev <- "AT-100Metres-M"
+  dates <- as.Date(c("2022-06-08", "2024-06-21", "2026-05-12"))
+  mk <- function(id, marks) data.table::data.table(
+    athlete_id = id, event_id = ev, date = dates, round = "F", tier = "GL",
+    perf = to_perf(marks, -1L))
+  bad   <- mk("BAD",   c(10.70, 17.33, 10.86))
+  clean <- mk("CLEAN", c(10.70, 10.78, 10.86))
+
+  ab <- estimate_ability(rbind(bad, clean), as_of = as.Date("2026-07-23"),
+                         half_life = 365, adjust_context = FALSE)
+  s_bad <- ab[athlete_id == "BAD"]$sigma
+  s_cln <- ab[athlete_id == "CLEAN"]$sigma
+
+  # The corrupt history must not produce a wildly wider athlete than the clean
+  # one built from the same two good marks on the same dates.
+  expect_lt(s_bad, 4 * s_cln)
+
+  # And it must not out-rank a genuinely faster field.
+  fld <- rbind(
+    ab[, .(athlete_id, event_id, ability, sigma, ability_se)],
+    data.table::data.table(athlete_id = paste0("R", 1:5), event_id = ev,
+                           ability = to_perf(seq(9.95, 10.15, length.out = 5), -1L),
+                           sigma = 0.0172, ability_se = 0.002))
+  mp <- medal_probs(simulate_event(fld, n_sims = 20000, seed = 3))
+  expect_lt(mp[athlete_id == "BAD"]$p_gold, min(mp[grepl("^R", athlete_id)]$p_gold))
+})

@@ -184,6 +184,25 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
   noise <- matrix(stats::rt(n_sims * n_ath, df = df) * scale_t,
                   nrow = n_sims, ncol = n_ath)
 
+  # Split the draw into a good side and a bad side. Performance is not
+  # symmetric: measured within athlete on 802,099 marks, the bad-side spread is
+  # 1.36x (high jump) to 1.81x (pole vault) the good-side spread, and the worst
+  # events are the ones where you can fail out of a competition. A single
+  # symmetric sigma therefore simulates a good tail 12-39% wider than anything
+  # the athlete has ever produced -- and a race is decided by the BEST draw, so
+  # that surplus turns straight into win probability. See [fit_asymmetry()].
+  asym <- .asymmetry_ratios(event_id, calibration)
+  if (!is.null(asym)) {
+    # Reshape only -- the mean must not move. For symmetric X, E[X+] = E|X|/2,
+    # so scaling the sides by r_up and r_dn shifts the mean by
+    # (r_up - r_dn) * E|X| / 2. Subtracting it keeps `median_mark` where it was
+    # and makes this a pure PLACINGS change, which is what it is pre-registered
+    # as: if marks move, the arm is confounded and the result is not usable.
+    m_abs <- mean(abs(noise))          # E|X| of the SYMMETRIC draw, before scaling
+    noise <- noise * data.table::fifelse(noise > 0, asym[["up"]], asym[["dn"]])
+    noise <- noise - (asym[["up"]] - asym[["dn"]]) * m_abs / 2
+  }
+
   # Sensitivity turns the shared shock from a main effect into an interaction,
   # which is the only way conditions can reorder the field. See
   # condition_sensitivity().

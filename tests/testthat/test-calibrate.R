@@ -208,6 +208,50 @@ test_that("calibrated sensitivity lets conditions reorder the field", {
   expect_gt(max(abs(with_sens$p_gold - flat$p_gold)), 0.01)
 })
 
+test_that("sensitivity survives athletes with no exposure to varying conditions", {
+  # Regression, 2026-07-31. Every synthetic population above gives each athlete
+  # plenty of races under varying conditions, so `sxx` is healthy for everyone
+  # and the shrinkage step never meets its failure mode. Production does not
+  # look like that: on the corpus, `sxx` runs from 1e-14 to 1.08, and the
+  # athletes at the bottom -- seen twice, in races where nothing happened --
+  # have a noise variance of 5.6e9 against a population median of 0.107.
+  #
+  # The old moment estimator subtracted the UNWEIGHTED MEAN of that quantity
+  # from the observed slope spread, so those athletes alone drove `between`
+  # negative, it clamped to its floor, and all 84,362 sensitivities shrank to
+  # exactly 1.000. Nothing errored: a constant sensitivity makes the shared
+  # shock cancel from every pairwise comparison, which is indistinguishable
+  # from conditions simply not mattering.
+  sim <- simulate_races(n_athletes = 12, n_races = 600, condition_sd = 0.02,
+                        sigma_e = 0.004,
+                        sensitivity = c(rep(2.5, 6), rep(0.2, 6)), seed = 11)
+
+  # Athletes 13-60, each seen in two races run under near-identical conditions.
+  # Their fitted race effects are ~0, so sxx -> 0 and noise_var explodes.
+  set.seed(11)
+  flat <- data.table::rbindlist(lapply(1:48, function(i) {
+    data.table::data.table(
+      race_key = paste0("flat", i), athlete_id = as.character(c(12 + i, 12 + i)),
+      event_id = "AT-100Metres-M", date = Sys.Date() - c(700, 701),
+      round = "F", tier = "OW",
+      perf = to_perf(10, -1L) + stats::rnorm(2, 0, 0.004))
+  }))
+  # Two athletes per race, so they pass min_race_size and reach the estimator.
+  flat[, athlete_id := as.character(rep(13:60, each = 2))]
+
+  cal <- expect_no_warning(
+    calibrate(rbind(sim$data, flat, fill = TRUE)),
+    message = "collapsed to a constant"
+  )
+  a <- data.table::as.data.table(cal$athlete)
+  expect_gt(stats::sd(a$sensitivity), 0.01)
+
+  # And the planted ordering must still be recovered, not merely some spread.
+  hi <- a[athlete_id %in% as.character(1:6)]$sensitivity
+  lo <- a[athlete_id %in% as.character(7:12)]$sensitivity
+  expect_gt(mean(hi), mean(lo))
+})
+
 test_that("empty input yields an empty calibration rather than an error", {
   cal <- calibrate(data.table::data.table(
     race_key = character(), athlete_id = character(), event_id = character(),

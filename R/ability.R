@@ -468,7 +468,9 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @export
 estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                              trim_tactical = 0.25, min_results = 1L,
-                             adjust_context = TRUE, calibration = NULL) {
+                             adjust_context = TRUE, calibration = NULL,
+                             robust_sigma = TRUE,
+                             sigma_parts = c("estimator", "weight")) {
   if (!nrow(results)) {
     return(data.table::data.table(
       athlete_id = character(), event_id = character(), ability = numeric(),
@@ -481,7 +483,8 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   dt <- dt[!is.na(perf) & !is.na(event_id)]
   if (!nrow(dt)) {
     return(estimate_ability(results[0], as_of, half_life, trim_tactical,
-                            min_results, adjust_context, calibration))
+                            min_results, adjust_context, calibration,
+                            robust_sigma, sigma_parts))
   }
 
   dt[, athlete_id := as.character(athlete_id)]
@@ -643,6 +646,9 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     ok <- w > 0
     mu <- if (sum(ok)) stats::weighted.mean(perf[ok], w[ok]) else NA_real_
     s  <- .weighted_sd(perf[ok], w[ok])
+    # Robust alternative, used when `robust_sigma = TRUE`. Kept alongside rather
+    # than replacing `s` so the two can be compared on identical inputs.
+    s_rob <- .weighted_upper_sd(perf[ok], w[ok])
     # The effective age of the estimate: the weighted mean age under the same
     # weights that produced it. This is what [project_ability()] must measure
     # from. Using an unweighted career mean instead double-counts ageing —
@@ -654,6 +660,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     } else NA_real_
     .(ability_raw = mu,
       sigma_raw   = s,
+      sigma_rob   = s_rob,
       n           = .N,
       # Total weight is *absolute* evidence and is what shrinkage must use.
       # n_eff below measures only how evenly weight is spread, so an athlete
@@ -667,7 +674,9 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   }, by = .(athlete_id, event_id)]
 
   ab <- ab[n >= min_results & !is.na(ability_raw)]
-  if (!nrow(ab)) return(estimate_ability(results[0], as_of, half_life, trim_tactical, min_results))
+  if (!nrow(ab)) return(estimate_ability(results[0], as_of, half_life, trim_tactical,
+                                         min_results, adjust_context, calibration,
+                                         robust_sigma, sigma_parts))
 
   # Event-level priors drive the shrinkage strength
   ab[, `:=`(
@@ -675,12 +684,94 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     sigma_between = stats::sd(ability_raw, na.rm = TRUE)
   ), by = event_id]
 
-  ab[, sigma := data.table::fifelse(
-    is.na(sigma_raw) | sigma_raw <= 0, cv_prior, sigma_raw
-  )]
-  # Blend the observed spread toward the event prior; a two-race athlete's
-  # sample SD is close to meaningless on its own.
-  ab[, sigma := (n_eff * sigma + 2 * cv_prior) / (n_eff + 2)]
+  # THREE separate faults were found in this block on 2026-07-31, all of which
+  # inflate the spread of thinly-raced athletes and hand them win probability
+  # they have not earned. Measured out of sample over 44,607 predictions,
+  # athletes with `w_total` < 1 were credited with 0.0509 gold and won 0.0412 --
+  # a ratio of 0.81 -- while athletes with `w_total` > 10 came in at 1.03.
+  #
+  # 1. The sample spread is not robust. One impossible mark in a three-mark
+  #    history produced `sigma` 6.6x the event value. `.weighted_upper_sd()`
+  #    estimates the same quantity from the upper half, where contamination
+  #    cannot reach.
+  # 2. The shrinkage TARGET was `cv_prior`, which the registry documents as a
+  #    "fallback placeholder, not an estimate" -- 0.008 for the 100m against a
+  #    MEASURED `sigma_within` of 0.0172. Every athlete in the package was
+  #    being pulled toward a number less than half the truth.
+  # 3. The shrinkage WEIGHT was `n_eff`, which measures only how evenly weight
+  #    is spread. Ability shrinkage uses `w_total` for reasons argued 30 lines
+  #    above; dispersion shrinkage must use it for the same reasons.
+  # The three fixes are independently switchable because they OPPOSE each other
+  # over thin athletes: `target` widens them (the old `cv_prior` was half the
+  # measured value) while `estimator` narrows contaminated ones. The bundle
+  # measured -0.56% on gold Brier; splitting it may raise that rather than
+  # merely explain it. Attribution needs one switch per fix.
+  # DEFAULT IS THE VALIDATED PAIR, NOT ALL THREE.
+  #
+  # `crob` measured -0.56% on gold Brier (p = 0.0072) and was adopted on that
+  # basis -- but it ran while a recycling bug held the `target` fix inert, so
+  # what it validated was estimator + weight. Shrinking toward `cv_prior`
+  # instead of the measured `sigma_within` is still wrong on its face, and the
+  # fix is available here, but wrong-on-its-face and better-in-the-backtest are
+  # separate claims: that is precisely what `csens` demonstrated the same day.
+  # `target` ships only once an arm has measured it.
+  parts <- if (isTRUE(robust_sigma)) {
+    match.arg(sigma_parts, c("estimator", "weight", "target"), several.ok = TRUE)
+  } else character()
+  use_estimator <- "estimator" %in% parts
+  use_target    <- "target" %in% parts
+  use_weight    <- "weight" %in% parts
+
+  if (use_estimator) {
+    # Put the good-side estimate back on the pooled-spread scale, calibrated
+    # from THIS population rather than a constant. Well-observed athletes are
+    # the reference because their `sigma_raw` is trustworthy: whatever ratio
+    # holds for them is the ratio the estimator needs everywhere.
+    #
+    # Doing it this way is what keeps the experiment clean. The good-side
+    # spread is 0.72-0.86 of the pooled spread depending on event, so using it
+    # raw would shrink every athlete's sigma by a systematic ~20% -- a scale
+    # change riding along with a robustness change, and no way to tell which
+    # one moved the result.
+    ref <- ab[n >= 10L & is.finite(sigma_rob) & sigma_rob > 0 &
+                is.finite(sigma_raw) & sigma_raw > 0]
+    k <- if (nrow(ref) >= 20L) stats::median(ref$sigma_raw / ref$sigma_rob) else 1
+    if (!is.finite(k) || k <= 0) k <- 1
+    ab[, sigma := data.table::fifelse(is.finite(sigma_rob) & sigma_rob > 0,
+                                      sigma_rob * k, NA_real_)]
+    # No usable good side at all: fall back to the event value, NOT to
+    # `sigma_raw`. Falling back to the raw spread restores exactly the
+    # contaminated number this estimator exists to avoid -- which is the bug
+    # the first version of this shipped with.
+  } else {
+    ab[, sigma := sigma_raw]
+  }
+
+  # Shrink toward the MEASURED within-athlete spread for the event, falling back
+  # to the registry placeholder only where no calibration exists.
+  ab[, sigma_target := cv_prior]
+  if (use_target && !is.null(calibration) && !is.null(calibration$events)) {
+    tgt <- data.table::as.data.table(calibration$events)
+    if (all(c("event_id", "sigma_within") %in% names(tgt))) {
+      k <- match(ab$event_id, tgt$event_id)
+      sw <- tgt$sigma_within[k]
+      # NOT isTRUE(): on a vector it returns a single FALSE, so `!isTRUE(...)`
+      # is a length-one TRUE that recycles and blanks the WHOLE column. That is
+      # the same defect found in this file at line 507 on 2026-07-31, written
+      # again here hours later. Vectorised comparison only.
+      if ("calibrated" %in% names(tgt)) {
+        ok_cal <- tgt$calibrated[k]
+        sw[is.na(ok_cal) | !ok_cal] <- NA_real_
+      }
+      ab[is.finite(sw) & sw > 0, sigma_target := sw[is.finite(sw) & sw > 0]]
+    }
+  }
+  ab[, sigma := data.table::fifelse(is.na(sigma) | sigma <= 0, sigma_target, sigma)]
+
+  # A two-race athlete's sample spread is close to meaningless on its own, so
+  # blend toward the event value by absolute evidence.
+  shrink_w <- if (use_weight) ab$w_total else ab$n_eff
+  ab[, sigma := (shrink_w * sigma + 2 * sigma_target) / (shrink_w + 2)]
 
   # Rescale to the context being FORECAST. sigma is fitted across the pooled
   # history, but the target is a top-tier final, and that is a narrower slice of
@@ -805,6 +896,64 @@ condition_prior <- function(ability, field = NULL, weight = 1) {
   v <- sum(w * (x - mu)^2) / (sum(w) - sum(w^2) / sum(w))
   if (!is.finite(v) || v < 0) return(NA_real_)
   sqrt(v)
+}
+
+#' Weighted quantile by the inverse of the weighted ECDF
+#' @keywords internal
+#' @noRd
+.weighted_quantile <- function(x, w, p) {
+  ok <- is.finite(x) & is.finite(w) & w > 0
+  if (!any(ok)) return(NA_real_)
+  x <- x[ok]; w <- w[ok]
+  o <- order(x); x <- x[o]; w <- w[o]
+  cw <- cumsum(w) / sum(w)
+  x[which(cw >= p)[1L]]
+}
+
+#' Robust one-sided scale: the spread of the GOOD half only
+#'
+#' A race is won by the best draw, so what matters is how far above their own
+#' level an athlete can reach. Estimating that from the upper half makes the
+#' estimate immune to the lower tail by construction, however contaminated it
+#' is -- and the lower tail is where the contamination lives, because a jogged
+#' race, an injury, a foul-out or three failures at the opening height all
+#' produce a mark far below an athlete's level and none of them are draws from
+#' their performance distribution.
+#'
+#' Measured 2026-07-31: one impossible 17.33 s in a three-mark 100 m history
+#' gave an athlete `sigma` = 0.1144 against an event value of 0.0172 -- 6.6x too
+#' wide. He was predicted at 11.66 s and still out-ranked an athlete predicted
+#' at 10.17 s, because the simulator converts spread into win probability. On
+#' the same history this estimator returns ~0.015, the corrupt mark having no
+#' influence at all.
+#'
+#' For a symmetric distribution `E[X^2 | X > 0] = Var(X)`, so the root mean
+#' square of the positive deviations estimates the same scale the weighted SD
+#' does -- computed only from the half that contamination cannot reach.
+#'
+#' **Not a quantile difference.** `q84 - q50` was tried first and is wrong here:
+#' with three marks and recency-skewed weights both quantiles land on the SAME
+#' observation, the estimate is zero, and the fallback restores the contaminated
+#' value. It failed silently in exactly the thin-history case it exists for. The
+#' semi-deviation uses every good-side point, so one is enough.
+#'
+#' The returned value is on the GOOD-side scale, which is systematically
+#' narrower than the pooled spread (measured 0.72-0.86 of it, by event). The
+#' caller rescales it back onto the pooled scale using the population itself, so
+#' that switching estimators changes robustness WITHOUT changing the overall
+#' level of sigma -- otherwise the arm would confound the two.
+#' @keywords internal
+#' @noRd
+.weighted_upper_sd <- function(x, w) {
+  if (length(x) < 3L || !sum(w > 0)) return(NA_real_)
+  med <- .weighted_quantile(x, w, 0.5)
+  if (!is.finite(med)) return(NA_real_)
+  dev <- x - med
+  up <- dev > 0 & is.finite(dev) & w > 0
+  if (!any(up)) return(NA_real_)
+  s <- sqrt(sum(w[up] * dev[up]^2) / sum(w[up]))
+  if (!is.finite(s) || s <= 0) return(NA_real_)
+  s
 }
 
 #' Add an athlete's current momentum back to a momentum-neutral ability

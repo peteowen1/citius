@@ -9,7 +9,8 @@ utils::globalVariables(c(
   "wind",
   # ability estimation
   "kappa", "last_date", "n", "n_eff", "prior_mu", "shrinkage", "sigma",
-  "sigma_between", "sigma_raw", "tactical", "w",
+  "sigma_between", "sigma_raw", "sigma_rob", "sigma_target", "tactical",
+  "tier_adj", "w",
   # context effects
   "eff", "r_adj", "resid", "resid2", "round_class", "tier_class",
   # calibration
