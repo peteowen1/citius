@@ -393,6 +393,30 @@ test_that("per-event offsets recover a split that per-family cannot represent", 
   near(unname(ctx$round[["heat"]]), -0.010)
 })
 
+test_that("an event whose REFERENCE cell is thin gets no per-event offset", {
+  # An offset is a difference against the event's own finals, so a thousand heat
+  # marks measured against forty finals is a noisy number carrying a large `n` --
+  # and n/(n + k) would then barely shrink it. The least reliable estimate would
+  # get the most weight, which is backwards.
+  set.seed(9)
+  ath <- sprintf("a%03d", 1:200)
+  mk <- function(ev, n_fin, n_heat) data.table::rbindlist(list(
+    data.table::data.table(athlete_id = sample(ath, n_fin, TRUE), event_id = ev, round = "Final"),
+    data.table::data.table(athlete_id = sample(ath, n_heat, TRUE), event_id = ev, round = "Heat")))
+  d <- data.table::rbindlist(list(mk("AT-100Metres-M", 3000, 3000),
+                                  mk("AT-400Metres-M", 40, 3000)))
+  d[, `:=`(tier = "top", date = Sys.Date())]
+  ab <- stats::setNames(stats::rnorm(200, 0, 0.03), ath)
+  d[, perf := ab[athlete_id] + stats::rnorm(.N, 0, 0.005)]
+  d[round == "Heat", perf := perf - 0.02]
+
+  ctx <- estimate_context_effects(d, min_cell = 100L, min_event_cell = 500L,
+                                  per_event = TRUE, shrink = FALSE)
+  re <- data.table::as.data.table(ctx$round_event)
+  expect_true("AT-100Metres-M" %in% re$event_id)
+  expect_false("AT-400Metres-M" %in% re$event_id)
+})
+
 test_that("per_event is off unless asked for", {
   ctx <- estimate_context_effects(opposite_rounds(), min_cell = 100L)
   expect_null(ctx$round_event)

@@ -343,20 +343,41 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
   re <- te <- NULL
   if (per_event && "family" %in% names(dt) && any(!is.na(dt$family))) {
     ed <- dt[!is.na(family)]
+    # THE REFERENCE CELL HAS TO CLEAR THE THRESHOLD TOO.
+    #
+    # An offset is a DIFFERENCE -- mean(resid | heat) minus mean(resid | final) --
+    # so its precision depends on both cells, but the shrinkage weight n/(n + k)
+    # sees only the first. At family grain that is harmless because the reference
+    # cell is always enormous. At EVENT grain it is not: an event can carry
+    # thousands of heat marks against a couple of hundred finals, and then a
+    # noisy offset arrives with a large n attached and is shrunk almost not at
+    # all -- the least reliable estimates getting the most weight, which is the
+    # opposite of what shrinkage is for.
+    #
+    # Requiring both sides to clear `min_event_cell` removes the pathological
+    # case without touching the shrinkage arithmetic, which matters because `k`
+    # is fitted against the cell-count scale inside .fit_context_shrink(); moving
+    # the caller to an effective n would apply a `k` fitted on a different scale.
+    # Weighting by the harmonic effective n on BOTH sides is the fuller fix and
+    # is left for when there is a measurement to justify it.
     re <- ed[, .(eff = mean(resid), n = .N), by = .(event_id, family, round_class)]
-    re[, ref := eff[round_class == "final"][1], by = event_id]
+    re[, `:=`(ref = eff[round_class == "final"][1],
+              n_ref = n[round_class == "final"][1]), by = event_id]
     re <- re[!is.na(ref)]
     if (nrow(re)) re[, eff := eff - ref]
-    re <- re[n >= min_event_cell, .(event_id, family, round_class, offset = eff, n)]
+    re <- re[n >= min_event_cell & n_ref >= min_event_cell,
+             .(event_id, family, round_class, offset = eff, n, n_ref)]
 
     ed <- merge(ed, r_eff[, .(round_class, r_adj3 = eff)], by = "round_class", all.x = TRUE)
     ed[is.na(r_adj3), r_adj3 := 0]
     ed[, resid4 := resid - r_adj3]
     te <- ed[, .(eff = mean(resid4), n = .N), by = .(event_id, family, tier_class)]
-    te[, ref := eff[tier_class == "top"][1], by = event_id]
+    te[, `:=`(ref = eff[tier_class == "top"][1],
+              n_ref = n[tier_class == "top"][1]), by = event_id]
     te <- te[!is.na(ref)]
     if (nrow(te)) te[, eff := eff - ref]
-    te <- te[n >= min_event_cell, .(event_id, family, tier_class, offset = eff, n)]
+    te <- te[n >= min_event_cell & n_ref >= min_event_cell,
+             .(event_id, family, tier_class, offset = eff, n, n_ref)]
 
     prior_for <- function(x, class_col, fam_tbl, pooled_eff) {
       p <- pooled_eff$eff[match(x[[class_col]], pooled_eff[[class_col]])]
