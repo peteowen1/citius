@@ -614,7 +614,8 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                              adjust_context = TRUE, calibration = NULL,
                              robust_sigma = TRUE,
                              sigma_parts = c("estimator", "weight"),
-                             sigma_mode = c("athlete", "event")) {
+                             sigma_mode = c("athlete", "event"),
+                             only = NULL) {
   if (!nrow(results)) {
     return(data.table::data.table(
       athlete_id = character(), event_id = character(), ability = numeric(),
@@ -821,6 +822,60 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     dt[, c(".keep", ".grp_n", ".rk") := NULL]
   }
 
+  # ONLY: estimate abilities for a named set of athletes, without changing them.
+  #
+  # A backtest refits ability per meet and reads the ~300 entrants, but the
+  # history covers every athlete who contested those events: 311,275
+  # athlete-events for 312 entrants, so 998 estimates are computed per estimate
+  # used, and that is 85% of a backtest's runtime.
+  #
+  # The non-entrants cannot simply be dropped, because the shrinkage prior
+  # `prior_mu` is the event mean of `ability_raw` ACROSS ALL ATHLETES. Drop them
+  # and the target every athlete is shrunk toward changes, which moves every
+  # prediction. That is why `CITIUS_BT_ATHLETES` is documented as altering
+  # prior_mu.
+  #
+  # But the prior needs only `ability_raw`, which is a plain weighted mean --
+  # fully vectorisable in one grouped data.table op. The costly work is the rest
+  # of the body: .weighted_sd() and .weighted_upper_sd(), which evaluate an R
+  # closure per group and dominate the profile. So the priors are computed for
+  # EVERYONE cheaply, and the expensive body runs only for `only`.
+  #
+  # The result is identical for the retained athletes. That is asserted by test,
+  # not assumed.
+  prior_all <- NULL
+  if (!is.null(only)) {
+    keep_ids <- as.character(only)
+    sums <- dt[w > 0, .(.sw = sum(w), .swp = sum(w * perf)),
+               by = .(athlete_id, event_id)]
+    cnts <- dt[, .(n = .N), by = .(athlete_id, event_id)]
+    pri <- merge(cnts, sums, by = c("athlete_id", "event_id"), all.x = TRUE)
+    pri[, ability_raw := .swp / .sw]
+    # Same filter the full path applies before computing the priors, so the
+    # population behind prior_mu matches exactly.
+    pri <- pri[n >= min_results & is.finite(ability_raw)]
+    prior_all <- pri[, .(prior_mu = mean(ability_raw, na.rm = TRUE),
+                         sigma_between = stats::sd(ability_raw, na.rm = TRUE)),
+                     by = event_id]
+    # `k`, the robust-sigma scale factor below, is a MEDIAN OVER THE POPULATION
+    # of athletes with n >= 10. Computing it from the retained athletes alone
+    # changes sigma, ability_se and shrinkage -- measured, not assumed: with
+    # only the entrants kept, ability moved up to 7e-4 and shrinkage up to 1e-2
+    # while ability_raw, n, w_total and prior_mu stayed bit-identical, which is
+    # what isolated this line as the remaining dependency.
+    #
+    # Those athletes are only ~19% of athlete-events, so keeping them makes `k`
+    # EXACT for about a fifth of the work. An approximation would have been
+    # faster still, and today is a poor day to trade exactness for speed on a
+    # quantity that feeds every ability estimate.
+    n_by <- dt[, .(n = .N), by = .(athlete_id, event_id)]
+    k_ids <- unique(as.character(n_by[n >= 10L]$athlete_id))
+    dt <- dt[as.character(athlete_id) %in% union(keep_ids, k_ids)]
+    if (!nrow(dt)) return(estimate_ability(results[0], as_of, half_life, trim_tactical,
+                                           min_results, adjust_context, calibration,
+                                           robust_sigma, sigma_parts))
+  }
+
   ab <- dt[, {
     ok <- w > 0
     mu <- if (sum(ok)) stats::weighted.mean(perf[ok], w[ok]) else NA_real_
@@ -857,11 +912,26 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                                          min_results, adjust_context, calibration,
                                          robust_sigma, sigma_parts))
 
-  # Event-level priors drive the shrinkage strength
-  ab[, `:=`(
-    prior_mu = mean(ability_raw, na.rm = TRUE),
-    sigma_between = stats::sd(ability_raw, na.rm = TRUE)
-  ), by = event_id]
+  # Event-level priors drive the shrinkage strength. With `only` set these were
+  # computed above from the WHOLE population, because taking them from the
+  # retained athletes alone would shrink an elite field toward its own mean
+  # instead of the event's.
+  if (is.null(prior_all)) {
+    ab[, `:=`(
+      prior_mu = mean(ability_raw, na.rm = TRUE),
+      sigma_between = stats::sd(ability_raw, na.rm = TRUE)
+    ), by = event_id]
+  } else {
+    ab <- merge(ab, prior_all, by = "event_id", all.x = TRUE, sort = FALSE)
+    # An event with no prior would silently fall back to whatever comes next;
+    # better to use the retained athletes than NA, but say so.
+    if (anyNA(ab$prior_mu)) {
+      miss <- unique(ab[is.na(prior_mu)]$event_id)
+      cli::cli_warn("No population prior for {length(miss)} event{?s}; using the retained athletes.")
+      ab[is.na(prior_mu), prior_mu := mean(ability_raw, na.rm = TRUE), by = event_id]
+      ab[is.na(sigma_between), sigma_between := stats::sd(ability_raw, na.rm = TRUE), by = event_id]
+    }
+  }
 
   # THREE separate faults were found in this block on 2026-07-31, all of which
   # inflate the spread of thinly-raced athletes and hand them win probability
@@ -1006,6 +1076,11 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # refitting. It enters the shrinkage linearly, so swapping it is exact:
   #   ability_new = ability_old + shrinkage * (prior_new - prior_old)
   # See `condition_prior()`.
+
+  # Drop the athletes that were carried only so the population quantities --
+  # `prior_mu`, `sigma_between` and the robust-sigma scale `k` -- came out
+  # exactly as they would have on the full history. They were never requested.
+  if (!is.null(only)) ab <- ab[as.character(athlete_id) %in% as.character(only)]
 
   ab[, c("athlete_id", "event_id", "ability", "ability_raw", "sigma",
          "ability_se", "n", "n_eff", "w_total", "shrinkage", "prior_mu",

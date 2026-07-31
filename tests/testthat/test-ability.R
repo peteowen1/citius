@@ -610,3 +610,41 @@ test_that("a meet_tier column changes the FITTED offsets, not just applied ones"
   # And the fitted low-tier penalty should now recover the planted -0.04.
   expect_lt(abs(unname(with_mt$tier[["low"]]) - (-0.04)), 0.01)
 })
+
+test_that("only= returns bit-identical estimates for the athletes it keeps", {
+  # The point of `only` is speed WITHOUT changing a prediction. Three population
+  # quantities make that non-trivial: prior_mu and sigma_between (event means of
+  # ability_raw across everyone) and the robust-sigma scale k (a median over
+  # athletes with n >= 10). Restricting the input naively changes all three.
+  set.seed(31)
+  n_ath <- 300
+  ath <- sprintf("a%04d", seq_len(n_ath))
+  d <- data.table::rbindlist(lapply(seq_along(ath), function(i) {
+    m <- sample(3:25, 1)
+    data.table::data.table(
+      athlete_id = ath[i], event_id = "AT-100Metres-M",
+      date = Sys.Date() - sample(1:1200, m, replace = TRUE),
+      perf = to_perf(stats::rnorm(1, 10.3, 0.25), -1L) + stats::rnorm(m, 0, 0.01),
+      tier = "OW", round = "F")
+  }))
+  ents <- sample(ath, 25)
+  full <- estimate_ability(d, adjust_context = FALSE)
+  sub  <- estimate_ability(d, adjust_context = FALSE, only = ents)
+
+  expect_setequal(sub$athlete_id, ents)
+  data.table::setkey(full, athlete_id, event_id)
+  data.table::setkey(sub, athlete_id, event_id)
+  f2 <- full[sub[, .(athlete_id, event_id)], nomatch = 0]
+  data.table::setkey(f2, athlete_id, event_id)
+  expect_equal(nrow(f2), nrow(sub))
+  for (col in c("ability", "ability_raw", "sigma", "ability_se", "n",
+                "n_eff", "w_total", "shrinkage", "prior_mu", "age_ref")) {
+    expect_identical(f2[[col]], sub[[col]], info = col)
+  }
+})
+
+test_that("only= with an unknown athlete returns nothing rather than everything", {
+  d <- synthetic_history(n_athletes = 8, n_each = 12)
+  out <- estimate_ability(d, adjust_context = FALSE, only = "no-such-athlete")
+  expect_equal(nrow(out), 0L)
+})
