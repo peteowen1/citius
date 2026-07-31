@@ -417,6 +417,40 @@ test_that("an event whose REFERENCE cell is thin gets no per-event offset", {
   expect_false("AT-400Metres-M" %in% re$event_id)
 })
 
+test_that("the shrinkage fitter runs at the scale that actually reaches it", {
+  # .fit_context_shrink() returns Inf below 10,000 rows, so every other test in
+  # this file stops before its body executes. A data.table `by` bug lived there
+  # through a full green suite and only surfaced when a real calibration ran.
+  # This fixture is deliberately large enough to get inside.
+  set.seed(11)
+  n_ath <- 900
+  ath <- sprintf("a%04d", seq_len(n_ath))
+  mk <- function(ev, per) data.table::data.table(
+    athlete_id = rep(ath, each = per), event_id = ev,
+    round = rep(c("Final", "Heat", "Heat"), length.out = n_ath * per),
+    tier = rep(c("top", "top", "low"), length.out = n_ath * per))
+  d <- data.table::rbindlist(list(mk("AT-100Metres-M", 8), mk("AT-400Metres-M", 8)))
+  d[, date := Sys.Date() - seq_len(.N)]
+  ab <- stats::setNames(stats::rnorm(n_ath, 0, 0.03), ath)
+  d[, perf := ab[athlete_id] + stats::rnorm(.N, 0, 0.006)]
+  # The two events need DIFFERENT heat offsets. With identical ones, full
+  # pooling is genuinely optimal and the fitter correctly returns Inf -- which is
+  # indistinguishable from the short-circuit that returns Inf without running.
+  # A test that cannot tell those apart is the gap that let the bug through.
+  d[event_id == "AT-100Metres-M" & round == "Heat", perf := perf - 0.030]
+  d[event_id == "AT-400Metres-M" & round == "Heat", perf := perf + 0.010]
+  d[tier == "low", perf := perf - 0.01]
+  expect_gt(nrow(d), 10000L)
+
+  ctx <- estimate_context_effects(d, min_cell = 100L, min_event_cell = 100L,
+                                  per_family = TRUE, per_event = TRUE, shrink = TRUE)
+  re <- data.table::as.data.table(ctx$round_event)
+  expect_true(nrow(re) > 0)
+  expect_true(all(is.finite(re$offset)))
+  # A FINITE k can only come from the fitter's body: the early return is Inf.
+  expect_true(all(is.finite(re$shrink_k)))
+})
+
 test_that("per_event is off unless asked for", {
   ctx <- estimate_context_effects(opposite_rounds(), min_cell = 100L)
   expect_null(ctx$round_event)

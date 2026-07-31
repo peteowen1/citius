@@ -476,8 +476,17 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
   # is mean(perf - adj) and adj is constant within a cell, so the whole sweep
   # reduces to sums of per-cell counts: sum(perf)/m - sum(cnt * adj)/m. Without
   # this the grid re-groups five million rows once per candidate.
-  cells <- oth[, .(cnt = .N, sp = sum(perf)),
-               by = unique(c("athlete_id", "event_id", group_col, class_col))]
+  # `by` must be a literal c(), a key, or an eval()'d variable -- data.table
+  # rejects a computed expression outright, and the error it raises recommends
+  # exactly this form. unique() is needed because group_col is "event_id" in the
+  # per-event path, which would otherwise repeat a column.
+  #
+  # The eval() here is data.table's column-selection idiom, not evaluation of
+  # arbitrary code: by_cols is a character vector of column NAMES built from
+  # in-package literals plus group_col/class_col, both of which are internal
+  # function arguments. No caller-supplied data reaches it.
+  by_cols <- unique(c("athlete_id", "event_id", group_col, class_col))
+  cells <- oth[, .(cnt = .N, sp = sum(perf)), by = eval(by_cols)]
   cells <- merge(cells, fam, by = c(group_col, class_col), all.x = TRUE)
   tot <- cells[, .(m = sum(cnt), sp = sum(sp)), by = .(athlete_id, event_id)]
   tot <- merge(tot, target, by = c("athlete_id", "event_id"))
