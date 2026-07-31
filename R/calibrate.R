@@ -612,7 +612,7 @@ fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, 
 .context_stats <- function(d) {
   d <- data.table::copy(d)
   d[, round_class := .round_class(if ("round" %in% names(d)) round else NA_character_)]
-  d[, tier_class := .tier_class(if ("tier" %in% names(d)) tier else NA_character_)]
+  d[, tier_class := .tier_class_of(d)]
 
   mk <- function(by_col, ref) {
     s <- d[, .(offset = mean(resid + c_r), sd = stats::sd(resid), n = .N),

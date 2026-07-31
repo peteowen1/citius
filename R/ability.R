@@ -246,7 +246,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 
   dt[, athlete_id := as.character(athlete_id)]
   dt[, round_class := .round_class(if ("round" %in% names(dt)) round else NA_character_)]
-  dt[, tier_class := .tier_class(if ("tier" %in% names(dt)) tier else NA_character_)]
+  dt[, tier_class := .tier_class_of(dt)]
 
   # Centre within athlete-event: removes ability, leaving context + noise.
   dt[, resid := perf - mean(perf), by = .(athlete_id, event_id)]
@@ -526,6 +526,36 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 
 #' @keywords internal
 #' @noRd
+#' Tier class for a results table, preferring the catalogue over the feed
+#'
+#' THE ONE PLACE TIER CLASS IS DERIVED. It previously happened in three
+#' independent spots -- `.context_stats()` and `estimate_context_effects()` both
+#' fitting offsets from the feed's `tier`, and `estimate_ability()` applying them
+#' by `meet_tier` when available. Turning the `meet_tier` switch on therefore
+#' looked up an offset fitted for "the feed says low" and applied it to
+#' "the catalogue says T3", which are different populations.
+#'
+#' The direction of that error is the damaging one. The feed's "low" bucket is
+#' contaminated with Diamond League, so the penalty fitted for it is far too
+#' small; applied to correctly identified development meets it under-corrects
+#' them. Half-fixed is worse than either end, and it is why the `meettier` arm
+#' measured only -0.10% on marks -- it was measuring the mismatch, not the fix.
+#'
+#' Fit and application now call this same function, so they cannot diverge.
+#'
+#' @keywords internal
+#' @noRd
+.tier_class_of <- function(dt) {
+  fb <- .tier_class(if ("tier" %in% names(dt)) dt$tier else NA_character_)
+  if (!"meet_tier" %in% names(dt)) return(fb)
+  mapped <- unname(c(T1_elite = "top", T2_strong = "mid",
+                     T3_development = "low")[as.character(dt$meet_tier)])
+  # An unclassified meet keeps the feed code rather than a guess.
+  unname(data.table::fifelse(is.na(mapped), fb, mapped))
+}
+
+#' @keywords internal
+#' @noRd
 .tier_class <- function(tier) {
   t <- toupper(trimws(as.character(tier)))
   out <- rep("mid", length(t))
@@ -642,15 +672,11 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     #
     # Pass `meet_tier` on the results (join it from
     # citiusdata/data/competition_catalogue.parquet) and it is used instead.
-    tc <- if ("meet_tier" %in% names(dt)) {
-      mt <- as.character(dt$meet_tier)
-      out <- c(T1_elite = "top", T2_strong = "mid", T3_development = "low")[mt]
-      # anything unclassified falls back to the feed code rather than to a guess
-      fb <- .tier_class(if ("tier" %in% names(dt)) dt$tier else NA_character_)
-      unname(data.table::fifelse(is.na(out), fb, out))
-    } else {
-      .tier_class(if ("tier" %in% names(dt)) dt$tier else NA_character_)
-    }
+    # Same helper the calibration fits with, so the class an offset was
+    # ESTIMATED for is always the class it is APPLIED to. This mapping used to be
+    # written out here and nowhere else, which is exactly how the two halves came
+    # apart.
+    tc <- .tier_class_of(dt)
     r_adj <- ctx$round[rc]; r_adj[is.na(r_adj)] <- 0
     t_adj <- ctx$tier[tc];  t_adj[is.na(t_adj)] <- 0
     # Prefer the family's own offset where one was fitted; fall back to pooled.

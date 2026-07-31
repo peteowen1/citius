@@ -564,3 +564,49 @@ test_that("one corrupt mark cannot buy an athlete a win probability", {
   mp <- medal_probs(simulate_event(fld, n_sims = 20000, seed = 3))
   expect_lt(mp[athlete_id == "BAD"]$p_gold, min(mp[grepl("^R", athlete_id)]$p_gold))
 })
+
+test_that("tier class is derived identically wherever it is needed", {
+  # The defect this guards: offsets were FITTED from the feed's `tier` and
+  # APPLIED by `meet_tier`, so a value estimated for "the feed says low" landed
+  # on "the catalogue says T3". One helper now serves both.
+  d <- data.table::data.table(
+    tier = c("F", "F", "A", "OW"),
+    meet_tier = c("T1_elite", "T3_development", NA, "T2_strong"))
+  tc <- citius:::.tier_class_of(d)
+  # catalogue wins where it has an opinion...
+  expect_equal(tc[1], "top")     # feed said low (F); catalogue says T1
+  expect_equal(tc[2], "low")
+  expect_equal(tc[4], "mid")
+  # ...and the feed is the fallback where it does not.
+  expect_equal(tc[3], citius:::.tier_class("A"))
+})
+
+test_that("without meet_tier the helper reproduces the feed classification", {
+  d <- data.table::data.table(tier = c("OW", "A", "F", "DF", NA))
+  expect_equal(citius:::.tier_class_of(d), citius:::.tier_class(d$tier))
+})
+
+test_that("a meet_tier column changes the FITTED offsets, not just applied ones", {
+  # Before the fix, adding meet_tier to the input left estimate_context_effects()
+  # completely unchanged, because it read `tier` regardless. That silence is what
+  # made the half-wiring invisible.
+  set.seed(21)
+  n <- 400
+  base <- data.table::data.table(
+    athlete_id = rep(sprintf("a%03d", seq_len(n)), each = 6),
+    event_id = "AT-100Metres-M", round = "Final",
+    tier = rep(c("A", "A", "A", "F", "F", "F"), n),
+    date = Sys.Date() - seq_len(n * 6))
+  ab <- stats::setNames(stats::rnorm(n, 0, 0.03), sprintf("a%03d", seq_len(n)))
+  base[, perf := ab[athlete_id] + stats::rnorm(.N, 0, 0.005)]
+  # The feed calls these all "F"/"A", but the catalogue disagrees on half of
+  # them, and the truth follows the CATALOGUE.
+  base[, meet_tier := rep(c("T1_elite", "T3_development"), length.out = .N)]
+  base[meet_tier == "T3_development", perf := perf - 0.04]
+
+  with_mt <- estimate_context_effects(base, min_cell = 50L)
+  without  <- estimate_context_effects(base[, !"meet_tier"], min_cell = 50L)
+  expect_false(isTRUE(all.equal(unname(with_mt$tier), unname(without$tier))))
+  # And the fitted low-tier penalty should now recover the planted -0.04.
+  expect_lt(abs(unname(with_mt$tier[["low"]]) - (-0.04)), 0.01)
+})
