@@ -8,7 +8,9 @@ estimate_context_effects(
   results,
   min_cell = 2000L,
   shrink = TRUE,
-  per_family = FALSE
+  per_family = FALSE,
+  per_event = FALSE,
+  min_event_cell = 500L
 )
 }
 \arguments{
@@ -31,6 +33,19 @@ medal Brier both degraded and bias worse in every family. Kept behind a flag
 rather than deleted because the underlying observation is real — road's tier
 ordering genuinely inverts — but the parameterisation does not transfer.
 The distinction that DOES survive is \code{\link[=fit_championship_effect]{fit_championship_effect()}}.}
+
+\item{per_event}{Compute per-EVENT round and tier offsets, shrunk toward the
+family offset where one exists and the pooled offset otherwise. Off by
+default and untested at the time of writing. Motivated by a measured split
+that per-family cannot represent: on T1 finals with data richness held
+fixed, the 100m beats a last-5 baseline by 10.8\% while the 400m loses to it
+by 6.4\%, and both are in the \code{sprint} family. \code{per_family} being refuted
+does not settle this — a family offset is wrong for the 400m however well
+it is estimated.}
+
+\item{min_event_cell}{Minimum marks for an event-context cell. Lower than
+\code{min_cell} because event cells are inherently smaller, with the shrinkage
+rather than the threshold doing most of the work.}
 }
 \value{
 A list with \code{round} and \code{tier} named numeric vectors of offsets on

@@ -4,7 +4,13 @@
 \alias{calibrate}
 \title{Estimate every model parameter from observed results}
 \usage{
-calibrate(results, min_races = 8L, min_race_size = 2L)
+calibrate(
+  results,
+  min_races = 8L,
+  min_race_size = 2L,
+  context_per_family = FALSE,
+  context_per_event = FALSE
+)
 }
 \arguments{
 \item{results}{Canonical results with a \code{race_key} column.}
@@ -14,6 +20,12 @@ rather than falling back to the registry prior.}
 
 \item{min_race_size}{Smallest field that may receive a fitted race effect,
 passed to \code{\link[=decompose_races]{decompose_races()}}.}
+
+\item{context_per_family, context_per_event}{Fit round and tier offsets at
+family or event grain as well as pooled, passed to
+\code{\link[=estimate_context_effects]{estimate_context_effects()}}. Both off by default: per-family was refuted by
+the \code{cstack} and \code{cround} arms, and per-event is untested. See that
+function for why the two are not the same bet.}
 }
 \value{
 An object of class \code{citius_calibration}.

@@ -13,7 +13,8 @@ estimate_ability(
   adjust_context = TRUE,
   calibration = NULL,
   robust_sigma = TRUE,
-  sigma_parts = c("estimator", "weight")
+  sigma_parts = c("estimator", "weight"),
+  sigma_mode = c("athlete", "event")
 )
 }
 \arguments{

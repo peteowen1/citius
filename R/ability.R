@@ -213,6 +213,17 @@ fit_half_life <- function(results,
 #'   rather than deleted because the underlying observation is real — road's tier
 #'   ordering genuinely inverts — but the parameterisation does not transfer.
 #'   The distinction that DOES survive is [fit_championship_effect()].
+#' @param per_event Compute per-EVENT round and tier offsets, shrunk toward the
+#'   family offset where one exists and the pooled offset otherwise. Off by
+#'   default and untested at the time of writing. Motivated by a measured split
+#'   that per-family cannot represent: on T1 finals with data richness held
+#'   fixed, the 100m beats a last-5 baseline by 10.8% while the 400m loses to it
+#'   by 6.4%, and both are in the `sprint` family. `per_family` being refuted
+#'   does not settle this — a family offset is wrong for the 400m however well
+#'   it is estimated.
+#' @param min_event_cell Minimum marks for an event-context cell. Lower than
+#'   `min_cell` because event cells are inherently smaller, with the shrinkage
+#'   rather than the threshold doing most of the work.
 #' @param shrink Shrink per-family offsets toward the pooled offset by an
 #'   empirical-Bayes weight whose strength is fitted out of sample. Only
 #'   consulted when `per_family` is on. Note that this fitter validated round
@@ -224,11 +235,13 @@ fit_half_life <- function(results,
 #'   `shrink_k`, so the correction applied is auditable.
 #' @export
 estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
-                                     per_family = FALSE) {
+                                     per_family = FALSE, per_event = FALSE,
+                                     min_event_cell = 500L) {
   dt <- data.table::as.data.table(results)
   dt <- dt[!is.na(perf) & !is.na(event_id)]
   empty <- list(round = c(final = 0), tier = c(top = 0),
-                round_family = NULL, tier_family = NULL, n = 0L)
+                round_family = NULL, tier_family = NULL,
+                round_event = NULL, tier_event = NULL, n = 0L)
   if (!nrow(dt)) return(empty)
 
   dt[, athlete_id := as.character(athlete_id)]
@@ -309,11 +322,78 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
     }
   }
 
+  # PER-EVENT offsets. A family is still a pool of events that behave
+  # differently, and for round and tier the sprint family is the clearest case:
+  # it holds the 100m and the 400m, which share almost nothing about how a heat
+  # relates to a final. Measured on T1 finals with data richness held fixed, the
+  # 100m beats the last-5 baseline by 10.8% while the 400m LOSES to it by 6.4%
+  # and the 400m hurdles by 7.4% -- and per-family cannot see that split at all,
+  # because both events sit in the same cell. Throws are the same story: discus
+  # and javelin fly, shot and hammer do not.
+  #
+  # This is why per-family being refuted does not settle per-event. They fail
+  # differently: the family offset is wrong for the 400m no matter how well it
+  # is estimated, and no amount of shrinkage fixes a cell that is pooling two
+  # unlike things.
+  #
+  # The prior is the family offset where one was fitted and the pooled offset
+  # otherwise, so the chain is event -> family -> pooled and an event with thin
+  # data keeps whatever coarser estimate it would have had. `k` is fitted by the
+  # same out-of-sample validation used for families, at event grain.
+  re <- te <- NULL
+  if (per_event && "family" %in% names(dt) && any(!is.na(dt$family))) {
+    ed <- dt[!is.na(family)]
+    re <- ed[, .(eff = mean(resid), n = .N), by = .(event_id, family, round_class)]
+    re[, ref := eff[round_class == "final"][1], by = event_id]
+    re <- re[!is.na(ref)]
+    if (nrow(re)) re[, eff := eff - ref]
+    re <- re[n >= min_event_cell, .(event_id, family, round_class, offset = eff, n)]
+
+    ed <- merge(ed, r_eff[, .(round_class, r_adj3 = eff)], by = "round_class", all.x = TRUE)
+    ed[is.na(r_adj3), r_adj3 := 0]
+    ed[, resid4 := resid - r_adj3]
+    te <- ed[, .(eff = mean(resid4), n = .N), by = .(event_id, family, tier_class)]
+    te[, ref := eff[tier_class == "top"][1], by = event_id]
+    te <- te[!is.na(ref)]
+    if (nrow(te)) te[, eff := eff - ref]
+    te <- te[n >= min_event_cell, .(event_id, family, tier_class, offset = eff, n)]
+
+    prior_for <- function(x, class_col, fam_tbl, pooled_eff) {
+      p <- pooled_eff$eff[match(x[[class_col]], pooled_eff[[class_col]])]
+      if (!is.null(fam_tbl) && nrow(fam_tbl)) {
+        k <- match(paste(x$family, x[[class_col]]),
+                   paste(fam_tbl$family, fam_tbl[[class_col]]))
+        p[!is.na(k)] <- fam_tbl$offset[k[!is.na(k)]]
+      }
+      p[!is.finite(p)] <- 0
+      p
+    }
+    if (shrink) {
+      if (!is.null(re) && nrow(re)) {
+        re[, pooled := prior_for(re, "round_class", rf, r_eff)]
+        k <- .fit_context_shrink(ed, "round_class", r_eff, group_col = "event_id")
+        re[, raw := offset]
+        re[, `:=`(offset = pooled + (raw - pooled) * n / (n + k), shrink_k = k)]
+        re[, pooled := NULL]
+      }
+      if (!is.null(te) && nrow(te)) {
+        te[, pooled := prior_for(te, "tier_class", tf, t_eff)]
+        k <- .fit_context_shrink(ed, "tier_class", t_eff, resid_col = "resid4",
+                                 group_col = "event_id")
+        te[, raw := offset]
+        te[, `:=`(offset = pooled + (raw - pooled) * n / (n + k), shrink_k = k)]
+        te[, pooled := NULL]
+      }
+    }
+  }
+
   list(
     round = stats::setNames(r_eff$eff, r_eff$round_class),
     tier  = stats::setNames(t_eff$eff, t_eff$tier_class),
     round_family = rf,
     tier_family  = tf,
+    round_event  = re,
+    tier_event   = te,
     n     = nrow(dt)
   )
 }
@@ -345,11 +425,11 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @keywords internal
 #' @noRd
 .fit_context_shrink <- function(fd, class_col, pooled_eff, resid_col = "resid",
-                                min_cell = 200L) {
-  need <- c("athlete_id", "event_id", "family", "perf", class_col)
+                                min_cell = 200L, group_col = "family") {
+  need <- c("athlete_id", "event_id", "family", "perf", class_col, group_col)
   if (!all(need %in% names(fd))) return(Inf)
   ref <- if (class_col == "round_class") "final" else "top"
-  d <- fd[!is.na(family) & !is.na(perf) & !is.na(get(class_col))]
+  d <- fd[!is.na(get(group_col)) & !is.na(perf) & !is.na(get(class_col))]
   if (nrow(d) < 10000L) return(Inf)
 
   d[, is_ref := get(class_col) == ref]
@@ -357,24 +437,27 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
   d <- d[n_ref > 0L & n_oth > 0L]
   if (nrow(d) < 5000L) return(Inf)
 
-  # Per-family offset for each non-reference context, fitted on the SAME data the
-  # caller fitted on, plus the pooled value it will be shrunk toward.
+  # Per-group offset for each non-reference context, fitted on the SAME data the
+  # caller fitted on, plus the value it will be shrunk toward. `group_col` is
+  # "family" or "event_id"; the validation is identical either way, only the
+  # grain of the cell changes.
   fam <- d[is_ref == FALSE, .(eff = mean(get(resid_col)), n = .N),
-           by = c("family", class_col)][n >= min_cell]
+           by = c(group_col, class_col)][n >= min_cell]
   if (!nrow(fam)) return(Inf)
   fam[, pooled := pooled_eff$eff[match(get(class_col), pooled_eff[[class_col]])]]
   fam[!is.finite(pooled), pooled := 0]
 
   target <- d[is_ref == TRUE, .(tgt = mean(perf)), by = .(athlete_id, event_id)]
-  oth <- merge(d[is_ref == FALSE], fam, by = c("family", class_col), all.x = FALSE)
+  oth <- merge(d[is_ref == FALSE], fam, by = c(group_col, class_col), all.x = FALSE)
   if (!nrow(oth)) return(Inf)
 
   # Collapse to one row per athlete-event-cell BEFORE sweeping k. The predictor
   # is mean(perf - adj) and adj is constant within a cell, so the whole sweep
   # reduces to sums of per-cell counts: sum(perf)/m - sum(cnt * adj)/m. Without
   # this the grid re-groups five million rows once per candidate.
-  cells <- oth[, .(cnt = .N, sp = sum(perf)), by = c("athlete_id", "event_id", "family", class_col)]
-  cells <- merge(cells, fam, by = c("family", class_col), all.x = TRUE)
+  cells <- oth[, .(cnt = .N, sp = sum(perf)),
+               by = unique(c("athlete_id", "event_id", group_col, class_col))]
+  cells <- merge(cells, fam, by = c(group_col, class_col), all.x = TRUE)
   tot <- cells[, .(m = sum(cnt), sp = sum(sp)), by = .(athlete_id, event_id)]
   tot <- merge(tot, target, by = c("athlete_id", "event_id"))
   if (!nrow(tot)) return(Inf)
@@ -557,6 +640,23 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     if (!is.null(tfam) && nrow(tfam)) {
       k <- match(paste(fam_c, tc), paste(tfam$family, tfam$tier_class))
       t_adj[!is.na(k)] <- tfam$offset[k[!is.na(k)]]
+    }
+
+    # The event's own offset wins over its family's, for the same reason the
+    # family's wins over the pooled one: it is the least pooled estimate that
+    # still has data behind it. Applied last so the fallback chain reads
+    # event -> family -> pooled in the order the assignments happen.
+    reve <- if (!is.null(calibration$round_event)) calibration$round_event
+            else ctx$round_event
+    teve <- if (!is.null(calibration$tier_event)) calibration$tier_event
+            else ctx$tier_event
+    if (!is.null(reve) && nrow(reve)) {
+      k <- match(paste(dt$event_id, rc), paste(reve$event_id, reve$round_class))
+      r_adj[!is.na(k)] <- reve$offset[k[!is.na(k)]]
+    }
+    if (!is.null(teve) && nrow(teve)) {
+      k <- match(paste(dt$event_id, tc), paste(teve$event_id, teve$tier_class))
+      t_adj[!is.na(k)] <- teve$offset[k[!is.na(k)]]
     }
     dt[, perf := perf - unname(r_adj) - unname(t_adj)]
 

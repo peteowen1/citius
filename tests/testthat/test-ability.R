@@ -351,6 +351,54 @@ test_that("shrink = FALSE leaves the offsets raw", {
   expect_true("shrink_k" %in% names(on_$tier_family))
 })
 
+# Two events in the SAME family whose heats behave oppositely. This is the shape
+# of the real defect: the 100m and the 400m are both `sprint`, and on T1 finals
+# the 100m beats a last-5 baseline by 10.8% while the 400m loses to it by 6.4%.
+# A pooled or per-family offset averages the two into a number that is wrong for
+# both, and no amount of shrinkage repairs a cell that pools unlike things.
+opposite_rounds <- function(n = 500, heat_100 = -0.030, heat_400 = 0.010) {
+  set.seed(4)
+  mk <- function(ev) data.table::data.table(
+    athlete_id = rep(sprintf("a%03d", seq_len(n)), each = 6), event_id = ev,
+    round = rep(c("Final", "Final", "Final", "Heat", "Heat", "Heat"), n),
+    tier = "top", date = rep(Sys.Date() - 1:6, n))
+  d <- data.table::rbindlist(list(mk("AT-100Metres-M"), mk("AT-400Metres-M")))
+  ab <- stats::setNames(stats::rnorm(n, 0, 0.03), sprintf("a%03d", seq_len(n)))
+  d[, perf := ab[athlete_id] + stats::rnorm(.N, 0, 0.005)]
+  d[event_id == "AT-100Metres-M" & round == "Heat", perf := perf + heat_100]
+  d[event_id == "AT-400Metres-M" & round == "Heat", perf := perf + heat_400]
+  d[]
+}
+
+test_that("per-event offsets recover a split that per-family cannot represent", {
+  ctx <- estimate_context_effects(opposite_rounds(), min_cell = 100L,
+                                  min_event_cell = 100L, per_family = TRUE,
+                                  per_event = TRUE, shrink = FALSE)
+  # Absolute tolerances throughout: these are log-scale offsets, so 0.002 is
+  # 0.2% of a mark. expect_equal()'s tolerance is RELATIVE, which on a quantity
+  # this close to zero rejects a recovery that is right to a tenth of a percent.
+  near <- function(x, target, tol = 0.002) {
+    expect_length(x, 1L)
+    expect_lt(abs(x - target), tol)
+  }
+  re <- data.table::as.data.table(ctx$round_event)[round_class == "heat"]
+  skip_if(!nrow(re))
+  near(re[event_id == "AT-100Metres-M"]$offset, -0.030)
+  near(re[event_id == "AT-400Metres-M"]$offset,  0.010)
+
+  # And the coarser grains genuinely cannot: both land near the average of the
+  # two, which is the wrong answer for each event rather than a noisy right one.
+  rf <- data.table::as.data.table(ctx$round_family)[round_class == "heat"]
+  near(rf$offset, -0.010)
+  near(unname(ctx$round[["heat"]]), -0.010)
+})
+
+test_that("per_event is off unless asked for", {
+  ctx <- estimate_context_effects(opposite_rounds(), min_cell = 100L)
+  expect_null(ctx$round_event)
+  expect_null(ctx$tier_event)
+})
+
 test_that("the shrinkage fitter falls back to pooled when it cannot validate", {
   # Too little data to hold out a context: the safe fallback is Inf (pooled
   # only), never an unvalidated per-family offset.

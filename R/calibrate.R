@@ -251,10 +251,16 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
 #'   rather than falling back to the registry prior.
 #' @param min_race_size Smallest field that may receive a fitted race effect,
 #'   passed to [decompose_races()].
+#' @param context_per_family,context_per_event Fit round and tier offsets at
+#'   family or event grain as well as pooled, passed to
+#'   [estimate_context_effects()]. Both off by default: per-family was refuted by
+#'   the `cstack` and `cround` arms, and per-event is untested. See that
+#'   function for why the two are not the same bet.
 #' @return An object of class `citius_calibration`.
 #' @seealso [race_conditions()], [condition_sensitivity()], [estimate_ability()]
 #' @export
-calibrate <- function(results, min_races = 8L, min_race_size = 2L) {
+calibrate <- function(results, min_races = 8L, min_race_size = 2L,
+                      context_per_family = FALSE, context_per_event = FALSE) {
   results <- .drop_best_only(results, "calibrate()")
   dec <- decompose_races(results, min_race_size = min_race_size)
   if (is.null(dec$race) || !nrow(dec$race)) {
@@ -351,8 +357,12 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L) {
              error = function(e) NULL)
   } else NULL
 
-  cfam <- tryCatch(estimate_context_effects(results),
-                   error = function(e) list(round_family = NULL, tier_family = NULL))
+  cfam <- tryCatch(estimate_context_effects(
+                     results,
+                     per_family = isTRUE(context_per_family),
+                     per_event  = isTRUE(context_per_event)),
+                   error = function(e) list(round_family = NULL, tier_family = NULL,
+                                            round_event = NULL, tier_event = NULL))
   ctx <- .context_stats(d)
   athlete <- .athlete_sensitivity(d, ev)
   tail_fit <- fit_tail_df(list(data = d))
@@ -376,6 +386,7 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L) {
     # that behave oppositely -- the low-tier penalty is -0.45% for road and
     # -3.59% for throws -- so a single value mis-adjusts both ends.
     round_family = cfam$round_family, tier_family = cfam$tier_family,
+    round_event = cfam$round_event, tier_event = cfam$tier_event,
     # How far championship spread departs from pooled spread, per family. sigma
     # is fitted across the whole history but the forecast targets a top-tier
     # final, and those are different distributions -- narrower for field events,
