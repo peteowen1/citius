@@ -379,3 +379,16 @@ test_that("a collapsed condition sensitivity warns instead of failing silently",
     succeed("sensitivity identified on this fixture; collapse guard not exercised")
   }
 })
+
+test_that("calibrate fits foul_round by event_id and round_class", {
+  sim <- simulate_races()
+  dt <- sim$data
+  dt$nomark_observable <- TRUE
+  # Set higher NA rate in finals vs heats
+  dt[round == "F" & seq_len(.N) %% 5 == 0, perf := NA_real_]
+  cal <- suppressMessages(calibrate(dt, min_races = 4L))
+  expect_false(is.null(cal$foul_round))
+  fr <- data.table::as.data.table(cal$foul_round)
+  expect_true(all(c("event_id", "round_class", "foul_rate") %in% names(fr)))
+})
+

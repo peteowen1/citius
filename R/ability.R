@@ -178,7 +178,19 @@ fit_half_life <- function(results,
   reg <- .citius_event_registry
   fam <- reg$family[match(event_id, reg$event_id)]
   hl <- data.table::as.data.table(half_life)
-  out <- hl$half_life[match(fam, hl$family)]
+
+  out <- if ("event_id" %in% names(hl)) {
+    hl$half_life[match(event_id, hl$event_id)]
+  } else {
+    hl$half_life[match(fam, hl$family)]
+  }
+  if ("event_id" %in% names(hl) && "family" %in% names(hl)) {
+    na_idx <- which(!is.finite(out))
+    if (length(na_idx)) {
+      fam_val <- hl$half_life[match(fam[na_idx], hl$family)]
+      out[na_idx] <- fam_val
+    }
+  }
   out[!is.finite(out)] <- if (nrow(hl)) stats::median(hl$half_life) else default
   out
 }
@@ -517,15 +529,13 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
   # semi-final results (4.79% of the harvest) were pooled into the reference
   # context that every other round's offset is measured against.
   out[grepl("^F", r) | grepl("FINAL", r)] <- "final"
-  out[grepl("^H", r) | grepl("HEAT", r)] <- "heat"
+  out[grepl("^H", r) | grepl("HEAT", r) | grepl("QUAL|Q[0-9]|CE", r)] <- "heat"
   out[grepl("^QF", r) | grepl("QUARTER", r)] <- "quarter"
   out[grepl("^SF", r) | grepl("SEMI", r)] <- "semi"
   out[is.na(r)] <- "other"
   out
 }
 
-#' @keywords internal
-#' @noRd
 #' Tier class for a results table, preferring the catalogue over the feed
 #'
 #' THE ONE PLACE TIER CLASS IS DERIVED. It previously happened in three
@@ -615,7 +625,9 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                              robust_sigma = TRUE,
                              sigma_parts = c("estimator", "weight"),
                              sigma_mode = c("athlete", "event"),
-                             only = NULL) {
+                             only = NULL, peak_gamma = 0,
+                             robust_location = FALSE,
+                             decouple_peak = FALSE) {
   if (!nrow(results)) {
     return(data.table::data.table(
       athlete_id = character(), event_id = character(), ability = numeric(),
@@ -629,16 +641,24 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   if (!nrow(dt)) {
     return(estimate_ability(results[0], as_of, half_life, trim_tactical,
                             min_results, adjust_context, calibration,
-                            robust_sigma, sigma_parts))
+                            robust_sigma, sigma_parts, only, peak_gamma,
+                            robust_location, decouple_peak))
   }
 
   dt[, athlete_id := as.character(athlete_id)]
   # Half-life may be a scalar or a fitted per-family table from fit_half_life().
-  dt[, hl := .event_half_life(event_id, half_life)]
+  hl_spec <- if (!is.null(calibration) && !is.null(calibration$half_life) && identical(half_life, 540)) calibration$half_life else half_life
+  dt[, hl := .event_half_life(event_id, hl_spec)]
   dt[, w := result_weight(date, tier = if ("tier" %in% names(dt)) tier else NA_character_,
                           round = if ("round" %in% names(dt)) round else NA_character_,
                           as_of = as_of, half_life = hl,
                           calibration = calibration)]
+
+  if (is.numeric(peak_gamma) && peak_gamma > 0) {
+    dt[, .q := data.table::frank(perf, ties.method = "first") / .N, by = .(athlete_id, event_id)]
+    dt[, w := w * (.q^peak_gamma)]
+    dt[, .q := NULL]
+  }
 
   reg <- .citius_event_registry[, c("event_id", "tactical", "cv_prior")]
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
@@ -650,7 +670,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   if (!is.null(calibration) && !is.null(calibration$events)) {
     ti <- calibration$events[, c("event_id", "tactical_index", "calibrated")]
     dt <- merge(dt, ti, by = "event_id", all.x = TRUE, sort = FALSE)
-    dt[isTRUE(calibrated) & is.finite(tactical_index), tactical := tactical_index < -0.5]
+    dt[calibrated %in% TRUE & is.finite(tactical_index), tactical := tactical_index < -0.5]
   }
 
   if (isTRUE(adjust_context)) {
@@ -878,33 +898,37 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
 
   ab <- dt[, {
     ok <- w > 0
-    mu <- if (sum(ok)) stats::weighted.mean(perf[ok], w[ok]) else NA_real_
+    mu <- if (sum(ok)) {
+      if (isTRUE(robust_location) && !isTRUE(decouple_peak)) {
+        sig_ref <- data.table::first(cv_prior)
+        if (!is.finite(sig_ref) || sig_ref <= 0) sig_ref <- 0.02
+        .asymmetric_huber_mean(perf[ok], w[ok], sig_target = sig_ref, k = 2.5)
+      } else {
+        stats::weighted.mean(perf[ok], w[ok])
+      }
+    } else NA_real_
+
+    mu_peak <- if (sum(ok) && isTRUE(decouple_peak)) {
+      sig_ref <- data.table::first(cv_prior)
+      if (!is.finite(sig_ref) || sig_ref <= 0) sig_ref <- 0.02
+      .asymmetric_huber_mean(perf[ok], w[ok], sig_target = sig_ref, k = 2.5)
+    } else mu
+
     s  <- .weighted_sd(perf[ok], w[ok])
-    # Robust alternative, used when `robust_sigma = TRUE`. Kept alongside rather
-    # than replacing `s` so the two can be compared on identical inputs.
     s_rob <- .weighted_upper_sd(perf[ok], w[ok])
-    # The effective age of the estimate: the weighted mean age under the same
-    # weights that produced it. This is what [project_ability()] must measure
-    # from. Using an unweighted career mean instead double-counts ageing —
-    # recency decay already makes the estimate reflect current form, so
-    # shifting it by the gap from a junior-heavy career mean applies the
-    # improvement a second time.
     a_ref <- if ("age" %in% names(.SD) && sum(ok & !is.na(age))) {
       stats::weighted.mean(age[ok & !is.na(age)], w[ok & !is.na(age)])
     } else NA_real_
-    .(ability_raw = mu,
-      sigma_raw   = s,
-      sigma_rob   = s_rob,
-      n           = .N,
-      # Total weight is *absolute* evidence and is what shrinkage must use.
-      # n_eff below measures only how evenly weight is spread, so an athlete
-      # whose results are all twenty years old keeps a high n_eff — their
-      # weights are uniformly tiny — and escapes shrinkage entirely.
-      w_total     = sum(w),
-      n_eff       = sum(w)^2 / sum(w^2),
-      age_ref     = a_ref,
-      cv_prior    = data.table::first(cv_prior),
-      last_date   = max(date, na.rm = TRUE))
+    .(ability_raw      = mu,
+      ability_raw_peak = mu_peak,
+      sigma_raw        = s,
+      sigma_rob        = s_rob,
+      n                = .N,
+      w_total          = sum(w),
+      n_eff            = sum(w)^2 / sum(w^2),
+      age_ref          = a_ref,
+      cv_prior         = data.table::first(cv_prior),
+      last_date        = max(date, na.rm = TRUE))
   }, by = .(athlete_id, event_id)]
 
   ab <- ab[n >= min_results & !is.na(ability_raw)]
@@ -1064,27 +1088,19 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # their own, rather than needing a hand-set staleness cutoff.
   ab[, shrinkage := kappa / (w_total + kappa)]
   ab[, ability := (1 - shrinkage) * ability_raw + shrinkage * prior_mu]
+  if (isTRUE(decouple_peak) || "ability_raw_peak" %in% names(ab)) {
+    ab[, ability_peak := (1 - shrinkage) * ability_raw_peak + shrinkage * prior_mu]
+  }
 
-  # Standard error of the ability estimate — the empirical-Bayes posterior sd.
-  # This is *not* the same as sigma: sigma is how much an athlete varies around
-  # their own true ability, while this is how little we know that ability. Both
-  # belong in a forecast. Omitting it makes the simulator treat a point estimate
-  # as exact, which shows up as over-confidence in fields where performance
-  # noise is small relative to what we do not know.
   ab[, ability_se := sigma / sqrt(w_total + kappa)]
-  # `prior_mu` is returned so the prior can be re-conditioned afterwards without
-  # refitting. It enters the shrinkage linearly, so swapping it is exact:
-  #   ability_new = ability_old + shrinkage * (prior_new - prior_old)
-  # See `condition_prior()`.
 
-  # Drop the athletes that were carried only so the population quantities --
-  # `prior_mu`, `sigma_between` and the robust-sigma scale `k` -- came out
-  # exactly as they would have on the full history. They were never requested.
   if (!is.null(only)) ab <- ab[as.character(athlete_id) %in% as.character(only)]
 
-  ab[, c("athlete_id", "event_id", "ability", "ability_raw", "sigma",
-         "ability_se", "n", "n_eff", "w_total", "shrinkage", "prior_mu",
-         "age_ref", "last_date"), with = FALSE][]
+  cols <- c("athlete_id", "event_id", "ability", "ability_raw", "sigma",
+            "ability_se", "n", "n_eff", "w_total", "shrinkage", "prior_mu",
+            "age_ref", "last_date")
+  if ("ability_peak" %in% names(ab)) cols <- c(cols, "ability_peak")
+  ab[, cols, with = FALSE][]
 }
 
 
@@ -1138,6 +1154,7 @@ condition_prior <- function(ability, field = NULL, weight = 1) {
   ab[.nf < 2L | !is.finite(.fp), .fp := prior_mu]
   ab[, .new_mu := prior_mu + weight * (.fp - prior_mu)]
   ab[, ability := ability + shrinkage * (.new_mu - prior_mu)]
+  if ("ability_peak" %in% names(ab)) ab[, ability_peak := ability_peak + shrinkage * (.new_mu - prior_mu)]
   ab[, prior_mu := .new_mu]
   ab[, c(".fp", ".nf", ".new_mu") := NULL]
   ab[]
@@ -1280,3 +1297,17 @@ apply_momentum <- function(ability, momentum, calibration) {
   ab[, ability := ability + b * momentum_now]
   ab[]
 }
+
+.asymmetric_huber_mean <- function(x, w, sig_target = 0.02, k = 2.5) {
+  if (!length(x) || sum(w) <= 0) return(NA_real_)
+  mu <- stats::weighted.mean(x, w)
+  if (length(x) < 3L || !is.finite(sig_target) || sig_target <= 0) return(mu)
+  dev <- x - mu
+  cutoff <- -k * sig_target
+  bad <- dev < cutoff
+  if (!any(bad)) return(mu)
+  w_rob <- w
+  w_rob[bad] <- w[bad] * (abs(cutoff) / abs(dev[bad]))
+  stats::weighted.mean(x, w_rob)
+}
+

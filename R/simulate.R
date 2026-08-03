@@ -128,7 +128,9 @@ condition_sensitivity <- function(ability, event_id, calibration = NULL) {
 #' @export
 simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
                            df = NULL, foul_prob = NULL, taper = 0,
-                           form_sd = NULL, calibration = NULL, seed = NULL) {
+                           form_sd = NULL, calibration = NULL,
+                           condition_prior_weight = 0.0,
+                           round_class = "final", seed = NULL) {
   ab <- data.table::as.data.table(ability)
   req <- c("athlete_id", "event_id", "ability", "sigma")
   missing <- setdiff(req, names(ab))
@@ -136,6 +138,10 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
     cli::cli_abort("{.arg ability} is missing required column{?s}: {.field {missing}}.")
   }
   ab <- ab[!is.na(ability) & !is.na(sigma)]
+  if (is.numeric(condition_prior_weight) && condition_prior_weight > 0 &&
+      all(c("ability_raw", "shrinkage", "prior_mu") %in% names(ab))) {
+    ab <- condition_prior(ab, field = ab$athlete_id, weight = condition_prior_weight)
+  }
   n_ath <- nrow(ab)
   if (n_ath < 2L) cli::cli_abort("Need at least 2 entrants with a valid ability estimate.")
 
@@ -157,11 +163,7 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
   orientation <- .citius_event_registry$orientation[reg_idx]
   if (is.na(orientation)) orientation <- -1L
   if (is.null(foul_prob)) {
-    # The measured rate of recording no valid performance. This is *not* a
-    # technical-events-only concern: a field athlete fouling out and a distance
-    # runner failing to finish are the same thing for ranking purposes, and
-    # championship distance races carry double-digit DNF rates that materially
-    # affect medal probabilities. Both are drawn from the same measured rate.
+    # The measured rate of recording no valid performance across the event.
     foul_prob <- .calibrated_value(calibration, event_id, "foul_rate", NA_real_)
     if (!is.finite(foul_prob)) {
       foul_prob <- 0
@@ -243,24 +245,35 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
   form_error <- if (form_sd > 0) {
     matrix(stats::rnorm(n_sims * n_ath, sd = form_sd), nrow = n_sims, ncol = n_ath)
   } else 0
-
-  perf <- matrix(ab$ability, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
+  ab_sim <- if ("ability_peak" %in% names(ab)) ab$ability_peak else ab$ability
+  perf <- matrix(ab_sim, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
     est_error + form_error +
     noise * matrix(ab$sigma, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
     outer(cond, sens) + taper
 
+  fouled <- NULL
   if (foul_prob > 0) {
     fouled <- matrix(stats::runif(n_sims * n_ath) < foul_prob,
                      nrow = n_sims, ncol = n_ath)
     perf[fouled] <- -Inf   # no valid mark: ranks last, does not read as a slow mark
   }
 
+  perf_std <- if ("ability_peak" %in% names(ab)) {
+    p_std <- matrix(ab$ability, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
+      est_error + form_error +
+      noise * matrix(ab$sigma, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
+      outer(cond, sens) + taper
+    if (!is.null(fouled)) p_std[fouled] <- -Inf
+    colnames(p_std) <- ab$athlete_id
+    p_std
+  } else NULL
+
   rank <- .rank_desc(perf)
   colnames(perf) <- colnames(rank) <- ab$athlete_id
 
   structure(
     list(
-      perf = perf, rank = rank, ability = ab, event_id = event_id,
+      perf = perf, perf_std = perf_std, rank = rank, ability = ab, event_id = event_id,
       orientation = orientation, n_sims = n_sims,
       settings = list(condition_sd = condition_sd, df = df,
                       foul_prob = foul_prob, taper = taper, form_sd = form_sd)
@@ -281,9 +294,9 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
 medal_probs <- function(sim, top_n = 8L) {
   stopifnot(inherits(sim, "citius_sim"))
   r <- sim$rank
-  p <- sim$perf
+  p_std <- if (!is.null(sim$perf_std)) sim$perf_std else sim$perf
 
-  med_perf <- apply(p, 2L, function(x) stats::median(x[is.finite(x)]))
+  med_perf <- apply(p_std, 2L, function(x) stats::median(x[is.finite(x)]))
 
   out <- data.table::data.table(
     athlete_id  = colnames(r),

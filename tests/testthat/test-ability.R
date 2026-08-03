@@ -214,6 +214,16 @@ test_that("estimate_ability accepts a fitted half-life table", {
   expect_equal(ab_tbl$ability, ab_num$ability)
 })
 
+test_that("estimate_ability accepts per-event half-life tables", {
+  h <- synthetic_history(n_athletes = 10, n_each = 10, event_id = "AT-100Metres-M")
+  tbl_eve <- data.table::data.table(family = "sprint", event_id = "AT-100Metres-M",
+                                    half_life = 90, mae = 0.01, n = 100L)
+  ab_eve <- estimate_ability(h, half_life = tbl_eve, adjust_context = FALSE)
+  ab_90  <- estimate_ability(h, half_life = 90, adjust_context = FALSE)
+  expect_equal(ab_eve$ability, ab_90$ability)
+})
+
+
 test_that("stale athletes shrink to the event mean without a cutoff", {
   # Shrinking on total weight rather than n_eff is what makes this work: many
   # old results carry little evidence, so the estimate regresses on its own.
@@ -648,3 +658,67 @@ test_that("only= with an unknown athlete returns nothing rather than everything"
   out <- estimate_ability(d, adjust_context = FALSE, only = "no-such-athlete")
   expect_equal(nrow(out), 0L)
 })
+
+test_that(".round_class matches qualification round labels into heat class", {
+  rounds <- c("Qualification - Group", "Q1", "Q2", "CE", "Heat 1", "Final")
+  rc <- citius:::.round_class(rounds)
+  expect_equal(rc[1:5], rep("heat", 5))
+  expect_equal(rc[6], "final")
+})
+
+test_that("calibrated tactical_index correctly triggers tactical trimming on vectors", {
+  set.seed(12)
+  honest <- to_perf(stats::rnorm(20, 215, 2), -1L)
+  tactical_marks <- to_perf(c(240, 245, 250), -1L)
+  h <- data.table::data.table(
+    athlete_id = rep(c("a", "b"), each = 23),
+    event_id = "AT-CustomTactical",
+    date = Sys.Date() - rep(1:23, 2),
+    perf = c(honest, tactical_marks, honest, tactical_marks),
+    tier = "OW", round = "F"
+  )
+  cal_events <- data.table::data.table(
+    event_id = "AT-CustomTactical",
+    tactical_index = -0.85, # negative skew indicates tactical event
+    calibrated = TRUE
+  )
+  cal <- list(events = cal_events)
+  res <- estimate_ability(h, trim_tactical = 0.25, adjust_context = FALSE, calibration = cal)
+  expect_equal(nrow(res), 2L)
+})
+
+test_that("peak_gamma > 0 upweights peak marks over routine marks", {
+  set.seed(42)
+  # Athlete with 1 peak mark (9.80) and 9 routine marks (10.20)
+  times <- c(9.80, rep(10.20, 9))
+  h <- data.table::data.table(
+    athlete_id = "sprinter",
+    event_id = "AT-100Metres-M",
+    date = Sys.Date() - 1:10,
+    perf = to_perf(times, -1L),
+    tier = "OW", round = "F"
+  )
+  ab_flat <- estimate_ability(h, adjust_context = FALSE, peak_gamma = 0)
+  ab_peak <- estimate_ability(h, adjust_context = FALSE, peak_gamma = 1.0)
+  # Ability with peak_gamma > 0 should be faster (closer to 9.80) than unweighted flat ability
+  expect_gt(ab_peak$ability, ab_flat$ability)
+})
+
+test_that("robust_location = TRUE protects ability against extreme bad-side mark outliers", {
+  set.seed(42)
+  times <- c(rep(10.00, 5), 12.50)
+  h <- data.table::data.table(
+    athlete_id = "sprinter",
+    event_id = "AT-100Metres-M",
+    date = Sys.Date() - 1:6,
+    perf = to_perf(times, -1L),
+    tier = "OW", round = "F"
+  )
+  ab_std <- estimate_ability(h, adjust_context = FALSE, robust_location = FALSE)
+  ab_rob <- estimate_ability(h, adjust_context = FALSE, robust_location = TRUE)
+  expect_gt(ab_rob$ability, ab_std$ability)
+})
+
+
+
+

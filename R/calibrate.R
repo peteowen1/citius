@@ -340,6 +340,16 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
   fouls <- raw[, .(foul_rate = mean(is.na(perf))), by = event_id]
   ev <- merge(ev, fouls, by = "event_id", all.x = TRUE)
 
+  foul_round <- if ("round" %in% names(raw)) {
+    raw[, .rc := .round_class(round)]
+    fr <- raw[!is.na(.rc), .(foul_rate = mean(is.na(perf)), n_obs = .N), by = .(event_id, round_class = .rc)]
+    raw[, .rc := NULL]
+    fr <- merge(fr, fouls[, .(event_id, global_foul = foul_rate)], by = "event_id", all.x = TRUE)
+    fr[, foul_rate := (n_obs * foul_rate + 30 * global_foul) / (n_obs + 30)]
+    fr[, global_foul := NULL]
+    fr[]
+  } else NULL
+
   if (nrow(ev) && all(ev$foul_rate == 0, na.rm = TRUE)) {
     cli::cli_warn(
       c("No missing performances anywhere; no-mark rates will all be zero.",
@@ -370,6 +380,7 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
 
   structure(list(
     events = ev[],
+    foul_round = foul_round,
     round = ctx$round,
     tier = ctx$tier,
     ability = dec$ability,
