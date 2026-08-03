@@ -32,11 +32,20 @@ summary_games_economic_dominance <- function(games = NULL, top_n = 20L, min_gold
   
   econ_path <- system.file("extdata", "country_economic_history.rds", package = "citius")
   if (!file.exists(econ_path) || file.info(econ_path)$size == 0) {
-    local_path <- "C:/dev/citiusverse/citiusdata/data/country_economic_history.rds"
+    # Development fallback, configurable rather than hardcoded to one machine.
+    # The packaged copy under inst/extdata is the normal path and is now
+    # committed, so this should only fire in a working tree that has not run
+    # the harvest yet.
+    local_path <- getOption("citius.data_dir",
+                            "C:/dev/citiusverse/citiusdata/data")
+    local_path <- file.path(local_path, "country_economic_history.rds")
     if (file.exists(local_path)) {
       econ_path <- local_path
     } else {
-      cli::cli_abort("Country economic history dataset not found. Run harvest_gdp_population.R first.")
+      cli::cli_abort(c(
+        "Country economic history dataset not found.",
+        "i" = "Run {.file citiusdata/scripts/harvest_gdp_population.R}, or set
+               {.code options(citius.data_dir=)} to the directory holding it."))
     }
   }
   
@@ -243,5 +252,14 @@ summary_games_economic_dominance <- function(games = NULL, top_n = 20L, min_gold
   
   all_cols <- c(base_cols, method_cols)
   res <- merged[, ..all_cols]
-  utils::head(res, top_n)
+  res <- utils::head(res, top_n)
+
+  # Carry the exclusions on the returned object, not only as a console warning.
+  # The denominator is built from resolved nations alone, so a caller that
+  # suppresses warnings -- a Quarto render, a cached report, a Shiny app --
+  # would otherwise get shares silently shifted by dropped competitors with no
+  # trace in the value it holds.
+  data.table::setattr(res, "unresolved_nations", unresolved)
+  data.table::setattr(res, "n_unresolved", length(unresolved))
+  res
 }

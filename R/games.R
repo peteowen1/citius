@@ -145,11 +145,20 @@ multisport_games_taxonomy <- function() {
 get_games_medals <- function(games = NULL, year = NULL, nation = NULL) {
   rds_path <- system.file("extdata", "multisport_medal_tables.rds", package = "citius")
   if (!file.exists(rds_path) || file.info(rds_path)$size == 0) {
-    local_path <- "C:/dev/citiusverse/citiusdata/data/multisport_medal_tables.rds"
+    # Development fallback, configurable rather than pinned to one machine.
+    # Same pattern as summary_games_economic_dominance(); both are patched
+    # together because a path duplicated across callers is how the last
+    # hardcoded-path fix got half-applied.
+    local_path <- file.path(getOption("citius.data_dir",
+                                      "C:/dev/citiusverse/citiusdata/data"),
+                            "multisport_medal_tables.rds")
     if (file.exists(local_path)) {
       rds_path <- local_path
     } else {
-      cli::cli_abort("Multi-sport medal tables dataset not found. Run harvest_multisport_medal_tables.R first.")
+      cli::cli_abort(c(
+        "Multi-sport medal tables dataset not found.",
+        "i" = "Run {.file citiusdata/scripts/harvest_multisport_medal_tables.R}, or set
+               {.code options(citius.data_dir=)} to the directory holding it."))
     }
   }
   
