@@ -135,7 +135,12 @@ test_that("calibrate() attaches the indoor and season offsets it fits", {
 
   # Synthetic data has no missing marks, so the no-mark-rate warning is expected
   # and unrelated to what this test asserts.
-  cal <- suppressWarnings(calibrate(d, min_races = 1L, min_race_size = 1L))
+  # Opted in explicitly. Both default to FALSE because the pair was measured and
+  # rejected on 2026-08-04 (gold Brier +0.74% across 948 finals), but the WIRING
+  # must still work -- the original defect was code reading a calibration element
+  # nothing could set, and a default-off flag must not quietly restore that.
+  cal <- suppressWarnings(calibrate(d, min_races = 1L, min_race_size = 1L,
+                                    context_season = TRUE, context_indoor = TRUE))
 
   # 1. The elements exist rather than being silently NULL.
   expect_false(is.null(cal$season))
@@ -186,4 +191,27 @@ test_that("the season offset is a phase, not an intercept shift", {
   # Weighted mean of the offsets within family-hemisphere is zero by construction.
   chk <- s[, .(wm = stats::weighted.mean(offset, n)), by = .(family, hemi)]
   expect_true(all(abs(chk$wm) < 1e-12))
+})
+
+
+test_that("season and indoor stay OFF unless explicitly asked for", {
+  # The A/B on 2026-08-04 rejected the pair: gold Brier +0.74% across 948 scored
+  # finals (p = 0.00019), +2.02% on majors. The wiring is kept because the
+  # original defect was unreachable code, but a default calibration must not
+  # apply a rejected adjustment -- otherwise the next rebaseline adopts it
+  # silently and the regression arrives with no commit that caused it.
+  set.seed(21)
+  months <- rep(c(5L, 6L, 9L, 10L), each = 6L)
+  d <- data.table::CJ(athlete_id = paste0("c", 1:200), k = seq_along(months))
+  d[, month := months[k]]
+  d[, event_id := "AT-100Metres-M"]
+  d[, date := as.Date(sprintf("2021-%02d-%02d", month, 2L + ((k - 1L) %% 6L) * 4L))]
+  d[, venue_country := "GBR"][, indoor := FALSE]
+  d[, round := "Final"][, tier := "OW"]
+  d[, race_key := paste(event_id, date)]
+  d[, perf := -log(10) + stats::rnorm(.N, 0, 0.01)]
+
+  cal <- suppressWarnings(calibrate(d, min_races = 1L, min_race_size = 1L))
+  expect_null(cal$season)
+  expect_null(cal$indoor)
 })

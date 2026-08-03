@@ -256,11 +256,38 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
 #'   [estimate_context_effects()]. Both off by default: per-family was refuted by
 #'   the `cstack` and `cround` arms, and per-event is untested. See that
 #'   function for why the two are not the same bet.
+#' @param context_season,context_indoor Fit the seasonal-phase and
+#'   indoor/outdoor offsets, via [fit_season_effect()] and
+#'   [fit_indoor_effect()]. **Both off by default because the pair was measured
+#'   and rejected**, not because they are untested.
+#'
+#'   A 250-meet A/B on 2026-08-04 — two arms off one calibration differing in
+#'   exactly these two elements — made placings significantly *worse* in every
+#'   population while improving marks: gold Brier +2.02% on majors
+#'   (p = 0.00059), +0.74% across all 948 scored finals (p = 0.00019), with the
+#'   favourite-wins rate falling from 50.3% to 49.6%. Marks moved the other way,
+#'   significantly on T2 (MAE centred -0.61%, p = 2.4e-05).
+#'
+#'   The earlier out-of-sample result that motivated the season offsets
+#'   (-0.66% relative RMSE, 2026-07-30) measured **marks only** and never tested
+#'   placings, which is where the cost lands.
+#'
+#'   Likely mechanism, already documented for `momentum` in [estimate_ability()]:
+#'   stripping a component from history without adding it back for the target
+#'   race forecasts every athlete in an average state of readiness, which is
+#'   wrong for exactly the athletes who peak for a championship. Seasonal phase
+#'   and current form are confounded, so removing the season strips form signal
+#'   with it.
+#'
+#'   **The A/B moved both elements together**, so the damage is not attributed
+#'   between them; separating them needs its own run. Turn either on only to
+#'   re-measure, never to deploy.
 #' @return An object of class `citius_calibration`.
 #' @seealso [race_conditions()], [condition_sensitivity()], [estimate_ability()]
 #' @export
 calibrate <- function(results, min_races = 8L, min_race_size = 2L,
-                      context_per_family = FALSE, context_per_event = FALSE) {
+                      context_per_family = FALSE, context_per_event = FALSE,
+                      context_season = FALSE, context_indoor = FALSE) {
   results <- .drop_best_only(results, "calibrate()")
   dec <- decompose_races(results, min_race_size = min_race_size)
   if (is.null(dec$race) || !nrow(dec$race)) {
@@ -416,14 +443,15 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
     # note above `wind` describes — a fitted coefficient sitting unused because
     # measurement and application live in different files — so they are attached
     # HERE, next to the other context effects, rather than by a pipeline script.
-    indoor = if ("indoor" %in% names(results)) {
+    indoor = if (isTRUE(context_indoor) && "indoor" %in% names(results)) {
       tryCatch(fit_indoor_effect(results), error = function(e) NULL)
     } else NULL,
     # Needs `venue_country` to split the hemispheres. Without it every mark
     # classifies northern and southern athletes get a calendar six months out of
     # phase, so absence of the column is a reason to fit nothing, not a reason to
     # fit a pooled calendar.
-    season = if (all(c("date", "venue_country") %in% names(results))) {
+    season = if (isTRUE(context_season) &&
+                 all(c("date", "venue_country") %in% names(results))) {
       tryCatch(fit_season_effect(results), error = function(e) NULL)
     } else NULL,
     min_races = min_races,
