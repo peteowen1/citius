@@ -626,8 +626,18 @@ fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, 
   d[, tier_class := .tier_class_of(d)]
 
   mk <- function(by_col, ref) {
-    s <- d[, .(offset = mean(resid + c_r), sd = stats::sd(resid), n = .N),
-           by = c(by_col)]
+    # `offset` telescopes to perf - a_i whether or not c_r was fitted, so it can
+    # use every row. `sd` cannot: rows from singleton or sub-min_race_size races
+    # never got a fitted c_r, so their residual still contains the whole race
+    # shock. Pooling them inflates the sd by exactly the quantity condition_sd
+    # measures separately -- the same trap already guarded for sigma_within and
+    # in fit_tail_df(). It matters because these sd values ARE the round
+    # precisions, and heats are likelier than finals to be only partly
+    # harvested, so the bias runs along the very contrast being measured.
+    ds <- if ("shared" %in% names(d)) d[shared == TRUE] else d
+    sds <- ds[, .(sd = stats::sd(resid)), by = c(by_col)]
+    s <- d[, .(offset = mean(resid + c_r), n = .N), by = c(by_col)]
+    s <- merge(s, sds, by = by_col, all.x = TRUE)
     ref_off <- s[get(by_col) == ref]$offset
     if (!length(ref_off)) ref_off <- max(s$offset, na.rm = TRUE)
     s[, offset := offset - ref_off]

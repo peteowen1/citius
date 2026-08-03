@@ -40,12 +40,20 @@ fit_wind_effect <- function(results, min_n = 200L, max_wind = 6) {
   # Centre within athlete-event: removes ability, so the slope is the effect of
   # wind on the *same* athlete rather than a comparison across athletes.
   dt[, dev := perf - mean(perf), by = .(athlete_id, event_id)]
+  # BOTH sides must be centred within athlete-event, not just the outcome.
+  # Regressing a within-centred `dev` on a RAW `wind` is not the within
+  # estimator: with y_it = a_i + b*x_it + e_it it recovers
+  # b * Var(x - xbar_i) / Var(x), attenuated by however much athletes differ in
+  # mean wind exposure -- and they do, because athletes cluster by home circuit
+  # and venues have systematically different wind climates. fit_numeric_effect()
+  # in context.R already centres both; this did not.
+  dt[, wdev := wind - mean(wind), by = .(athlete_id, event_id)]
 
   out <- dt[, {
-    if (.N < min_n || stats::sd(wind) < 0.2) {
+    if (.N < min_n || stats::sd(wdev) < 0.2) {
       .(beta = NA_real_, n = .N, r2 = NA_real_)
     } else {
-      f <- stats::lm(dev ~ wind)
+      f <- stats::lm(dev ~ wdev)
       .(beta = unname(stats::coef(f)[2]), n = .N,
         r2 = summary(f)$r.squared)
     }

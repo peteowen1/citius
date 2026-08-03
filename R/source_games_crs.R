@@ -65,7 +65,10 @@ parse_crs_export <- function(path) {
 
   reg <- .citius_event_registry[, c("event_id", "orientation")]
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
-  dt[, perf := to_perf(mark, data.table::fifelse(is.na(orientation), -1L, orientation))]
+  # NA orientation must stay NA. Defaulting an unmatched event to -1L
+  # (time-event) silently produced a WRONG-SIGNED perf for unmatched FIELD
+  # events, undoing the guarantee match_event() exists to give.
+  dt[, perf := to_perf(mark, orientation)]
 
   # Athletes have no stable id in the export; the name is the only key.
   dt[, athlete_id := athlete_name]
@@ -77,11 +80,22 @@ parse_crs_export <- function(path) {
 #' @keywords internal
 #' @noRd
 .crs_sex <- function(route) {
-  m <- regmatches(route, regexpr("/(M|W|X)/", route))
-  out <- gsub("/", "", m)
-  out[!nzchar(out)] <- NA_character_
-  if (length(out) < length(route)) out <- rep_len(out, length(route))
-  out[out == "X"] <- NA_character_          # mixed relays have no single sex
+  # `regmatches(x, regexpr(...))` DROPS non-matching elements rather than
+  # returning NA in place, so the result is shorter than the input whenever any
+  # route lacks a sex segment -- and `rep_len` then recycles from the start,
+  # silently shifting a valid-looking "M" or "W" onto every row after the gap.
+  # Verified: routes M, W, <none>, W, M returned M, W, W, M, M.
+  #
+  # A wrong-but-plausible sex is the worst possible failure here, because
+  # match_event() returning NA is the package's only guard against silent
+  # corruption and this routed straight around it -- a women's 200 Freestyle
+  # would be filed as men's. Assign back by position, the way .crs_date() below
+  # already does.
+  pos <- regexpr("/(M|W|X)/", route)
+  out <- rep(NA_character_, length(route))
+  hit <- pos > 0
+  if (any(hit)) out[hit] <- gsub("/", "", regmatches(route, pos))
+  out[!is.na(out) & out == "X"] <- NA_character_   # mixed relays have no sex
   out
 }
 

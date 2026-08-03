@@ -264,8 +264,17 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
   dt[, resid := perf - mean(perf), by = .(athlete_id, event_id)]
 
   r_eff <- dt[, .(eff = mean(resid), n = .N), by = round_class]
-  r_eff[, eff := eff - eff[round_class == "final"][1]]
-  if (!nrow(r_eff[round_class == "final"])) r_eff[, eff := eff - max(eff)]
+  # Resolve the reference BEFORE subtracting. Subtracting first and then
+  # testing for the reference made the fallback dead code: with no "final"
+  # row, `eff[round_class == "final"][1]` is NA, so the subtraction turned the
+  # whole column to NA, and the fallback's `max(eff)` on an all-NA column is
+  # also NA. Every pooled offset came back NA and the caller silently treated
+  # that as "no context adjustment" -- the opposite of the intended
+  # reference-to-the-slowest-context behaviour. The per-family block below
+  # already did it in this order.
+  r_ref <- r_eff[round_class == "final", eff][1]
+  if (!is.finite(r_ref)) r_ref <- max(r_eff$eff, na.rm = TRUE)
+  if (is.finite(r_ref)) r_eff[, eff := eff - r_ref]
 
   dt <- merge(dt, r_eff[, .(round_class, r_adj = eff)], by = "round_class", all.x = TRUE)
   dt[, resid2 := resid - r_adj]
@@ -866,11 +875,31 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   prior_all <- NULL
   if (!is.null(only)) {
     keep_ids <- as.character(only)
-    sums <- dt[w > 0, .(.sw = sum(w), .swp = sum(w * perf)),
-               by = .(athlete_id, event_id)]
-    cnts <- dt[, .(n = .N), by = .(athlete_id, event_id)]
-    pri <- merge(cnts, sums, by = c("athlete_id", "event_id"), all.x = TRUE)
-    pri[, ability_raw := .swp / .sw]
+    # The prior must use the SAME location estimator as the full path, or the
+    # population mean the retained athletes shrink toward is computed a
+    # different way from their own point estimates. With robust_location = TRUE
+    # the full path below uses an asymmetric Huber mean and this used a plain
+    # weighted mean, so `only=` silently changed prior_mu -- breaking the
+    # "identical for the retained athletes" guarantee this block claims. Live,
+    # not latent: backtest_athletics.R passes `only=` and `robust_location=`
+    # together, and run_robust_loc_screening.R sets the latter TRUE.
+    if (isTRUE(robust_location) && !isTRUE(decouple_peak)) {
+      pri <- dt[w > 0, {
+        sig_ref <- data.table::first(cv_prior)
+        if (!is.finite(sig_ref) || sig_ref <= 0) sig_ref <- 0.02
+        .(n = .N,
+          ability_raw = .asymmetric_huber_mean(perf, w, sig_target = sig_ref, k = 2.5))
+      }, by = .(athlete_id, event_id)]
+      cnts <- dt[, .(n_all = .N), by = .(athlete_id, event_id)]
+      pri <- merge(pri, cnts, by = c("athlete_id", "event_id"), all.x = TRUE)
+      pri[, n := n_all][, n_all := NULL]
+    } else {
+      sums <- dt[w > 0, .(.sw = sum(w), .swp = sum(w * perf)),
+                 by = .(athlete_id, event_id)]
+      cnts <- dt[, .(n = .N), by = .(athlete_id, event_id)]
+      pri <- merge(cnts, sums, by = c("athlete_id", "event_id"), all.x = TRUE)
+      pri[, ability_raw := .swp / .sw]
+    }
     # Same filter the full path applies before computing the priors, so the
     # population behind prior_mu matches exactly.
     pri <- pri[n >= min_results & is.finite(ability_raw)]
@@ -1142,8 +1171,14 @@ condition_prior <- function(ability, field = NULL, weight = 1) {
     cli::cli_abort("{.arg ability} must come from {.fn estimate_ability} and carry {.field ability_raw}, {.field shrinkage} and {.field prior_mu}.")
   }
   if (!nrow(ab)) return(ab[])
-  sel <- if (is.null(field)) rep(TRUE, nrow(ab)) else
-    as.character(ab$athlete_id) %in% as.character(field)
+  # A true no-op. Treating field = NULL as "every athlete in `ability`" is only
+  # a no-op when `ability` covers the population prior_mu was computed over --
+  # and estimate_ability(only = entrants) deliberately breaks that, returning
+  # entrants only while keeping the POPULATION prior_mu. The default then
+  # silently conditioned on the entrants, applying exactly the finalist-selection
+  # shift a caller passing no field is asking not to apply.
+  if (is.null(field)) return(ab[])
+  sel <- as.character(ab$athlete_id) %in% as.character(field)
   if (!any(sel)) {
     cli::cli_warn("No athlete in {.arg field} matched; prior left unconditioned.")
     return(ab[])

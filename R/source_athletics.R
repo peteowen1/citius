@@ -217,7 +217,10 @@ athletics_athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) 
 
   reg <- .citius_event_registry[, c("event_id", "orientation")]
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
-  dt[, perf := to_perf(mark, data.table::fifelse(is.na(orientation), -1L, orientation))]
+  # NA orientation must stay NA. Defaulting an unmatched event to -1L
+  # (time-event) silently produced a WRONG-SIGNED perf for unmatched FIELD
+  # events, undoing the guarantee match_event() exists to give.
+  dt[, perf := to_perf(mark, orientation)]
   dt[]
 }
 
@@ -370,7 +373,10 @@ athletics_competition_results <- function(competition_id, days = 1:12) {
 
   reg <- .citius_event_registry[, c("event_id", "orientation")]
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
-  dt[, perf := to_perf(mark, data.table::fifelse(is.na(orientation), -1L, orientation))]
+  # NA orientation must stay NA. Defaulting an unmatched event to -1L
+  # (time-event) silently produced a WRONG-SIGNED perf for unmatched FIELD
+  # events, undoing the guarantee match_event() exists to give.
+  dt[, perf := to_perf(mark, orientation)]
   .warn_implausible_fields(dt)
   dt[]
 }
