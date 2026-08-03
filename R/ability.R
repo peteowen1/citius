@@ -809,6 +809,40 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
       dt[, perf := perf - io]
     }
 
+    # Seasonal phase. Athletes are not equally sharp all year, and a championship
+    # sits in a FIXED seasonal slot while an athlete's record spans the calendar.
+    # Averaging unadjusted marks therefore drags every ability estimate below its
+    # championship-day level, and drags it furthest for whoever happens to have an
+    # early-season-heavy history. Same argument as the round and tier offsets.
+    #
+    # Offsets are centred within family-hemisphere by `fit_season_effect()`, so
+    # this is a phase correction, not an intercept shift: it removes WHEN an
+    # athlete raced, not how good they are. Stripped from history only, with no
+    # add-back on the forecast — that is exactly the form validated out of sample
+    # at -0.66% relative RMSE, and adding a target-month term back would be a
+    # separate change needing its own validation.
+    if (!is.null(calibration$season) && nrow(calibration$season) &&
+        "date" %in% names(dt)) {
+      reg_s <- .citius_event_registry[, c("event_id", "family")]
+      fam_s <- reg_s$family[match(dt$event_id, reg_s$event_id)]
+      mon_s <- as.integer(format(as.Date(dt$date), "%m"))
+      hemi_s <- if ("venue_country" %in% names(dt)) {
+        data.table::fifelse(!is.na(dt$venue_country) &
+                              dt$venue_country %in% .citius_south, "S", "N")
+      } else rep("N", nrow(dt))
+      # Keyed join, not `match(paste(...), paste(...))`. Pasting three columns
+      # builds one R string per row -- on a full corpus that is 6.6M strings and
+      # hundreds of megabytes that R's own gc() does not account for, only the
+      # OS does. That allocation pattern is what OOM-killed pipeline runs here
+      # before; see the data.table RSS notes in C:/dev/.claude/rules.
+      sk <- data.table::as.data.table(calibration$season)[
+        , .(family, hemi, month, season_off = offset)]
+      so <- sk[data.table::data.table(family = fam_s, hemi = hemi_s, month = mon_s),
+               on = .(family, hemi, month), season_off]
+      so[!is.finite(so)] <- 0
+      dt[, perf := perf - so]
+    }
+
     # Global championship vs another top-tier final. Round and tier offsets are
     # referenced to "final" and "top", so a top-tier final gets a zero adjustment
     # BY CONSTRUCTION and this distinction is currently inexpressible. It is not

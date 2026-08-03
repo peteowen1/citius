@@ -102,3 +102,88 @@ test_that("pooled context offsets fall back when no reference round exists", {
   # Referenced to the fallback (the slowest context), so one entry is exactly 0.
   expect_true(any(abs(ctx$round) < 1e-12))
 })
+
+
+test_that("calibrate() attaches the indoor and season offsets it fits", {
+  # Both `fit_indoor_effect()` and `fit_season_effect()` were built, tested and
+  # (for season) validated out of sample, and then never attached to a
+  # calibration. `estimate_ability()` read `calibration$indoor` and
+  # `calibration$season` the whole time, so with nothing setting them both
+  # adjustment blocks were dead in every deployed run — the same shape as the
+  # fitted wind coefficient that once sat unused. Fitting is covered in
+  # test-context.R; what is asserted here is the WIRING.
+  set.seed(11)
+  # `fit_season_effect()` needs min_n = 1000 marks per family-hemisphere-month
+  # cell by default, so the synthetic set has to clear that in every month.
+  n_ath <- 200L
+  months <- rep(c(5L, 6L, 9L, 10L), each = 6L)
+  d <- data.table::CJ(athlete_id = paste0("a", seq_len(n_ath)), k = seq_along(months))
+  d[, month := months[k]]
+  d[, event_id := "AT-100Metres-M"]
+  # Day-of-month must stay INSIDE the month: `fit_season_effect()` recomputes the
+  # month from the date, so a "+ k" offset would silently relabel September marks
+  # as November and the planted phase would be fitted against the wrong cells.
+  d[, date := as.Date(sprintf("2021-%02d-%02d", month, 2L + ((k - 1L) %% 6L) * 4L))]
+  d[, venue_country := "GBR"]
+  d[, indoor := FALSE]
+  d[, round := "Final"][, tier := "OW"]
+  d[, race_key := paste(event_id, date)]
+  # A real seasonal phase: sharp in May/June, flat in Sep/Oct.
+  d[, seas := ifelse(month %in% c(5L, 6L), 0.004, -0.004)]
+  d[, ability := stats::rnorm(.N, 0, 0.02), by = athlete_id]
+  d[, perf := -log(10) + ability + seas + stats::rnorm(.N, 0, 0.004)]
+
+  # Synthetic data has no missing marks, so the no-mark-rate warning is expected
+  # and unrelated to what this test asserts.
+  cal <- suppressWarnings(calibrate(d, min_races = 1L, min_race_size = 1L))
+
+  # 1. The elements exist rather than being silently NULL.
+  expect_false(is.null(cal$season))
+  expect_true(nrow(cal$season) > 0L)
+  # `indoor` is all FALSE here, so there is no contrast to fit; the element must
+  # still be attached (possibly zero-offset) rather than absent.
+  expect_false(is.null(cal$indoor))
+
+  # 2. The planted phase is recovered with the right sign.
+  s <- data.table::as.data.table(cal$season)
+  may <- s[month == 5L, offset][1]
+  sep <- s[month == 9L, offset][1]
+  expect_true(is.finite(may) && is.finite(sep))
+  expect_gt(may, sep)
+
+  # 3. And it REACHES estimate_ability() — the step that was missing. Ability
+  #    estimated with the season offsets must differ from ability estimated
+  #    without them, or the block is still dead.
+  ab_on  <- estimate_ability(d, calibration = cal, adjust_context = TRUE)
+  cal_off <- cal
+  cal_off$season <- NULL
+  ab_off <- estimate_ability(d, calibration = cal_off, adjust_context = TRUE)
+  m <- merge(ab_on[, .(athlete_id, event_id, on = ability)],
+             ab_off[, .(athlete_id, event_id, off = ability)],
+             by = c("athlete_id", "event_id"))
+  expect_gt(nrow(m), 0L)
+  expect_false(isTRUE(all.equal(m$on, m$off)))
+})
+
+test_that("the season offset is a phase, not an intercept shift", {
+  # `fit_season_effect()` centres within family-hemisphere precisely so that
+  # applying it removes WHEN an athlete raced without moving the family's
+  # overall level. If the offsets failed to centre, every mark in the family
+  # would shift and the correction would masquerade as an ability change.
+  set.seed(12)
+  months <- rep(c(4L, 5L, 6L, 7L, 8L, 9L), each = 4L)
+  d <- data.table::CJ(athlete_id = paste0("b", 1:50), k = seq_along(months))
+  d[, month := months[k]]
+  d[, event_id := "AT-100Metres-M"]
+  d[, date := as.Date(sprintf("2021-%02d-10", month)) + k]
+  d[, venue_country := "GBR"][, indoor := FALSE]
+  d[, round := "Final"][, tier := "OW"]
+  d[, race_key := paste(event_id, date)]
+  d[, perf := -log(10) + stats::rnorm(.N, 0, 0.01) + 0.003 * sin(month)]
+
+  s <- fit_season_effect(d, min_n = 20L)
+  skip_if(nrow(s) == 0L, "no season cells fitted")
+  # Weighted mean of the offsets within family-hemisphere is zero by construction.
+  chk <- s[, .(wm = stats::weighted.mean(offset, n)), by = .(family, hemi)]
+  expect_true(all(abs(chk$wm) < 1e-12))
+})

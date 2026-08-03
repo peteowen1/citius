@@ -407,6 +407,25 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
     # and tier offsets reference "final" and "top", so this distinction is
     # otherwise inexpressible -- and it is not zero.
     championship = tryCatch(fit_championship_effect(results), error = function(e) NULL),
+    # Indoor/outdoor and seasonal phase. Both were built, tested and — for season
+    # — validated out of sample (offsets fitted pre-2020 improved 2020+ top-tier
+    # final prediction by 0.66% relative RMSE), and then neither was ever
+    # attached to a calibration. `estimate_ability()` has read `calibration$indoor`
+    # and `calibration$season` the whole time; with nothing setting them, both
+    # blocks were dead in every deployed run. That is the identical failure the
+    # note above `wind` describes — a fitted coefficient sitting unused because
+    # measurement and application live in different files — so they are attached
+    # HERE, next to the other context effects, rather than by a pipeline script.
+    indoor = if ("indoor" %in% names(results)) {
+      tryCatch(fit_indoor_effect(results), error = function(e) NULL)
+    } else NULL,
+    # Needs `venue_country` to split the hemispheres. Without it every mark
+    # classifies northern and southern athletes get a calendar six months out of
+    # phase, so absence of the column is a reason to fit nothing, not a reason to
+    # fit a pooled calendar.
+    season = if (all(c("date", "venue_country") %in% names(results))) {
+      tryCatch(fit_season_effect(results), error = function(e) NULL)
+    } else NULL,
     min_races = min_races,
     min_race_size = min_race_size,
     converged = dec$converged,
