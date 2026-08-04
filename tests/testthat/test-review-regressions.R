@@ -215,3 +215,33 @@ test_that("season and indoor stay OFF unless explicitly asked for", {
   expect_null(cal$season)
   expect_null(cal$indoor)
 })
+
+
+test_that(".crs_sex reads the sex by position, not by pattern scan", {
+  # Routes are athletic-result/<SPORT>/<TYPE>/<SEX>/<CODE>/<ROUND>/<...>, and
+  # ATHLETICS types are single letters (C combined, M, R relay, S) -- so a scan
+  # for the first `/(M|W|X)/` returns the TYPE, and every type-M route reads as
+  # men's whatever its real sex. On the Glasgow 2026 capture that filed the
+  # women's One Mile winner into AT-Mile-M next to the men's winner.
+  #
+  # Swimming was never affected because its types are two letters (ST, RE),
+  # which is exactly why a swimming-only test suite could not catch this.
+  ath <- c("athletic-result/ATH/M/M/MILE--------------/FNL-/000100--",
+           "athletic-result/ATH/M/W/MILE--------------/FNL-/000100--",
+           "athletic-result/ATH/C/W/HEPTATH-----------/100H/--------",
+           "athletic-result/ATH/S/M/400M--------------/RND1/--------",
+           "athletic-result/ATH/R/X/4X400M------------/FNL-/000100--")
+  expect_equal(citius:::.crs_sex(ath), c("M", "W", "W", "M", NA))
+
+  # Swimming must be unchanged.
+  swm <- c("athletic-result/SWM/ST/W/200MBR------------/HEAT/--------",
+           "athletic-result/SWM/ST/M/200MFR------------/FNL-/000100--",
+           "athletic-result/SWM/RE/X/4X100MMD----------/FNL-/000100--")
+  expect_equal(citius:::.crs_sex(swm), c("W", "M", NA))
+
+  # The original defect this function was written for: a missing sex must yield
+  # NA in place rather than shortening the vector and shifting every later row.
+  expect_equal(citius:::.crs_sex(c(ath[1], "athletic-result/ATH/S//400M/FNL-/x", ath[2])),
+               c("M", NA, "W"))
+  expect_equal(citius:::.crs_sex(character(0)), character(0))
+})

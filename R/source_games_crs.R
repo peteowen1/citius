@@ -91,12 +91,31 @@ parse_crs_export <- function(path) {
   # corruption and this routed straight around it -- a women's 200 Freestyle
   # would be filed as men's. Assign back by position, the way .crs_date() below
   # already does.
-  pos <- regexpr("/(M|W|X)/", route)
-  out <- rep(NA_character_, length(route))
-  hit <- pos > 0
-  if (any(hit)) out[hit] <- gsub("/", "", regmatches(route, pos))
+  # The sex is a POSITION in the route, not "the first single letter that looks
+  # like a sex". Routes are
+  #     athletic-result/<SPORT>/<TYPE>/<SEX>/<CODE>/<ROUND>/<...>
+  # and athletics TYPEs are themselves single letters -- C (combined), M, R
+  # (relay), S. So a scan for `/(M|W|X)/` matches the TYPE first, and every
+  # athletics route of type M is read as men's regardless of its actual sex.
+  # Caught on the Glasgow 2026 CRS capture, where the women's One Mile
+  # (`ATH/M/W/MILE`) filed Abbey Caldwell's 4:39.31 winning run into
+  # AT-Mile-M alongside Josh Kerr's 3:54.12. Swimming was unaffected only
+  # because its types are two letters (ST, RE).
+  # Routes arrive in two shapes -- the full `athletic-result/<SPORT>/<TYPE>/
+  # <SEX>/<CODE>/...` and a short `/<SPORT>/<SEX>/<CODE>` -- so a fixed index is
+  # wrong for one of them. The invariant that holds for both: the sex is the
+  # LAST segment that is exactly M, W or X and is still followed by an event
+  # code. In the full form that skips the type; in the short form there is only
+  # one candidate. An event code is never bare "M"/"W"/"X".
+  parts <- strsplit(sub("^/+", "", route), "/", fixed = TRUE)
+  out <- vapply(parts, function(p) {
+    if (!length(p)) return(NA_character_)
+    cand <- which(p %in% c("M", "W", "X") & seq_along(p) < length(p))
+    cand <- cand[nzchar(p[pmin(cand + 1L, length(p))])]
+    if (!length(cand)) NA_character_ else p[cand[length(cand)]]
+  }, character(1))
   out[!is.na(out) & out == "X"] <- NA_character_   # mixed relays have no sex
-  out
+  unname(out)
 }
 
 #' @keywords internal
