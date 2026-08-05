@@ -241,6 +241,31 @@ athlete_crosswalk <- function(x, name_order = NULL, links = NULL,
 
   x <- .link_by_key(x, "key_manual", "verified", guard = FALSE)
 
+  # An unscoped loose pass is the documented failure mode, and it is the DEFAULT.
+  #
+  # Surname-plus-initial identifies people in a field of a few hundred and stops
+  # identifying anyone in a field of tens of thousands: at 40,000 British plus
+  # 23,000 international swimmers it merged `Sophie Bateman` with `BATEMAN Sarah`
+  # and `Emilia Vorster` with `VORSTER Eben`. The per-source ambiguity guard
+  # cannot see those, because each key is unique within its own source and still
+  # names two different people — so nothing downstream reports the merge and the
+  # corrupted identity looks like a successful link.
+  #
+  # Left as a warning rather than an abort because small, deliberate unscoped
+  # runs are legitimate and are what the 364-swimmer validation did. The
+  # threshold is the point past which the validation no longer covers the call.
+  loose_pool <- nrow(x)
+  if (is.null(fuzzy_scope) && loose_pool > 5000L) {
+    cli::cli_warn(c(
+      "!" = "Loose name matching is running UNSCOPED over {loose_pool} athletes.",
+      i = "Surname-plus-initial was validated at 364 athletes; past a few
+           thousand it merges distinct people whose keys collide, and the
+           per-source ambiguity guard cannot detect that.",
+      i = "Pass {.arg fuzzy_scope} naming only the sources you need to resolve,
+           or supply verified identities via {.arg links}."
+    ), .frequency = "once", .frequency_id = "citius_unscoped_fuzzy")
+  }
+
   for (pass in list(c("key_dob", "birthdate"), c("key_loose", "loose"))) {
     x <- .link_by_key(x, pass[1L], pass[2L], scope = fuzzy_scope)
   }

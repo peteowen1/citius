@@ -11,15 +11,6 @@ further sports slot in by extending the event registry only.
 
 Named for *Citius, Altius, Fortius* — the package predicts marks and placings.
 
-## Development Commands
-
-```r
-devtools::load_all("citius")
-devtools::test()
-devtools::document()
-devtools::check()
-```
-
 ## The two abstractions everything rests on
 
 ### 1. The oriented performance scale (`R/marks.R`)

@@ -67,7 +67,10 @@ aquatics_athlete_results <- function(athlete_id, sex = NULL) {
   dt[, event_id := match_event(discipline, sex)]
   reg <- .citius_event_registry[, c("event_id", "orientation")]
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
-  dt[, perf := to_perf(mark, data.table::fifelse(is.na(orientation), -1L, orientation))]
+  # NA orientation must stay NA. Defaulting an unmatched event to -1L
+  # (time-event) silently produced a WRONG-SIGNED perf for unmatched FIELD
+  # events, undoing the guarantee match_event() exists to give.
+  dt[, perf := to_perf(mark, orientation)]
   # No competition_id is returned, so the race key is built from what uniquely
   # identifies a race here: meet, event, phase and date.
   dt[, race_key := paste(comp_name, discipline, round, date, sep = "|")]

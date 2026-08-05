@@ -281,3 +281,22 @@ test_that("project_tier puts ability back onto the tier being predicted", {
                             shrink = 1)$ability,
                ab$ability + 2 * -0.01689)
 })
+
+test_that("fit_coasting_trait estimates shrunk coasting deviations for heats", {
+  dt <- data.table::data.table(
+    athlete_id = rep(c("a", "b"), each = 4),
+    event_id = "AT-400Metres-M",
+    round = c("Heat 1", "Heat 2", "Final", "Final", "Heat 1", "Heat 2", "Final", "Final"),
+    tier = "OW",
+    perf = c(2.0, 2.0, 2.1, 2.1, 2.1, 2.1, 2.1, 2.1) # athlete 'a' runs slower in heats (coasted)
+  )
+  ct <- fit_coasting_trait(dt, min_heats = 2, shrink_k = 2)
+  expect_equal(nrow(ct), 2L)
+  expect_true("coasting_trait" %in% names(ct))
+  # athlete 'a' has negative heat deviation (coasting), shrunk toward 0
+  a_trait <- ct[athlete_id == "a"]$coasting_trait
+  b_trait <- ct[athlete_id == "b"]$coasting_trait
+  expect_lt(a_trait, 0)
+  expect_equal(b_trait, 0)
+})
+

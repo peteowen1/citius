@@ -257,3 +257,35 @@ test_that("estimate_ability reports a larger SE for sparser histories", {
   ab <- estimate_ability(h, adjust_context = FALSE, half_life = 365)
   expect_gt(ab[athlete_id == "thin"]$ability_se, ab[athlete_id == "deep"]$ability_se)
 })
+
+test_that("simulate_event re-conditions thin-evidence prior targets when condition_prior_weight > 0", {
+  ab <- data.table::data.table(
+    athlete_id = c("a", "b"),
+    event_id = "AT-100Metres-M",
+    ability = c(-log(9.80), -log(9.90)),
+    ability_raw = c(-log(9.80), -log(9.90)),
+    shrinkage = c(0.6, 0.1),
+    prior_mu = -log(10.50), # Unconditional club mean
+    sigma = c(0.008, 0.008)
+  )
+  sim_cond <- simulate_event(ab, n_sims = 2000, condition_prior_weight = 0.5, seed = 42)
+  sim_raw  <- simulate_event(ab, n_sims = 2000, condition_prior_weight = 0.0, seed = 42)
+  # Re-conditioned ability for athlete 'a' should be faster than unconditioned club drag
+  expect_gt(mean(sim_cond$perf[, 1]), mean(sim_raw$perf[, 1]))
+})
+
+test_that("simulate_event & medal_probs preserve unshifted median_mark under Dual-Path Decoupling", {
+  ab <- data.table::data.table(
+    athlete_id = c("a", "b"),
+    event_id = "AT-100Metres-M",
+    ability = c(-log(10.00), -log(10.20)),
+    ability_peak = c(-log(9.80), -log(10.00)),
+    sigma = c(0.008, 0.008)
+  )
+  sim <- simulate_event(ab, n_sims = 2000, seed = 42)
+  expect_false(is.null(sim$perf_std))
+  mp <- medal_probs(sim)
+  expect_equal(round(mp[athlete_id == "a"]$median_mark, 2), 10.00)
+})
+
+

@@ -256,11 +256,38 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
 #'   [estimate_context_effects()]. Both off by default: per-family was refuted by
 #'   the `cstack` and `cround` arms, and per-event is untested. See that
 #'   function for why the two are not the same bet.
+#' @param context_season,context_indoor Fit the seasonal-phase and
+#'   indoor/outdoor offsets, via [fit_season_effect()] and
+#'   [fit_indoor_effect()]. **Both off by default because the pair was measured
+#'   and rejected**, not because they are untested.
+#'
+#'   A 250-meet A/B on 2026-08-04 — two arms off one calibration differing in
+#'   exactly these two elements — made placings significantly *worse* in every
+#'   population while improving marks: gold Brier +2.02% on majors
+#'   (p = 0.00059), +0.74% across all 948 scored finals (p = 0.00019), with the
+#'   favourite-wins rate falling from 50.3% to 49.6%. Marks moved the other way,
+#'   significantly on T2 (MAE centred -0.61%, p = 2.4e-05).
+#'
+#'   The earlier out-of-sample result that motivated the season offsets
+#'   (-0.66% relative RMSE, 2026-07-30) measured **marks only** and never tested
+#'   placings, which is where the cost lands.
+#'
+#'   Likely mechanism, already documented for `momentum` in [estimate_ability()]:
+#'   stripping a component from history without adding it back for the target
+#'   race forecasts every athlete in an average state of readiness, which is
+#'   wrong for exactly the athletes who peak for a championship. Seasonal phase
+#'   and current form are confounded, so removing the season strips form signal
+#'   with it.
+#'
+#'   **The A/B moved both elements together**, so the damage is not attributed
+#'   between them; separating them needs its own run. Turn either on only to
+#'   re-measure, never to deploy.
 #' @return An object of class `citius_calibration`.
 #' @seealso [race_conditions()], [condition_sensitivity()], [estimate_ability()]
 #' @export
 calibrate <- function(results, min_races = 8L, min_race_size = 2L,
-                      context_per_family = FALSE, context_per_event = FALSE) {
+                      context_per_family = FALSE, context_per_event = FALSE,
+                      context_season = FALSE, context_indoor = FALSE) {
   results <- .drop_best_only(results, "calibrate()")
   dec <- decompose_races(results, min_race_size = min_race_size)
   if (is.null(dec$race) || !nrow(dec$race)) {
@@ -340,6 +367,16 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
   fouls <- raw[, .(foul_rate = mean(is.na(perf))), by = event_id]
   ev <- merge(ev, fouls, by = "event_id", all.x = TRUE)
 
+  foul_round <- if ("round" %in% names(raw)) {
+    raw[, .rc := .round_class(round)]
+    fr <- raw[!is.na(.rc), .(foul_rate = mean(is.na(perf)), n_obs = .N), by = .(event_id, round_class = .rc)]
+    raw[, .rc := NULL]
+    fr <- merge(fr, fouls[, .(event_id, global_foul = foul_rate)], by = "event_id", all.x = TRUE)
+    fr[, foul_rate := (n_obs * foul_rate + 30 * global_foul) / (n_obs + 30)]
+    fr[, global_foul := NULL]
+    fr[]
+  } else NULL
+
   if (nrow(ev) && all(ev$foul_rate == 0, na.rm = TRUE)) {
     cli::cli_warn(
       c("No missing performances anywhere; no-mark rates will all be zero.",
@@ -370,6 +407,7 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
 
   structure(list(
     events = ev[],
+    foul_round = foul_round,
     round = ctx$round,
     tier = ctx$tier,
     ability = dec$ability,
@@ -396,6 +434,26 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
     # and tier offsets reference "final" and "top", so this distinction is
     # otherwise inexpressible -- and it is not zero.
     championship = tryCatch(fit_championship_effect(results), error = function(e) NULL),
+    # Indoor/outdoor and seasonal phase. Both were built, tested and — for season
+    # — validated out of sample (offsets fitted pre-2020 improved 2020+ top-tier
+    # final prediction by 0.66% relative RMSE), and then neither was ever
+    # attached to a calibration. `estimate_ability()` has read `calibration$indoor`
+    # and `calibration$season` the whole time; with nothing setting them, both
+    # blocks were dead in every deployed run. That is the identical failure the
+    # note above `wind` describes — a fitted coefficient sitting unused because
+    # measurement and application live in different files — so they are attached
+    # HERE, next to the other context effects, rather than by a pipeline script.
+    indoor = if (isTRUE(context_indoor) && "indoor" %in% names(results)) {
+      tryCatch(fit_indoor_effect(results), error = function(e) NULL)
+    } else NULL,
+    # Needs `venue_country` to split the hemispheres. Without it every mark
+    # classifies northern and southern athletes get a calendar six months out of
+    # phase, so absence of the column is a reason to fit nothing, not a reason to
+    # fit a pooled calendar.
+    season = if (isTRUE(context_season) &&
+                 all(c("date", "venue_country") %in% names(results))) {
+      tryCatch(fit_season_effect(results), error = function(e) NULL)
+    } else NULL,
     min_races = min_races,
     min_race_size = min_race_size,
     converged = dec$converged,
@@ -615,8 +673,18 @@ fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, 
   d[, tier_class := .tier_class_of(d)]
 
   mk <- function(by_col, ref) {
-    s <- d[, .(offset = mean(resid + c_r), sd = stats::sd(resid), n = .N),
-           by = c(by_col)]
+    # `offset` telescopes to perf - a_i whether or not c_r was fitted, so it can
+    # use every row. `sd` cannot: rows from singleton or sub-min_race_size races
+    # never got a fitted c_r, so their residual still contains the whole race
+    # shock. Pooling them inflates the sd by exactly the quantity condition_sd
+    # measures separately -- the same trap already guarded for sigma_within and
+    # in fit_tail_df(). It matters because these sd values ARE the round
+    # precisions, and heats are likelier than finals to be only partly
+    # harvested, so the bias runs along the very contrast being measured.
+    ds <- if ("shared" %in% names(d)) d[shared == TRUE] else d
+    sds <- ds[, .(sd = stats::sd(resid)), by = c(by_col)]
+    s <- d[, .(offset = mean(resid + c_r), n = .N), by = c(by_col)]
+    s <- merge(s, sds, by = by_col, all.x = TRUE)
     ref_off <- s[get(by_col) == ref]$offset
     if (!length(ref_off)) ref_off <- max(s$offset, na.rm = TRUE)
     s[, offset := offset - ref_off]

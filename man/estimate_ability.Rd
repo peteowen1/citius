@@ -15,7 +15,10 @@ estimate_ability(
   robust_sigma = TRUE,
   sigma_parts = c("estimator", "weight"),
   sigma_mode = c("athlete", "event"),
-  only = NULL
+  only = NULL,
+  peak_gamma = 0,
+  robust_location = FALSE,
+  decouple_peak = FALSE
 )
 }
 \arguments{

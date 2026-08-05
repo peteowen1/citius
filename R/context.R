@@ -522,6 +522,7 @@ project_championship <- function(ability, calibration = NULL) {
   adj[!is.finite(adj)] <- 0
   ab[, champ_adj := adj]
   ab[, ability := ability + champ_adj]
+  if ("ability_peak" %in% names(ab)) ab[, ability_peak := ability_peak + champ_adj]
   ab[]
 }
 
@@ -607,3 +608,42 @@ project_tier <- function(ability, tier, calibration = NULL, shrink = 0.5) {
   ab[, ability := ability + tier_adj]
   ab[]
 }
+
+
+#' Estimate athlete-specific heat coasting traits
+#'
+#' Measures how much an athlete systematically eases off in qualification
+#' heats relative to finals, beyond the uniform round offset. Shrinks estimates
+#' toward 0 via Empirical Bayes.
+#'
+#' @param results Canonical results table containing `perf`, `athlete_id`,
+#'   `event_id`, `round`, and `tier`.
+#' @param min_heats Minimum heat marks required to report an athlete. Default 2.
+#' @param shrink_k Prior weight for Empirical Bayes shrinkage. Default 5.
+#' @return A `data.table` of `athlete_id`, `coasting_trait`, and `n_heats`.
+#' @export
+fit_coasting_trait <- function(results, min_heats = 2L, shrink_k = 5.0) {
+  dt <- data.table::as.data.table(results)
+  empty <- data.table::data.table(athlete_id = character(), coasting_trait = numeric(), n_heats = integer())
+  need <- c("perf", "athlete_id", "event_id")
+  if (!all(need %in% names(dt))) return(empty)
+  dt <- dt[!is.na(perf) & !is.na(event_id) & !is.na(athlete_id)]
+  if (!nrow(dt)) return(empty)
+
+  dt[, athlete_id := as.character(athlete_id)]
+  dt[, rc := .round_class(if ("round" %in% names(dt)) round else NA_character_)]
+
+  dt[, ath_mean := mean(perf, na.rm = TRUE), by = .(athlete_id, event_id)]
+  dt[, r := perf - ath_mean]
+
+  heats <- dt[rc == "heat", .(dev = mean(r, na.rm = TRUE), n_heats = .N), by = athlete_id]
+  if (!nrow(heats)) return(empty)
+
+  heats <- heats[n_heats >= min_heats]
+  if (!nrow(heats)) return(empty)
+
+  heats[, coasting_trait := (n_heats / (n_heats + shrink_k)) * dev]
+  heats[, .(athlete_id, coasting_trait, n_heats)]
+}
+
+

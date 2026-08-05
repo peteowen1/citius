@@ -65,7 +65,10 @@ parse_crs_export <- function(path) {
 
   reg <- .citius_event_registry[, c("event_id", "orientation")]
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
-  dt[, perf := to_perf(mark, data.table::fifelse(is.na(orientation), -1L, orientation))]
+  # NA orientation must stay NA. Defaulting an unmatched event to -1L
+  # (time-event) silently produced a WRONG-SIGNED perf for unmatched FIELD
+  # events, undoing the guarantee match_event() exists to give.
+  dt[, perf := to_perf(mark, orientation)]
 
   # Athletes have no stable id in the export; the name is the only key.
   dt[, athlete_id := athlete_name]
@@ -77,12 +80,55 @@ parse_crs_export <- function(path) {
 #' @keywords internal
 #' @noRd
 .crs_sex <- function(route) {
-  m <- regmatches(route, regexpr("/(M|W|X)/", route))
-  out <- gsub("/", "", m)
-  out[!nzchar(out)] <- NA_character_
-  if (length(out) < length(route)) out <- rep_len(out, length(route))
-  out[out == "X"] <- NA_character_          # mixed relays have no single sex
-  out
+  # `regmatches(x, regexpr(...))` DROPS non-matching elements rather than
+  # returning NA in place, so the result is shorter than the input whenever any
+  # route lacks a sex segment -- and `rep_len` then recycles from the start,
+  # silently shifting a valid-looking "M" or "W" onto every row after the gap.
+  # Verified: routes M, W, <none>, W, M returned M, W, W, M, M.
+  #
+  # A wrong-but-plausible sex is the worst possible failure here, because
+  # match_event() returning NA is the package's only guard against silent
+  # corruption and this routed straight around it -- a women's 200 Freestyle
+  # would be filed as men's. Assign back by position, the way .crs_date() below
+  # already does.
+  # The sex is a POSITION in the route, not "the first single letter that looks
+  # like a sex". Routes are
+  #     athletic-result/<SPORT>/<TYPE>/<SEX>/<CODE>/<ROUND>/<...>
+  # and athletics TYPEs are themselves single letters -- C (combined), M, R
+  # (relay), S. So a scan for `/(M|W|X)/` matches the TYPE first, and every
+  # athletics route of type M is read as men's regardless of its actual sex.
+  # Caught on the Glasgow 2026 CRS capture, where the women's One Mile
+  # (`ATH/M/W/MILE`) filed Abbey Caldwell's 4:39.31 winning run into
+  # AT-Mile-M alongside Josh Kerr's 3:54.12. Swimming was unaffected only
+  # because its types are two letters (ST, RE).
+  # Routes arrive in two shapes -- the full `athletic-result/<SPORT>/<TYPE>/
+  # <SEX>/<CODE>/...` and a short `/<SPORT>/<SEX>/<CODE>` -- so a fixed index is
+  # wrong for one of them. The invariant that holds for both: the sex is the
+  # LAST segment that is exactly M, W or X and is still followed by an event
+  # code. In the full form that skips the type; in the short form there is only
+  # one candidate. An event code is never bare "M"/"W"/"X".
+  # A third shape exists that the invariant above does NOT cover: a route
+  # truncated so that it ENDS at the sex, with no event code after it. Nothing
+  # follows the sex, so the "still followed by an event code" rule skips it and
+  # settles on an earlier segment instead -- which in athletics is the TYPE
+  # letter, i.e. exactly the corruption this function was written to stop. So
+  # the terminal segment is tested first. "W" and "X" can be trusted because no
+  # athletics TYPE uses either; a bare trailing "M" is genuinely ambiguous with
+  # TYPE M, so it stays NA and match_event() drops the row rather than guessing.
+  # No route in the Glasgow capture has this shape (0 of 253) -- this is a
+  # latent case, closed because the wrong answer would be silent.
+  parts <- strsplit(sub("^/+", "", route), "/", fixed = TRUE)
+  out <- vapply(parts, function(p) {
+    if (!length(p)) return(NA_character_)
+    n <- length(p)
+    if (identical(p[n], "W") || identical(p[n], "X")) return(p[n])
+    if (identical(p[n], "M")) return(NA_character_)
+    cand <- which(p %in% c("M", "W", "X") & seq_len(n) < n)
+    cand <- cand[nzchar(p[pmin(cand + 1L, n)])]
+    if (!length(cand)) NA_character_ else p[cand[length(cand)]]
+  }, character(1))
+  out[!is.na(out) & out == "X"] <- NA_character_   # mixed relays have no sex
+  unname(out)
 }
 
 #' @keywords internal

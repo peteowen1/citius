@@ -13,6 +13,8 @@ simulate_event(
   taper = 0,
   form_sd = NULL,
   calibration = NULL,
+  condition_prior_weight = 0,
+  round_class = "final",
   seed = NULL
 )
 }
