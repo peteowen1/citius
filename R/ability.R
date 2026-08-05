@@ -648,15 +648,36 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   dt <- data.table::copy(data.table::as.data.table(results))
   dt <- dt[!is.na(perf) & !is.na(event_id)]
   if (!nrow(dt)) {
-    return(estimate_ability(results[0], as_of, half_life, trim_tactical,
-                            min_results, adjust_context, calibration,
-                            robust_sigma, sigma_parts, only, peak_gamma,
-                            robust_location, decouple_peak))
+    # Named, not positional. The positional form passed 13 arguments into 14
+    # slots -- `only` landed in `sigma_mode`, and everything after it shifted by
+    # one. Harmless only because `results[0]` returns at the `!nrow(results)`
+    # guard above before any shifted argument is read, which is a property of
+    # the call site rather than of the code, and would break silently the day
+    # anything is added ahead of that guard.
+    return(estimate_ability(results[0], as_of = as_of, half_life = half_life,
+                            trim_tactical = trim_tactical,
+                            min_results = min_results,
+                            adjust_context = adjust_context,
+                            calibration = calibration,
+                            robust_sigma = robust_sigma,
+                            sigma_parts = sigma_parts,
+                            sigma_mode = sigma_mode, only = only,
+                            peak_gamma = peak_gamma,
+                            robust_location = robust_location,
+                            decouple_peak = decouple_peak))
   }
 
   dt[, athlete_id := as.character(athlete_id)]
   # Half-life may be a scalar or a fitted per-family table from fit_half_life().
-  hl_spec <- if (!is.null(calibration) && !is.null(calibration$half_life) && identical(half_life, 540)) calibration$half_life else half_life
+  # "Did the caller pass anything?" is `missing()`, not "does the value happen
+  # to equal the default?". The old test was `identical(half_life, 540)`, which
+  # silently overrides a caller who passes 540 ON PURPOSE with the calibration's
+  # value. No calibration in the repo carries `$half_life` yet, so this has
+  # never fired -- but attaching a new field to an existing calibration object
+  # is exactly how the season arms were built, and this file already documents
+  # two promoted-config-not-reaching-every-consumer bugs.
+  hl_spec <- if (!is.null(calibration) && !is.null(calibration$half_life) &&
+                 missing(half_life)) calibration$half_life else half_life
   dt[, hl := .event_half_life(event_id, hl_spec)]
   dt[, w := result_weight(date, tier = if ("tier" %in% names(dt)) tier else NA_character_,
                           round = if ("round" %in% names(dt)) round else NA_character_,
@@ -821,15 +842,21 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     # add-back on the forecast — that is exactly the form validated out of sample
     # at -0.66% relative RMSE, and adding a target-month term back would be a
     # separate change needing its own validation.
+    # `venue_country` is required, not optional. `calibrate()` only fits a season
+    # effect when the fitting data carried it, so a non-NULL `calibration$season`
+    # always holds a real split N/S calendar. Defaulting the SCORING data to "N"
+    # when the column is absent would then look up every southern-hemisphere
+    # athlete against the northern calendar -- six months out of phase, so the
+    # offset lands with the WRONG SIGN rather than merely missing. Skipping the
+    # correction entirely is the safe failure; applying it backwards is not.
+    # The indoor block above re-checks its own column for the same reason.
     if (!is.null(calibration$season) && nrow(calibration$season) &&
-        "date" %in% names(dt)) {
+        all(c("date", "venue_country") %in% names(dt))) {
       reg_s <- .citius_event_registry[, c("event_id", "family")]
       fam_s <- reg_s$family[match(dt$event_id, reg_s$event_id)]
       mon_s <- as.integer(format(as.Date(dt$date), "%m"))
-      hemi_s <- if ("venue_country" %in% names(dt)) {
-        data.table::fifelse(!is.na(dt$venue_country) &
-                              dt$venue_country %in% .citius_south, "S", "N")
-      } else rep("N", nrow(dt))
+      hemi_s <- data.table::fifelse(!is.na(dt$venue_country) &
+                                      dt$venue_country %in% .citius_south, "S", "N")
       # Keyed join, not `match(paste(...), paste(...))`. Pasting three columns
       # builds one R string per row -- on a full corpus that is 6.6M strings and
       # hundreds of megabytes that R's own gc() does not account for, only the
@@ -1151,7 +1178,21 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # their own, rather than needing a hand-set staleness cutoff.
   ab[, shrinkage := kappa / (w_total + kappa)]
   ab[, ability := (1 - shrinkage) * ability_raw + shrinkage * prior_mu]
-  if (isTRUE(decouple_peak) || "ability_raw_peak" %in% names(ab)) {
+  # `ability_raw_peak` comes out of the grouped aggregation on EVERY call -- a
+  # `by` expression has to return the same columns for every group, so it could
+  # not be omitted conditionally there. Drop it here when decoupling was not
+  # asked for. Left in place, the presence test below is always true, so
+  # `ability_peak` is emitted for every caller and `simulate_event()` takes its
+  # dual-path branch -- a second full n_sims x n_ath matrix -- on every
+  # simulation in the package. That is inert today only because `mu_peak` falls
+  # back to `mu`, making the column bit-identical to `ability`. The gate would
+  # otherwise stop meaning "decoupling was requested" and start meaning
+  # "estimate_ability ran", which is not something a later edit to `mu_peak`
+  # would fail loudly on.
+  if (!isTRUE(decouple_peak) && "ability_raw_peak" %in% names(ab)) {
+    ab[, ability_raw_peak := NULL]
+  }
+  if (isTRUE(decouple_peak) && "ability_raw_peak" %in% names(ab)) {
     ab[, ability_peak := (1 - shrinkage) * ability_raw_peak + shrinkage * prior_mu]
   }
 

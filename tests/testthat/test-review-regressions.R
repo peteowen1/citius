@@ -245,3 +245,103 @@ test_that(".crs_sex reads the sex by position, not by pattern scan", {
                c("M", NA, "W"))
   expect_equal(citius:::.crs_sex(character(0)), character(0))
 })
+
+
+test_that(".crs_sex does not read a TYPE letter when the route ends at the sex", {
+  # A route truncated after the sex has no event code following it, so the
+  # "last M/W/X that is still followed by a code" rule finds nothing there and
+  # would settle on an earlier segment -- the athletics TYPE letter. That is the
+  # same women's-race-filed-as-men's corruption as above, reached by a different
+  # route shape. No capture has this shape yet; the test exists so a future one
+  # cannot reintroduce it silently.
+  expect_equal(citius:::.crs_sex("athletic-result/ATH/M/W"), "W")
+  expect_equal(citius:::.crs_sex("athletic-result/ATH/C/W"), "W")
+  expect_equal(citius:::.crs_sex("athletic-result/SWM/ST/W"), "W")
+
+  # A mixed-relay X still resolves to NA, by the same rule as a full route.
+  expect_equal(citius:::.crs_sex("athletic-result/ATH/R/X"), NA_character_)
+
+  # A bare trailing "M" is genuinely ambiguous -- it could be the sex or the
+  # TYPE -- so it must be NA. Guessing "M" here is what the fix prevents.
+  expect_equal(citius:::.crs_sex("athletic-result/ATH/S/M"), NA_character_)
+
+  # Full routes are unaffected: the terminal test only fires on a bare M/W/X,
+  # and an event code is never one.
+  expect_equal(citius:::.crs_sex("athletic-result/ATH/M/W/MILE--------------/FNL-/000100--"),
+               "W")
+})
+
+
+test_that("decouple_peak actually gates the peak columns", {
+  # `simulate_event()`, `project_championship()` and the shrinkage step all gate
+  # on `"ability_peak" %in% names(ab)`. That test is only meaningful if the
+  # column is absent by default -- and the grouped aggregation emitted
+  # `ability_raw_peak` unconditionally, so it was true for every caller and the
+  # dual-path branch ran on every simulation in the package. Inert at the time
+  # only because the peak value fell back to the plain one.
+  set.seed(4)
+  res <- data.table::data.table(
+    athlete_id = rep(c("a", "b", "c"), each = 12L),
+    event_id = "AT-100Metres-M",
+    date = Sys.Date() - rep(seq(30, 700, length.out = 12L), 3L),
+    round = "final", tier = "top"
+  )
+  res$perf <- to_perf(10 + rnorm(36, 0, 0.12), -1L)
+
+  plain <- citius::estimate_ability(res)
+  expect_false("ability_peak" %in% names(plain))
+  expect_false("ability_raw_peak" %in% names(plain))
+
+  peaked <- citius::estimate_ability(res, decouple_peak = TRUE)
+  expect_true("ability_peak" %in% names(peaked))
+
+  # The default path must still produce the same abilities it always did.
+  expect_equal(plain[order(athlete_id)]$ability,
+               peaked[order(athlete_id)]$ability, tolerance = 1e-10)
+})
+
+
+test_that("the season offset is skipped, not applied northern, without venue_country", {
+  # `calibrate()` only fits a season effect when the fitting data carried
+  # `venue_country`, so a non-NULL `calibration$season` always holds a real
+  # split N/S calendar. If the SCORING data then lacks the column, defaulting
+  # every row to "N" reads southern athletes off the northern calendar -- six
+  # months out of phase, so the offset lands with the wrong SIGN. Skipping is
+  # the safe failure; applying it backwards is not.
+  skip_if_not(is.function(citius::estimate_ability))
+
+  set.seed(11)
+  n <- 400L
+  res <- data.table::data.table(
+    athlete_id = rep(sprintf("a%02d", 1:20), each = 20L),
+    event_id = "AT-100Metres-M",
+    date = as.Date("2019-01-01") + rep(seq(0, 380, length.out = 20L), 20L),
+    venue_country = rep(c("AUS", "GBR"), each = 200L),
+    round = "final", tier = "top"
+  )
+  res$perf <- to_perf(10 + rnorm(n, 0, 0.15), -1L)
+
+  # A calendar with a real hemisphere split and offsets large enough that a
+  # wrong-sign application could not hide in the noise.
+  cal <- list(season = data.frame(
+    family = "sprint",
+    hemi = rep(c("N", "S"), each = 12L),
+    month = rep(1:12, 2L),
+    offset = c(sin(2 * pi * (1:12) / 12) * 0.02,
+               -sin(2 * pi * (1:12) / 12) * 0.02)
+  ))
+
+  with_vc <- citius::estimate_ability(res, calibration = cal)
+  without_vc <- citius::estimate_ability(
+    res[, !"venue_country"], calibration = cal)
+  no_season <- citius::estimate_ability(
+    res[, !"venue_country"], calibration = list())
+
+  key <- function(x) x[order(athlete_id, event_id)]$ability
+
+  # Dropping the column must fall back to NO correction at all ...
+  expect_equal(key(without_vc), key(no_season), tolerance = 1e-10)
+  # ... and must NOT silently equal the corrected answer, which would mean the
+  # gate never mattered and this test is vacuous.
+  expect_false(isTRUE(all.equal(key(without_vc), key(with_vc), tolerance = 1e-8)))
+})

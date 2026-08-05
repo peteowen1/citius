@@ -107,11 +107,24 @@ parse_crs_export <- function(path) {
   # LAST segment that is exactly M, W or X and is still followed by an event
   # code. In the full form that skips the type; in the short form there is only
   # one candidate. An event code is never bare "M"/"W"/"X".
+  # A third shape exists that the invariant above does NOT cover: a route
+  # truncated so that it ENDS at the sex, with no event code after it. Nothing
+  # follows the sex, so the "still followed by an event code" rule skips it and
+  # settles on an earlier segment instead -- which in athletics is the TYPE
+  # letter, i.e. exactly the corruption this function was written to stop. So
+  # the terminal segment is tested first. "W" and "X" can be trusted because no
+  # athletics TYPE uses either; a bare trailing "M" is genuinely ambiguous with
+  # TYPE M, so it stays NA and match_event() drops the row rather than guessing.
+  # No route in the Glasgow capture has this shape (0 of 253) -- this is a
+  # latent case, closed because the wrong answer would be silent.
   parts <- strsplit(sub("^/+", "", route), "/", fixed = TRUE)
   out <- vapply(parts, function(p) {
     if (!length(p)) return(NA_character_)
-    cand <- which(p %in% c("M", "W", "X") & seq_along(p) < length(p))
-    cand <- cand[nzchar(p[pmin(cand + 1L, length(p))])]
+    n <- length(p)
+    if (identical(p[n], "W") || identical(p[n], "X")) return(p[n])
+    if (identical(p[n], "M")) return(NA_character_)
+    cand <- which(p %in% c("M", "W", "X") & seq_len(n) < n)
+    cand <- cand[nzchar(p[pmin(cand + 1L, n)])]
     if (!length(cand)) NA_character_ else p[cand[length(cand)]]
   }, character(1))
   out[!is.na(out) & out == "X"] <- NA_character_   # mixed relays have no sex
