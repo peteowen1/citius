@@ -113,3 +113,68 @@ perf_to_mark <- function(perf, orientation) {
   orientation <- rep_len(as.integer(orientation), length(perf))
   exp(perf * orientation)
 }
+
+
+#' Render a performance score as a display-ready mark and unit
+#'
+#' Takes an ability (or any score on the performance scale) straight to the
+#' string a reader sees: `"9.84"`, `"1:56.34"`, `"2:08:29"`, `"8,813"`.
+#'
+#' This exists so that the *presentation* of a predicted mark has exactly one
+#' implementation. The blog publishes predicted marks in two places — the
+#' per-event card for a meet, and the evergreen athlete ratings table — and the
+#' same athlete appearing with two different times on two pages is the kind of
+#' inconsistency a reader reads as the site being wrong. Formatting here rather
+#' than in each export (or, worse, in JavaScript on the page) also keeps the
+#' event registry's `orientation` and the seconds/metres/points distinction out
+#' of code that has no other reason to know about them.
+#'
+#' The three branches are unit conventions, not arbitrary: times under a minute
+#' are bare seconds, times under an hour are `m:ss.hh`, longer ones drop to
+#' whole seconds because no marathon is reported to a hundredth. Combined-event
+#' points are thousands-separated; field marks are two decimals of metres.
+#'
+#' Note that what comes back is a *typical* mark whenever the input is a
+#' recency-weighted ability: a championship final is closer to an athlete's best
+#' day, so predictions built this way read slightly slow by design. Pages
+#' showing them are expected to say so.
+#'
+#' @param perf Numeric vector on the performance scale (higher is better).
+#' @param orientation Integer vector, `-1` where lower is better, `+1` where
+#'   higher is better. Recycled to the length of `perf`.
+#' @return A `data.frame` with two character columns: `mark` (the formatted
+#'   value) and `unit` (`""` for times, `"m"` for field marks, `"pts"` for
+#'   combined events). Non-finite inputs give `NA` marks.
+#' @seealso [perf_to_mark()], which this wraps.
+#' @examples
+#' # A 100m ability and a shot put ability, formatted for display
+#' predicted_mark(to_perf(c(9.84, 10.20), -1), orientation = -1)
+#' predicted_mark(to_perf(c(22.52), 1), orientation = 1)
+#' @export
+predicted_mark <- function(perf, orientation) {
+  value <- perf_to_mark(perf, orientation)
+  orientation <- rep_len(as.integer(orientation), length(value))
+  # Guard the INPUT, not just the exponentiated output. An infinite ability
+  # comes back through exp() as a perfectly finite 0, which would format as a
+  # zero-second 100m — a nonsense number that reads as a real one.
+  value[!is.finite(perf)] <- NA_real_
+
+  fmt1 <- function(v, o) {
+    if (!is.finite(v) || is.na(o)) return(NA_character_)
+    if (o < 0) {
+      if (v < 60)   return(sprintf("%.2f", v))
+      if (v < 3600) return(sprintf("%d:%05.2f", as.integer(v %/% 60), v %% 60))
+      return(sprintf("%d:%02d:%02d", as.integer(v %/% 3600),
+                     as.integer((v %% 3600) %/% 60), as.integer(round(v %% 60))))
+    }
+    if (v > 1000) return(format(round(v), big.mark = ","))
+    sprintf("%.2f", v)
+  }
+
+  mark <- vapply(seq_along(value), function(i) fmt1(value[i], orientation[i]),
+                 character(1))
+  unit <- ifelse(is.na(orientation), NA_character_,
+                 ifelse(orientation < 0, "",
+                        ifelse(!is.na(value) & value > 1000, "pts", "m")))
+  data.frame(mark = mark, unit = unit, stringsAsFactors = FALSE)
+}

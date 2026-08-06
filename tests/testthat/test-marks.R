@@ -60,3 +60,49 @@ test_that("performanceValue is used only when the string is unusable", {
   expect_equal(citius:::.resolve_mark(NA_character_, 550, TRUE), 5.50)
   expect_equal(citius:::.resolve_mark("DNF", 0, FALSE), 0)
 })
+
+
+test_that("predicted_mark round-trips the marks it was validated against", {
+  # These are the reference values the blog export was checked against by hand
+  # before it shipped: if a change to the formatter moves any of them, a mark
+  # already published on the site has silently changed.
+  rt <- function(mark, o) predicted_mark(to_perf(mark, o), o)$mark
+  expect_equal(rt(9.84, -1), "9.84")
+  expect_equal(rt(116.30, -1), "1:56.30")
+  expect_equal(rt(7709, -1), "2:08:29")
+  expect_equal(rt(6.03, 1), "6.03")
+  expect_equal(rt(1.98, 1), "1.98")
+  expect_equal(rt(8813, 1), "8,813")
+})
+
+test_that("predicted_mark picks the unit off the orientation, not the value", {
+  expect_equal(predicted_mark(to_perf(9.84, -1), -1)$unit, "")
+  expect_equal(predicted_mark(to_perf(6.03, 1), 1)$unit, "m")
+  expect_equal(predicted_mark(to_perf(8813, 1), 1)$unit, "pts")
+})
+
+test_that("predicted_mark switches format at the minute and hour boundaries", {
+  rt <- function(mark, o) predicted_mark(to_perf(mark, o), o)$mark
+  expect_equal(rt(59.99, -1), "59.99")
+  expect_equal(rt(60.01, -1), "1:00.01")
+  expect_equal(rt(3599.99, -1), "59:59.99")
+  # Deliberately not a x.5-second value: the log/exp round-trip lands a hair
+  # either side of an exact half, so a half-second input tests floating point
+  # rather than the formatting branch this case is about.
+  expect_equal(rt(3661, -1), "1:01:01")
+})
+
+test_that("predicted_mark vectorises over mixed orientations", {
+  # The exports call this on a whole table at once, where track and field rows
+  # sit side by side. A scalar-only implementation would recycle the first
+  # orientation across every row and silently format throws as times.
+  out <- predicted_mark(c(to_perf(9.84, -1), to_perf(6.03, 1)), c(-1L, 1L))
+  expect_equal(out$mark, c("9.84", "6.03"))
+  expect_equal(out$unit, c("", "m"))
+})
+
+test_that("a non-finite ability yields NA, not a zero-second race", {
+  # exp(-Inf) is 0, which is finite and would format as "0.00" — a nonsense
+  # mark that reads exactly like a real one.
+  expect_true(all(is.na(predicted_mark(c(NA_real_, Inf, -Inf), -1)$mark)))
+})
