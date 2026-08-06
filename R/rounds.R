@@ -35,8 +35,17 @@
 #' @param n_sims Simulations.
 #' @param calibration Optional `citius_calibration`.
 #' @param seed Optional integer seed.
+#' @param medal_draws If `TRUE`, attach the per-simulation podium as a
+#'   `"medal_draws"` attribute: a `data.table` of `sim`, `athlete_id`, `place`.
+#'   Marginal probabilities discard the joint structure, which is most of the
+#'   answer for anything counted per nation — two athletes from one country in a
+#'   final contest the same three medals, so their chances are strongly
+#'   negatively dependent and summing marginals as if independent overstates the
+#'   spread. Off by default; costs nothing when unused.
 #' @return A `data.table` with one row per athlete: `p_reach_*` for each round
-#'   after the first, plus `p_gold`, `p_medal` and `p_final`.
+#'   after the first, plus `p_gold`, `p_medal` and `p_final`. With
+#'   `medal_draws = TRUE`, also carries the `"medal_draws"` attribute described
+#'   above.
 #' @examples
 #' \dontrun{
 #' simulate_rounds(entrants, structure = list(
@@ -45,7 +54,9 @@
 #' }
 #' @export
 simulate_rounds <- function(ability, structure, n_sims = 10000L,
-                            calibration = NULL, seed = NULL) {
+                            calibration = NULL, seed = NULL,
+                            medal_draws = FALSE) {
+  medal_tbl <- NULL
   ab <- data.table::as.data.table(ability)
   if (!nrow(ab)) cli::cli_abort("{.arg ability} is empty.")
   if (!length(structure)) cli::cli_abort("{.arg structure} needs at least one round.")
@@ -109,6 +120,23 @@ simulate_rounds <- function(ability, structure, n_sims = 10000L,
       pos <- .rank_alive(perf, alive)
       out$p_gold <- colMeans(alive & pos == 1L)
       out$p_medal <- colMeans(alive & pos <= 3L)
+      # Marginal probabilities discard the JOINT structure, and for anything
+      # counted per nation that structure is most of the answer: two athletes
+      # from one country in the same final are competing for the same three
+      # medals, so their medal chances are strongly negatively dependent. On the
+      # Birmingham field 81% of expected medals sit in nation-events with two or
+      # more entrants, so summing marginals as if independent is wrong for most
+      # of the mass. Keep the per-simulation podium so a caller can aggregate
+      # however it likes -- by nation, by pair, by anything.
+      if (isTRUE(medal_draws)) {
+        idx <- which(alive & pos <= 3L, arr.ind = TRUE)
+        draws <- data.table::data.table(
+          sim = idx[, 1L],
+          athlete_id = ab$athlete_id[idx[, 2L]],
+          place = pos[idx])
+        data.table::setorder(draws, sim, place)
+        medal_tbl <- draws
+      }
       break
     }
 
@@ -127,6 +155,9 @@ simulate_rounds <- function(ability, structure, n_sims = 10000L,
   } else rep(1, n_ath)
   data.table::set(res, j = "p_final", value = final_col)
   data.table::setorder(res, -p_gold)
+  # Attached rather than returned, so the shape every existing caller relies on
+  # is unchanged and the default costs nothing.
+  if (!is.null(medal_tbl)) data.table::setattr(res, "medal_draws", medal_tbl)
   res[]
 }
 

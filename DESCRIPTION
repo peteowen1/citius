@@ -1,6 +1,6 @@
 Package: citius
 Title: Performance Modelling and Outcome Simulation for Major Games Athletics and Swimming
-Version: 0.1.0
+Version: 0.1.1
 Authors@R:
     person("Pete", "Owen", , "pete.owen1@hotmail.co.uk", role = c("aut", "cre", "cph"))
 Description: Estimates latent athlete ability from competition result
