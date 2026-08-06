@@ -9,7 +9,9 @@ calibrate(
   min_races = 8L,
   min_race_size = 2L,
   context_per_family = FALSE,
-  context_per_event = FALSE
+  context_per_event = FALSE,
+  context_season = FALSE,
+  context_indoor = FALSE
 )
 }
 \arguments{
@@ -26,6 +28,33 @@ family or event grain as well as pooled, passed to
 \code{\link[=estimate_context_effects]{estimate_context_effects()}}. Both off by default: per-family was refuted by
 the \code{cstack} and \code{cround} arms, and per-event is untested. See that
 function for why the two are not the same bet.}
+
+\item{context_season, context_indoor}{Fit the seasonal-phase and
+indoor/outdoor offsets, via \code{\link[=fit_season_effect]{fit_season_effect()}} and
+\code{\link[=fit_indoor_effect]{fit_indoor_effect()}}. \strong{Both off by default because the pair was measured
+and rejected}, not because they are untested.
+
+A 250-meet A/B on 2026-08-04 — two arms off one calibration differing in
+exactly these two elements — made placings significantly \emph{worse} in every
+population while improving marks: gold Brier +2.02\% on majors
+(p = 0.00059), +0.74\% across all 948 scored finals (p = 0.00019), with the
+favourite-wins rate falling from 50.3\% to 49.6\%. Marks moved the other way,
+significantly on T2 (MAE centred -0.61\%, p = 2.4e-05).
+
+The earlier out-of-sample result that motivated the season offsets
+(-0.66\% relative RMSE, 2026-07-30) measured \strong{marks only} and never tested
+placings, which is where the cost lands.
+
+Likely mechanism, already documented for \code{momentum} in \code{\link[=estimate_ability]{estimate_ability()}}:
+stripping a component from history without adding it back for the target
+race forecasts every athlete in an average state of readiness, which is
+wrong for exactly the athletes who peak for a championship. Seasonal phase
+and current form are confounded, so removing the season strips form signal
+with it.
+
+\strong{The A/B moved both elements together}, so the damage is not attributed
+between them; separating them needs its own run. Turn either on only to
+re-measure, never to deploy.}
 }
 \value{
 An object of class \code{citius_calibration}.
