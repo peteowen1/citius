@@ -179,13 +179,16 @@ test_that("the wiring scan finds something to check", {
 })
 
 test_that("every calibration element the package reads is set by something", {
-  reads <- wiring_reads()
-  set_by <- wiring_calibrate_slots()
-
+  # Script-side setters (momentum, asymmetry, ...) live in citiusdata/scripts,
+  # so without the sibling repo this test cannot tell "set by a script" from
+  # "set by nothing" and reports false orphans. Same environment guard as the
+  # two tests below — the full check is local-dev-only, like theirs.
   root <- wiring_verse_root()
-  if (!is.null(root)) {
-    set_by <- union(set_by, wiring_script_setters(root)$element)
-  }
+  skip_if(is.null(root),
+          "citiusdata/scripts not found beside the package; script-side setters invisible, orphan check unreliable")
+
+  reads <- wiring_reads()
+  set_by <- union(wiring_calibrate_slots(), wiring_script_setters(root)$element)
 
   orphans <- sort(setdiff(unique(reads$element), set_by))
   owners <- vapply(orphans, function(e)
