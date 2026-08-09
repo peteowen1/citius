@@ -106,3 +106,44 @@ test_that("a non-finite ability yields NA, not a zero-second race", {
   # mark that reads exactly like a real one.
   expect_true(all(is.na(predicted_mark(c(NA_real_, Inf, -Inf), -1)$mark)))
 })
+
+test_that("a seconds field that rounds up to 60 carries instead of printing '60'", {
+  # citius#9. The old implementation split the value into fields and rounded
+  # each one independently, so a seconds component landing on exactly 60 had
+  # nothing above it to carry into and was simply printed. Four marathon
+  # predictions shipped to the live site as 2:05:60, 2:15:60, 2:28:60 and
+  # 2:29:60 -- clock times that cannot exist.
+  #
+  # The existing boundary test above passes on the broken code: every value it
+  # chose (59.99, 60.01, 3599.99, 3661) sits OUTSIDE the rounding band. These
+  # sit inside it. Values are kept a few thousandths clear of the exact
+  # half-way point on purpose -- the log/exp round-trip in to_perf() lands a
+  # hair either side of an exact half, so a knife-edge input would be testing
+  # floating point rather than the carry.
+  rt <- function(mark, o) predicted_mark(to_perf(mark, o), o)$mark
+  expect_equal(rt(59.999, -1), "1:00.00")    # was "60.00"
+  expect_equal(rt(119.999, -1), "2:00.00")   # was "1:60.00"
+  expect_equal(rt(7259.7, -1), "2:01:00")    # was "2:00:60"
+  expect_equal(rt(3719.7, -1), "1:02:00")    # was "1:01:60"
+  expect_equal(rt(7559.7, -1), "2:06:00")    # the live 2:05:60 case
+})
+
+test_that("no formatted time ever contains a field of 60 or more", {
+  # A property, not a case list: the bug was only ever found because someone
+  # happened to look at a marathon. Sweeping the whole plausible range makes
+  # the next variant of it fail here instead of on the site. The old code
+  # fails this within a few thousand draws.
+  set.seed(20260809)
+  v <- c(runif(20000, 9, 3600), runif(20000, 3600, 12000),
+         # concentrate on the bands where a carry is actually due
+         59.9 + runif(2000, 0, 0.1), 3599.9 + runif(2000, 0, 0.1),
+         7259.5 + runif(2000, 0, 0.5))
+  marks <- predicted_mark(to_perf(v, -1), -1)$mark
+  fields <- strsplit(marks, ":", fixed = TRUE)
+  bad <- vapply(fields, function(f) {
+    if (length(f) < 2L) return(FALSE)
+    any(as.numeric(f[-1L]) >= 60)
+  }, logical(1))
+  expect_equal(sum(bad), 0L, info = paste("examples:",
+    paste(utils::head(marks[bad], 5), collapse = " ")))
+})

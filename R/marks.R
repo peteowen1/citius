@@ -162,10 +162,27 @@ predicted_mark <- function(perf, orientation) {
   fmt1 <- function(v, o) {
     if (!is.finite(v) || is.na(o)) return(NA_character_)
     if (o < 0) {
-      if (v < 60)   return(sprintf("%.2f", v))
-      if (v < 3600) return(sprintf("%d:%05.2f", as.integer(v %/% 60), v %% 60))
-      return(sprintf("%d:%02d:%02d", as.integer(v %/% 3600),
-                     as.integer((v %% 3600) %/% 60), as.integer(round(v %% 60))))
+      # Round to the displayed precision FIRST, then decompose that whole
+      # number. The reverse — split, then round each field on its own — is
+      # what published "2:05:60" and "1:60.00": a seconds field that rounds
+      # up to exactly 60 has nothing above it to carry into, so the carry is
+      # simply lost and the result is a clock time that cannot exist.
+      #
+      # Decomposing from an integer count of the smallest displayed unit
+      # (centiseconds under an hour, whole seconds above) means every field
+      # is an exact quotient or remainder and none of them can reach 60. It
+      # also keeps the branch test and the printed digits in agreement:
+      # testing `v` while printing round(v) is what let 59.996 take the
+      # "under a minute" branch and print as "60.00".
+      if (round(v, 2) < 3600) {
+        cs <- as.integer(round(v * 100))
+        if (cs < 6000L) return(sprintf("%.2f", cs / 100))
+        return(sprintf("%d:%02d.%02d", cs %/% 6000L,
+                       (cs %% 6000L) %/% 100L, cs %% 100L))
+      }
+      s <- as.integer(round(v))
+      return(sprintf("%d:%02d:%02d", s %/% 3600L,
+                     (s %% 3600L) %/% 60L, s %% 60L))
     }
     if (v > 1000) return(format(round(v), big.mark = ","))
     sprintf("%.2f", v)
