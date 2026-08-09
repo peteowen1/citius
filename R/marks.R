@@ -174,6 +174,25 @@ predicted_mark <- function(perf, orientation) {
       # also keeps the branch test and the printed digits in agreement:
       # testing `v` while printing round(v) is what let 59.996 take the
       # "under a minute" branch and print as "60.00".
+      # Beyond this it is not a mark, it is a broken ability estimate, and it
+      # has to come back as a real NA rather than as a formatted string.
+      #
+      # Double `%%` and `%/%` stop being exact long before the largest
+      # representable double, so an extreme value decomposes into fields
+      # outside 0-59 -- measured at a minutes field of 1092, and at another a
+      # NEGATIVE one. Those strings contain no "NA", so `is.na(mark)` reads
+      # FALSE and they survive every downstream filter: the same hazard as the
+      # old integer overflow, just further out. Widening a bound is not the
+      # same as removing it.
+      #
+      # A formatted 995809-hour "time" was never useful anyway. It reads like
+      # data. NA says what is actually known.
+      #
+      # 1e7 seconds is about 115 days -- roughly twenty times the longest
+      # multi-day race ever contested, so no real performance is remotely near
+      # it, and the cap can never trim something genuine.
+      if (v > 1e7) return(NA_character_)
+
       # Whole numbers held as DOUBLES, not integers. as.integer() returns NA
       # above 2147483647, and `is.finite(v)` above does not catch a large but
       # finite value -- so an absurd ability (perf below about -21.5) used to

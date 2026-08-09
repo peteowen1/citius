@@ -162,12 +162,25 @@ test_that("an absurd but finite ability does not format as the string 'NA:NA:NA'
   # `is.na(mark)` reads FALSE and every downstream filter for bad predictions
   # passes it through. Whatever comes back here must be either a real NA or a
   # well-formed time, never the word NA embedded in one.
-  # -30 already lands at ~3e9 seconds, well past the 2147483647 where the old
-  # integer conversion gave up. Stopping there rather than going further keeps
-  # the values inside the range where double modulus is still exact, so the
-  # test asserts formatting rather than provoking a precision warning.
-  m <- predicted_mark(c(-21, -22, -30), -1)$mark
+  # Swept far past the old int32 cliff AND past the point where double modulus
+  # stops being exact. An earlier version of this test stopped at -30 to stay
+  # inside the exact range, which meant it asserted the fix worked exactly where
+  # the fix was never in doubt. At -94.75 the unclamped code produced a minutes
+  # field of 1092, and at -97.25 a NEGATIVE one -- malformed, and containing no
+  # "NA" for this test's first assertion to catch.
+  m <- predicted_mark(c(-21, -22, -30, -34.5, -60, -94.75, -97.25, -400), -1)$mark
   expect_false(any(grepl("NA", m[!is.na(m)], fixed = TRUE)))
   ok <- is.na(m) | grepl("^[0-9]+:[0-5][0-9]:[0-5][0-9]$", m)
   expect_true(all(ok), info = paste("got:", paste(m, collapse = " ")))
+})
+
+test_that("the mark cap trims only garbage, never a real performance", {
+  # A cap is only safe if it cannot reach anything genuine. The longest events
+  # anyone actually contests sit six orders of magnitude below it.
+  rt <- function(mark, o) predicted_mark(to_perf(mark, o), o)$mark
+  expect_equal(rt(9.58, -1), "9.58")            # 100m world record
+  expect_equal(rt(7235, -1), "2:00:35")         # marathon, ~2 hours
+  expect_false(is.na(rt(518400, -1)))           # a six-day race, 518,400s
+  expect_false(is.na(rt(9.9e6, -1)))            # 114 days, still formatted
+  expect_true(is.na(rt(1.1e7, -1)))             # past the cap, NA not a string
 })
