@@ -174,15 +174,23 @@ predicted_mark <- function(perf, orientation) {
       # also keeps the branch test and the printed digits in agreement:
       # testing `v` while printing round(v) is what let 59.996 take the
       # "under a minute" branch and print as "60.00".
+      # Whole numbers held as DOUBLES, not integers. as.integer() returns NA
+      # above 2147483647, and `is.finite(v)` above does not catch a large but
+      # finite value -- so an absurd ability (perf below about -21.5) used to
+      # format as the literal string "NA:NA:NA". That is worse than a wrong
+      # number: it is a string, so `is.na(mark)` reads FALSE and every
+      # downstream filter for bad predictions waves it through. Doubles are
+      # exact to 2^53, which no mark can approach, and `%.0f` prints them
+      # without the integer conversion.
       if (round(v, 2) < 3600) {
-        cs <- as.integer(round(v * 100))
-        if (cs < 6000L) return(sprintf("%.2f", cs / 100))
-        return(sprintf("%d:%02d.%02d", cs %/% 6000L,
-                       (cs %% 6000L) %/% 100L, cs %% 100L))
+        cs <- round(v * 100)
+        if (cs < 6000) return(sprintf("%.2f", cs / 100))
+        return(sprintf("%.0f:%02.0f.%02.0f", cs %/% 6000,
+                       (cs %% 6000) %/% 100, cs %% 100))
       }
-      s <- as.integer(round(v))
-      return(sprintf("%d:%02d:%02d", s %/% 3600L,
-                     (s %% 3600L) %/% 60L, s %% 60L))
+      s <- round(v)
+      return(sprintf("%.0f:%02.0f:%02.0f", s %/% 3600,
+                     (s %% 3600) %/% 60, s %% 60))
     }
     if (v > 1000) return(format(round(v), big.mark = ","))
     sprintf("%.2f", v)

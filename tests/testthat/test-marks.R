@@ -139,11 +139,35 @@ test_that("no formatted time ever contains a field of 60 or more", {
          59.9 + runif(2000, 0, 0.1), 3599.9 + runif(2000, 0, 0.1),
          7259.5 + runif(2000, 0, 0.5))
   marks <- predicted_mark(to_perf(v, -1), -1)$mark
-  fields <- strsplit(marks, ":", fixed = TRUE)
-  bad <- vapply(fields, function(f) {
-    if (length(f) < 2L) return(FALSE)
-    any(as.numeric(f[-1L]) >= 60)
+  # A BARE mark must be checked too, not skipped for having no colon. The
+  # quieter half of this bug printed "60.00" with no colon at all: the branch
+  # was chosen on `v` while the digits came from a rounded value, so 59.996 took
+  # the under-a-minute path. An earlier version of this test returned FALSE for
+  # any single-field mark, so it could not see that variant -- fed 116 genuinely
+  # broken "60.00"s it reported zero. Every mark here is a time (orientation -1
+  # throughout), so a bare value of 60 or more is always wrong.
+  bad <- vapply(marks, function(m) {
+    if (is.na(m)) return(FALSE)
+    f <- strsplit(m, ":", fixed = TRUE)[[1L]]
+    n <- suppressWarnings(as.numeric(if (length(f) == 1L) f else f[-1L]))
+    any(!is.na(n) & n >= 60)
   }, logical(1))
   expect_equal(sum(bad), 0L, info = paste("examples:",
     paste(utils::head(marks[bad], 5), collapse = " ")))
+})
+
+test_that("an absurd but finite ability does not format as the string 'NA:NA:NA'", {
+  # Guarding the INPUT for non-finiteness is not enough: a large finite value
+  # used to overflow as.integer() and print "NA:NA:NA" -- a string, so
+  # `is.na(mark)` reads FALSE and every downstream filter for bad predictions
+  # passes it through. Whatever comes back here must be either a real NA or a
+  # well-formed time, never the word NA embedded in one.
+  # -30 already lands at ~3e9 seconds, well past the 2147483647 where the old
+  # integer conversion gave up. Stopping there rather than going further keeps
+  # the values inside the range where double modulus is still exact, so the
+  # test asserts formatting rather than provoking a precision warning.
+  m <- predicted_mark(c(-21, -22, -30), -1)$mark
+  expect_false(any(grepl("NA", m[!is.na(m)], fixed = TRUE)))
+  ok <- is.na(m) | grepl("^[0-9]+:[0-5][0-9]:[0-5][0-9]$", m)
+  expect_true(all(ok), info = paste("got:", paste(m, collapse = " ")))
 })
