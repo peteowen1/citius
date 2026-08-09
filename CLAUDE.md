@@ -514,11 +514,27 @@ per-competition, and varies WITHIN a single meet: the 2025 Weltklasse Zürich
 carries A, DF, F and GW across its own results, classifying as high, mid, low
 and top simultaneously. 189 of 1,055 competitions hold more than one tier code.
 
-The direction of the damage is the worst possible one. Diamond League marks —
-the strongest fields in the sport, measured at 92.0 field strength against the
-Olympics' 86.1 — are routinely labelled tier F, "low", and then adjusted
-*upward* by 1.69% as though set at a slow meet. That lands on exactly the
-athletes the model exists to rank.
+**CORRECTED 2026-08-06 — the paragraph that stood here was wrong in three ways,
+and the correction matters because it was the stated motivation for a queued
+weeks-long piece of work.** It said Diamond League marks are "routinely labelled
+tier F, low, and then adjusted upward by 1.69%". Measured over 573 DL finals:
+
+- **72.1% of DL results carry a correct `top` code.** Only 14.8% are `low`.
+- The deployed `low` offset is **−1.223%**, not −1.69%. That figure is a stale
+  2026-07-29 vintage still quoted in several files.
+- The real defect is that the deployed tier scale is **non-monotonic** — `mid`
+  (−1.432%) corrects harder than `low` (−1.223%) — which broke in the
+  2026-07-31 corpus rebuild.
+
+Size: **−0.28% of centred marks MAE** (p = 0.0147), 1 of 8 metrics significant,
+neither product metric moving. It is a **placings** effect, not marks-only: 79%
+of its variance is within-race and it changes the named favourite in 7.0% of DL
+races.
+
+Also a hard ceiling nobody had measured: **37.8% of store rows carry no
+`competition_id`**, so any `competition_id`-keyed replacement can never reach
+more than 62.2% of history — and `strength` is retrospective-only, so it cannot
+serve a forward forecast at all.
 
 Use `class` and `strength` from `citiusdata/data/competition_catalogue.parquet`
 instead. **Do not fit anything new on `tier`.**

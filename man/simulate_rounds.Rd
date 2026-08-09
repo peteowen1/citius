@@ -9,7 +9,8 @@ simulate_rounds(
   structure,
   n_sims = 10000L,
   calibration = NULL,
-  seed = NULL
+  seed = NULL,
+  medal_draws = FALSE
 )
 }
 \arguments{
@@ -25,10 +26,20 @@ round is the final and needs only \code{races = 1}.}
 \item{calibration}{Optional \code{citius_calibration}.}
 
 \item{seed}{Optional integer seed.}
+
+\item{medal_draws}{If \code{TRUE}, attach the per-simulation podium as a
+\code{"medal_draws"} attribute: a \code{data.table} of \code{sim}, \code{athlete_id}, \code{place}.
+Marginal probabilities discard the joint structure, which is most of the
+answer for anything counted per nation — two athletes from one country in a
+final contest the same three medals, so their chances are strongly
+negatively dependent and summing marginals as if independent overstates the
+spread. Off by default; costs nothing when unused.}
 }
 \value{
 A \code{data.table} with one row per athlete: \verb{p_reach_*} for each round
-after the first, plus \code{p_gold}, \code{p_medal} and \code{p_final}.
+after the first, plus \code{p_gold}, \code{p_medal} and \code{p_final}. With
+\code{medal_draws = TRUE}, also carries the \code{"medal_draws"} attribute described
+above.
 }
 \description{
 \code{\link[=simulate_event]{simulate_event()}} answers "who wins this race, given the field". A
