@@ -1049,9 +1049,22 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
 
   # THREE separate faults were found in this block on 2026-07-31, all of which
   # inflate the spread of thinly-raced athletes and hand them win probability
-  # they have not earned. Measured out of sample over 44,607 predictions,
-  # athletes with `w_total` < 1 were credited with 0.0509 gold and won 0.0412 --
-  # a ratio of 0.81 -- while athletes with `w_total` > 10 came in at 1.03.
+  # they have not earned.
+  #
+  # THE SEVERITY HERE WAS OVERSTATED -- corrected 2026-08-12. This block used to
+  # claim thin athletes (`w_total` < 1) were credited 0.0509 gold and won 0.0412,
+  # a ratio of 0.81. Re-measured over the full 380-meet cache (42,765 scored
+  # athlete-races, races whose winner is in the field), the credited figure
+  # reproduces at 0.0503 but the realised one does not: 0.0477, a ratio of
+  # **0.948**. Deep athletes (`w_total` > 10) come in at 1.040, matching the
+  # logged 1.03. Same direction, about a third of the severity.
+  #
+  # Sizing that matters for anyone tempted to build on this: perfectly
+  # recalibrating every evidence-depth bucket to its own realised ratio -- an
+  # UPPER BOUND on any fix of this class -- is worth -0.15% gold Brier and
+  # -0.18% medal. Treat these as defect fixes judged on do-no-harm, never as
+  # improvements. The real driver of thin-athlete mis-rating is the unremoved
+  # race effect; see docs/reference/modelling-traps.md.
   #
   # 1. The sample spread is not robust. One impossible mark in a three-mark
   #    history produced `sigma` 6.6x the event value. `.weighted_upper_sd()`
