@@ -632,6 +632,12 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                              trim_tactical = 0.25, min_results = 1L,
                              adjust_context = TRUE, calibration = NULL,
                              robust_sigma = TRUE,
+                             # DO NOT add "target"/"target_shrink" here. This is
+                             # the DEFAULT, not the choice list -- match.arg()
+                             # with several.ok = TRUE returns every element of
+                             # it, so extending this line silently switches the
+                             # extra parts on for every caller. The choices live
+                             # at the match.arg() call below.
                              sigma_parts = c("estimator", "weight"),
                              sigma_mode = c("athlete", "event"),
                              only = NULL, peak_gamma = 0,
@@ -1093,11 +1099,22 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # `target` ships only once an arm has measured it.
   sigma_mode <- match.arg(sigma_mode)
   parts <- if (isTRUE(robust_sigma)) {
-    match.arg(sigma_parts, c("estimator", "weight", "target"), several.ok = TRUE)
+    match.arg(sigma_parts, c("estimator", "weight", "target", "target_shrink"),
+              several.ok = TRUE)
   } else character()
-  use_estimator <- "estimator" %in% parts
-  use_target    <- "target" %in% parts
-  use_weight    <- "weight" %in% parts
+  use_estimator     <- "estimator" %in% parts
+  use_target        <- "target" %in% parts
+  use_weight        <- "weight" %in% parts
+  use_target_shrink <- "target_shrink" %in% parts
+  # Both on is not a stronger version of either -- `target` already routes the
+  # measured value into the emitted sigma, so `target_shrink` would be a silent
+  # no-op and the arm unattributable. Refuse rather than pick one.
+  if (use_target && use_target_shrink) {
+    cli::cli_abort(c(
+      "{.arg sigma_parts} cannot contain both {.val target} and {.val target_shrink}.",
+      i = "{.val target} routes the measured spread into the emitted sigma; {.val target_shrink} routes it into the shrinkage path only. Together the second does nothing."
+    ))
+  }
 
   if (use_estimator) {
     # Put the good-side estimate back on the pooled-spread scale, calibrated
@@ -1124,23 +1141,55 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     ab[, sigma := sigma_raw]
   }
 
+  # The MEASURED within-athlete spread for the event, or NA where the
+  # calibration has none. Extracted because two callers need it below and the
+  # vectorised-comparison trap in it must not be written twice.
+  .measured_sigma_within <- function() {
+    if (is.null(calibration) || is.null(calibration$events)) return(NULL)
+    tgt <- data.table::as.data.table(calibration$events)
+    if (!all(c("event_id", "sigma_within") %in% names(tgt))) return(NULL)
+    k <- match(ab$event_id, tgt$event_id)
+    sw <- tgt$sigma_within[k]
+    # NOT isTRUE(): on a vector it returns a single FALSE, so `!isTRUE(...)`
+    # is a length-one TRUE that recycles and blanks the WHOLE column. That is
+    # the same defect found in this file at line 507 on 2026-07-31, written
+    # again here hours later. Vectorised comparison only.
+    if ("calibrated" %in% names(tgt)) {
+      ok_cal <- tgt$calibrated[k]
+      sw[is.na(ok_cal) | !ok_cal] <- NA_real_
+    }
+    sw
+  }
+
   # Shrink toward the MEASURED within-athlete spread for the event, falling back
   # to the registry placeholder only where no calibration exists.
   ab[, sigma_target := cv_prior]
-  if (use_target && !is.null(calibration) && !is.null(calibration$events)) {
-    tgt <- data.table::as.data.table(calibration$events)
-    if (all(c("event_id", "sigma_within") %in% names(tgt))) {
-      k <- match(ab$event_id, tgt$event_id)
-      sw <- tgt$sigma_within[k]
-      # NOT isTRUE(): on a vector it returns a single FALSE, so `!isTRUE(...)`
-      # is a length-one TRUE that recycles and blanks the WHOLE column. That is
-      # the same defect found in this file at line 507 on 2026-07-31, written
-      # again here hours later. Vectorised comparison only.
-      if ("calibrated" %in% names(tgt)) {
-        ok_cal <- tgt$calibrated[k]
-        sw[is.na(ok_cal) | !ok_cal] <- NA_real_
-      }
-      ab[is.finite(sw) & sw > 0, sigma_target := sw[is.finite(sw) & sw > 0]]
+  if (use_target) {
+    sw <- .measured_sigma_within()
+    if (!is.null(sw)) ab[is.finite(sw) & sw > 0, sigma_target := sw[is.finite(sw) & sw > 0]]
+  }
+
+  # DECOUPLING (`sigma_parts = "target_shrink"`, default OFF).
+  #
+  # `sigma` does two unrelated jobs: it sets the shrinkage strength through
+  # `kappa = sigma^2 / sigma_between^2`, and it is the dispersion handed to
+  # `simulate_event()`. The `target` arm raised both at once and was REFUTED on
+  # 2026-08-12 -- gold Brier +0.42% (t = +3.77, p = 0.000172) over 1,316 paired
+  # races -- because widening a thin athlete's DRAW hands back more win
+  # probability than the extra shrinkage removes. Win probability rewards being
+  # unpredictable (OPTIMISATION-FRAMEWORK.md item 3).
+  #
+  # This applies the measured target to the shrinkage path ONLY, leaving the
+  # simulator's sigma on the placeholder. It isolates the half that helped.
+  # `target` and `target_shrink` are mutually exclusive: with both on, the
+  # second is a no-op and the arm would be unattributable.
+  sigma_shr_target <- NULL
+  if (use_target_shrink && !use_target) {
+    sw <- .measured_sigma_within()
+    if (!is.null(sw)) {
+      sigma_shr_target <- ab$sigma_target
+      ok <- is.finite(sw) & sw > 0
+      sigma_shr_target[ok] <- sw[ok]
     }
   }
   ab[, sigma := data.table::fifelse(is.na(sigma) | sigma <= 0, sigma_target, sigma)]
@@ -1148,6 +1197,11 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # A two-race athlete's sample spread is close to meaningless on its own, so
   # blend toward the event value by absolute evidence.
   shrink_w <- if (use_weight) ab$w_total else ab$n_eff
+  # Mirror the blend with the measured target BEFORE `sigma` is overwritten, so
+  # the two paths differ in exactly one input and nothing else.
+  if (!is.null(sigma_shr_target)) {
+    ab[, sigma_shr := (shrink_w * sigma + 2 * sigma_shr_target) / (shrink_w + 2)]
+  }
   ab[, sigma := (shrink_w * sigma + 2 * sigma_target) / (shrink_w + 2)]
 
   # Rescale to the context being FORECAST. sigma is fitted across the pooled
@@ -1167,6 +1221,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     ratio <- sc$ratio[match(fam, sc$family)]
     ratio[!is.finite(ratio) | ratio <= 0] <- 1
     ab[, sigma := sigma * ratio]
+    if ("sigma_shr" %in% names(ab)) ab[, sigma_shr := sigma_shr * ratio]
   }
 
   # `sigma_mode = "event"` gives every athlete their event's measured spread.
@@ -1179,12 +1234,18 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # reordering carries information or destroys it.
   if (identical(sigma_mode, "event")) {
     ab[, sigma := sigma_target]
+    if ("sigma_shr" %in% names(ab)) ab[, sigma_shr := sigma_shr_target]
   }
 
   ab[, sigma_between := data.table::fifelse(
     is.na(sigma_between) | sigma_between <= 0, sigma, sigma_between
   )]
-  ab[, kappa := (sigma^2) / (sigma_between^2)]
+  # `kappa` reads the SHRINKAGE sigma, which is the emitted one unless
+  # `target_shrink` asked for them to differ. Everything downstream of `kappa`
+  # -- shrinkage, ability, ability_se -- follows it; `sigma` itself is left
+  # alone because that is what `simulate_event()` draws with.
+  sig_k <- if ("sigma_shr" %in% names(ab)) ab$sigma_shr else ab$sigma
+  ab[, kappa := (sig_k^2) / (sigma_between^2)]
   # Shrink on total weight, not n_eff: a decade-old record carries almost no
   # weight and should regress to the event mean regardless of how many results
   # it contains. This is what makes stale athletes fall out of contention on
@@ -1209,7 +1270,9 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     ab[, ability_peak := (1 - shrinkage) * ability_raw_peak + shrinkage * prior_mu]
   }
 
-  ab[, ability_se := sigma / sqrt(w_total + kappa)]
+  # Uncertainty in the ABILITY estimate, so it follows the shrinkage sigma for
+  # the same reason `kappa` does. Identical to `sigma` unless `target_shrink`.
+  ab[, ability_se := sig_k / sqrt(w_total + kappa)]
 
   if (!is.null(only)) ab <- ab[as.character(athlete_id) %in% as.character(only)]
 
