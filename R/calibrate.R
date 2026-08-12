@@ -116,7 +116,39 @@ add_race_key <- function(results) {
 #'   effect table, the augmented `data` carrying `resid`, and `converged`.
 #' @export
 decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
-                            min_race_size = 2L) {
+                            min_race_size = 2L,
+                            centre = c("always", "auto")) {
+  # `centre = "auto"` is the FIX for the non-convergence this function has always
+  # had on athletics, MEASURED 2026-08-13. It is not the default only because
+  # flipping it moves sigma_within, condition_sd, tail_df and every context
+  # offset in every calibration, and no shipped number changes without an A/B.
+  #
+  # WHY "always" IS WRONG WHENEVER ANY RACE IS PINNED. Races below
+  # `min_race_size` keep `c_r == 0` by construction, and a pinned race FIXES THE
+  # ZERO POINT -- the additive confounding between `a` and `c` is already
+  # resolved. Centring the free effects to mean zero then imposes a SECOND,
+  # incompatible constraint. The system is over-determined, there is no fixed
+  # point, and the iteration drifts forever: the pinned races pull the level one
+  # way each sweep and the centring pushes it back.
+  #
+  # Measured on the men's 100m, 183,738 results, min_race_size = 4:
+  #
+  #   variant                     delta @400   delta @2000   sd(c_r) 400->2000
+  #   centred (today)             3.21e-04     2.72e-04      +117.3%  never converges
+  #   NOT centred                 1.36e-05     9.98e-09      +0.0%    converged, 1038 sweeps
+  #   centred over all rows       3.23e-04     2.84e-04      +120.9%  never converges
+  #
+  # cor between the centred and uncentred answers is 0.40, so this is a WRONG
+  # ANSWER, not a slow one. The converged race-effect sd is 0.01390 (1.40% of a
+  # mark); the centred run was still climbing through 0.03646 at 2,000 sweeps.
+  # Without the fix, `condition_sd` -- which is computed from these effects
+  # rather than the residuals -- is unreliable. `sigma_within` and `tail_df` come
+  # from the residuals and move only 0.38%, so they are largely unaffected.
+  #
+  # The uncentred solution has a non-zero mean (the pinned races define the
+  # origin, not the average race), so any consumer comparing `c_r` across
+  # decompositions must not assume it is centred.
+  centre <- match.arg(centre)
   dt <- data.table::as.data.table(results)
   if (!"race_key" %in% names(dt)) {
     cli::cli_abort("{.arg results} must contain a {.field race_key} column; use {.fn athletics_competition_results}.")
@@ -177,7 +209,12 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
     dt[, a_i := mean(perf - c_r), by = ae_id]
     new_c <- dt[shared == TRUE, .(c_new = mean(perf - a_i)), by = rk_id]
     if (!nrow(new_c)) { converged <- TRUE; break }
-    new_c[, c_new := c_new - mean(c_new)]        # centre: resolves the confounding
+    # Centre only when it is actually needed. With any race pinned at zero the
+    # level is already identified and this constraint is redundant AND harmful --
+    # see the note at the top of this function.
+    if (identical(centre, "always") || all(dt$shared)) {
+      new_c[, c_new := c_new - mean(c_new)]      # centre: resolves the confounding
+    }
     # An update join, NOT a merge. `merge()` here rebuilt the entire table --
     # every row, every column -- on each of up to 50 sweeps, purely to attach one
     # number per race. This writes in place.
