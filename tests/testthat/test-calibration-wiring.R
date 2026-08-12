@@ -66,6 +66,36 @@ KNOWN_UNREAD <- c(
   "athlete_foul"
 )
 
+# Layers the package reads that the DEPLOYED calibration deliberately omits.
+# Every entry names the experiment that refuted it, so "off on purpose" cannot be
+# confused with "silently lost". Populated from a real audit on 2026-08-12; see
+# the deployment test at the bottom of this file.
+# ONLY `season` is a choice. The other three are DEFECTS, registered so that a
+# FIFTH one fails loudly rather than joining them unnoticed. Fixing any of them
+# also fails this test until its line is removed -- the register must not rot
+# into a permanent mute.
+DEPLOYED_OFF <- c(
+  # `casym`. Measured gold Brier -0.62% and medal -0.24%, BOTH SIGNIFICANT, and
+  # OPTIMISATION-FRAMEWORK.md SS7 still lists it "pending - decide on the new
+  # metric". A measured BENEFIT that has never reached a deployed calibration.
+  # This is the most expensive entry here. (2026-08-12)
+  "asymmetry",
+  # Failure 1 in this file's own header, still absent. `estimate_ability()` has
+  # read `calibration$indoor` since before this guard existed and no deployed
+  # calibration has ever carried it. (2026-08-12)
+  "indoor",
+  # `apply_momentum()` strips momentum from history and adds it back at forecast
+  # time, and no deployed calibration carries the table -- so BOTH halves are
+  # inert and every forecast is of an athlete in average readiness. (2026-08-12)
+  "momentum",
+  # THE ONLY DELIBERATE ONE. A/B'd on 250 meets and REJECTED 2026-08-04: gold
+  # Brier +2.02% on majors (p = 0.00059) and +0.74% across 948 scored finals
+  # (p = 0.00019). Marks improved while placings degraded, because 59% of the
+  # shift is common to the race and cancels from every pairwise comparison.
+  # Keep it off. (2026-08-12)
+  "season"
+)
+
 # Slots that are diagnostics or run metadata, never model inputs. The estimator
 # is not supposed to read these, so their absence from the read set is correct
 # rather than a defect.
@@ -242,6 +272,55 @@ test_that("every element a pipeline script attaches to a calibration is read", {
       "never reads. This is how the coasting trait was recorded as adopted ",
       "while doing nothing. Wire a reader, or register it with a date.\n",
       paste0("  ", orphans, "  <- set at ", where, collapse = "\n")))
+})
+
+test_that("the DEPLOYED calibration carries a table for every layer the package reads", {
+  # THE GAP THE THREE TESTS ABOVE CANNOT SEE (2026-08-12).
+  #
+  # They check that CODE reads what CODE sets. All three pass while the model
+  # runs with half its adjustment layers switched off, because every layer is
+  # gated on `!is.null(calibration$x)` and SKIPS IN SILENCE when the deployed
+  # file has no table for it. A setter existing in some build script is not the
+  # same claim as the shipped calibration carrying the result.
+  #
+  # Audited 2026-08-12 against calibration_corpus_csigma.rds: five of ten layers
+  # were absent, three of them unintentionally. That is the same failure as the
+  # `indoor` and `season` incidents this file was written for, one level further
+  # out -- and it is why "we built that feature" and "that feature affects the
+  # answer" keep coming apart here.
+  #
+  # A layer that is off ON PURPOSE goes on DEPLOYED_OFF with the experiment that
+  # refuted it. Deliberately-off and silently-lost must not look identical.
+  root <- wiring_verse_root()
+  skip_if(is.null(root), "citiusdata not found beside the package")
+  dep <- file.path(root, "citiusdata", "scripts", "_deployed.R")
+  skip_if_not(file.exists(dep), "_deployed.R not found")
+
+  src <- readLines(dep, warn = FALSE)
+  hit <- grep("^\\s*calibration\\s*=", src, value = TRUE)
+  skip_if(!length(hit), "_deployed.R names no calibration")
+  cal_file <- file.path(root, "citiusdata", "data",
+                        sub('^[^"]*"([^"]*)".*$', "\\1", hit[1]))
+  skip_if_not(file.exists(cal_file),
+              paste("deployed calibration not present:", basename(cal_file)))
+
+  have <- names(readRDS(cal_file))
+  expect_gte(length(have), 10L)          # vacuity floor: an unreadable file must fail
+
+  reads <- unique(wiring_reads()$element)
+  # KNOWN_UNSET is already registered as "nothing anywhere produces this", so it
+  # cannot also count as a deployment gap.
+  candidates <- setdiff(reads, KNOWN_UNSET)
+  missing <- sort(setdiff(candidates, have))
+
+  expect_equal(
+    missing, sort(intersect(DEPLOYED_OFF, candidates)),
+    info = paste0(
+      "The deployed calibration (", basename(cal_file), ") carries no table for: ",
+      paste(missing, collapse = ", "),
+      ".\nEach of those adjustment layers is gated on !is.null() and is doing ",
+      "NOTHING in every shipped forecast, silently. Rebuild the calibration with ",
+      "it, or add it to DEPLOYED_OFF naming the experiment that refuted it."))
 })
 
 test_that("the deployed stamp names the deployed calibration", {
