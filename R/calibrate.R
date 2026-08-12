@@ -324,9 +324,24 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
 #' @export
 calibrate <- function(results, min_races = 8L, min_race_size = 2L,
                       context_per_family = FALSE, context_per_event = FALSE,
-                      context_season = FALSE, context_indoor = FALSE) {
+                      context_season = FALSE, context_indoor = FALSE,
+                      centre = c("always", "auto"), max_iter = 400L) {
+  centre <- match.arg(centre)
+  # `centre` and `max_iter` are exposed so the convergence fix is REACHABLE from
+  # a calibration build. Both defaults reproduce the previous behaviour exactly.
+  # They travel together on purpose: `centre = "auto"` converges on the men's
+  # 100m only after ~1,038 sweeps, so passing it with the 400 default would
+  # produce an unconverged fit under a name that claims otherwise -- a worse
+  # failure than the one being fixed.
+  if (identical(centre, "auto") && max_iter <= 400L) {
+    cli::cli_warn(c(
+      "{.code centre = \"auto\"} with {.code max_iter = {max_iter}} may not converge.",
+      i = "The uncentred fit needed 1,038 sweeps on the men's 100m. Check {.field converged} on the result."
+    ))
+  }
   results <- .drop_best_only(results, "calibrate()")
-  dec <- decompose_races(results, min_race_size = min_race_size)
+  dec <- decompose_races(results, min_race_size = min_race_size,
+                         centre = centre, max_iter = max_iter)
   if (is.null(dec$race) || !nrow(dec$race)) {
     return(.empty_calibration())
   }
