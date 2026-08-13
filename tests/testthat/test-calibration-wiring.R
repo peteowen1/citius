@@ -63,7 +63,23 @@ KNOWN_UNREAD <- c(
   # run_athlete_foul_screening.R:13 calls `fit_athlete_foul_trait()`, which no
   # longer exists anywhere in the package - so that script cannot run at all and
   # the slot it writes is doubly dead. (2026-08-06)
-  "athlete_foul"
+  "athlete_foul",
+  # MOVED HERE FROM `CALIBRATION_METADATA` ON 2026-08-13. `race` carries 350,401
+  # fitted `c_r` values and was classified a diagnostic - "never a model input,
+  # so its absence from the read set is correct". That classification was wrong,
+  # and it silenced this guard on the largest unwired quantity in the package.
+  #
+  # `c_r` is the correction for a tactically slow race: it absorbs "everyone was
+  # 4s down" so the residual keeps an athlete's credit for being only 3s down.
+  # With it unread, Audrey Werro was published 9th in the 800m W having run three
+  # of the ten fastest times in history that season, rated principally on heats
+  # she jogged. See ../../../docs/incidents/werro-underrated-2026-08-13.md.
+  #
+  # Registered rather than wired because wiring it is not the one-line join the
+  # queue assumed: the ratings page is sourced from championship_results.rds,
+  # whose race keys share 0 of 509,650 with the calibration's. Real on the
+  # corpus, impossible on the page. (2026-08-13)
+  "race"
 )
 
 # Layers the package reads that the DEPLOYED calibration deliberately omits.
@@ -99,8 +115,15 @@ DEPLOYED_OFF <- c(
 # Slots that are diagnostics or run metadata, never model inputs. The estimator
 # is not supposed to read these, so their absence from the read set is correct
 # rather than a defect.
+#
+# Be sparing. An entry here is a claim that nothing SHOULD read the slot, and it
+# switches this guard off for that slot permanently and silently -- which is the
+# one failure mode the register below cannot express, because a metadata entry
+# never fails when the slot gets wired. `race` sat here until 2026-08-13 and hid
+# the package's largest unwired quantity; see its note in KNOWN_UNREAD. If the
+# honest reason is "nothing reads it YET", that is KNOWN_UNREAD, not this list.
 CALIBRATION_METADATA <- c(
-  "ability", "race",                       # the raw two-way decomposition
+  "ability",                               # per-athlete side of the decomposition
   "min_races", "min_race_size",            # the thresholds it was fitted under
   "converged", "delta", "sweeps",          # solver diagnostics
   "provenance"                             # rebaseline_chain.R's audit stamp
