@@ -41,6 +41,13 @@ jobs:
         with:
           repository: peteowen1/citiusdata
           path: citiusdata-sibling
+          # citiusdata is PRIVATE, and the default GITHUB_TOKEN is scoped to
+          # this repository only -- it 404s on the sibling, which is why this
+          # step failed silently under continue-on-error from 2026-08-13 until
+          # the review made it hard on 2026-08-14. Fine-grained PAT, Contents
+          # read-only on peteowen1/citiusdata. If CI starts reporting "Not
+          # Found" here again, the token has expired: reissue and re-set it.
+          token: ${{ secrets.SIBLING_READ_PAT }}
 
       - name: Setup R
         uses: r-lib/actions/setup-r@v2
