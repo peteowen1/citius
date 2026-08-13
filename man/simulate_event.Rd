@@ -14,7 +14,6 @@ simulate_event(
   form_sd = NULL,
   calibration = NULL,
   condition_prior_weight = 0,
-  round_class = "final",
   seed = NULL
 )
 }
@@ -48,7 +47,14 @@ accumulates. Defaults to the measured value from \code{calibration}; see
 the measured shared-shock magnitude, per-athlete condition sensitivity and
 foul rate. Without it the simulator falls back to registry placeholders.}
 
-\item{seed}{Optional integer seed for reproducibility.}
+\item{condition_prior_weight}{Weight in \verb{[0, 1]} for re-shrinking each
+entrant toward this field's own mean via \code{\link[=condition_prior]{condition_prior()}} before
+simulating. \code{0} (the default) leaves the ability table as supplied; only
+applied when the table carries \code{ability_raw}, \code{shrinkage} and \code{prior_mu}.}
+
+\item{seed}{Optional integer seed for reproducibility. The RNG state is
+restored on exit, so a seeded simulation does not change the draws of
+whatever runs after it.}
 }
 \value{
 An object of class \code{citius_sim}: a list with the raw \code{perf} matrix

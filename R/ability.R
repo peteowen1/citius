@@ -1,3 +1,23 @@
+# PLACEHOLDER CONSTANTS, named so each exists exactly once and its status is
+# declared. The package rule is "no hand-tuned constants in the models"; these
+# two are the surviving exceptions and each is a FALLBACK, not an estimate.
+#
+# Within-athlete CV used only when an event's `cv_prior` is absent or
+# non-positive -- the same placeholder role `cv_prior` itself plays against a
+# calibration. 0.02 is the order of magnitude of athletics CVs (measured
+# sigma_within runs ~0.008-0.04 by event); it exists so the Huber cutoff is
+# defined before any calibration does, and nothing more.
+.CITIUS_FALLBACK_CV <- 0.02
+
+# Pseudo-count for blending a thin athlete's sample sigma toward the event
+# value: sigma <- (w * sigma + k * target) / (w + k) with k = 2. Never fitted --
+# the `crob` arm that validated this path (-0.56% gold Brier, 2026-07-31) ran
+# WITH k = 2 inside it, so the bundle is validated but the constant is not
+# separately attributed. If evidence-depth weighting is ever revisited (its
+# measured ceiling is -0.15% gold Brier; see the block comment in
+# estimate_ability()), fitting k is the natural first arm.
+.CITIUS_SIGMA_PSEUDO_N <- 2
+
 #' Weight a historical result by recency, competition tier and round
 #'
 #' Controls how much each past performance counts toward an athlete's current
@@ -280,8 +300,15 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
   dt[, resid2 := resid - r_adj]
 
   t_eff <- dt[, .(eff = mean(resid2), n = .N), by = tier_class]
-  t_eff[, eff := eff - eff[tier_class == "top"][1]]
-  if (!nrow(t_eff[tier_class == "top"])) t_eff[, eff := eff - max(eff)]
+  # Same resolve-BEFORE-subtract order as the round block above, and for the
+  # same reason. This block kept the old subtract-then-test order after the
+  # round block was fixed: with no "top" row the subtraction turned the column
+  # all-NA and the fallback's max() over all-NA was also NA, so a corpus with no
+  # top-tier rows (a source mapping no tiers classifies everything "mid") got
+  # every tier offset NA -- read downstream as a silent zero adjustment.
+  t_ref <- t_eff[tier_class == "top", eff][1]
+  if (!is.finite(t_ref)) t_ref <- max(t_eff$eff, na.rm = TRUE)
+  if (is.finite(t_ref)) t_eff[, eff := eff - t_ref]
 
   # Per-family offsets alongside the pooled ones. A pooled offset is a weighted
   # average across events that behave completely differently: the low-tier
@@ -577,13 +604,394 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @noRd
 .tier_class <- function(tier) {
   t <- toupper(trimws(as.character(tier)))
+  known <- c("OW", "GW", "GL", "A", "B", "C", "D", "DF", "E", "F")
   out <- rep("mid", length(t))
   out[t %in% c("OW", "GW", "GL")] <- "top"
   out[t %in% c("A", "B")] <- "high"
   out[t %in% c("C", "D", "DF")] <- "mid"
   out[t %in% c("E", "F")] <- "low"
   out[is.na(t)] <- "mid"
+  # An unknown NON-missing code lands "mid" silently, which is how a new feed
+  # code would misclassify without a trace -- "DF" itself appeared after this
+  # mapping was first written. NA stays silent: absent is expected, unknown is
+  # news.
+  unknown <- !is.na(t) & nzchar(t) & !(t %in% known)
+  if (any(unknown)) {
+    cli::cli_warn(
+      "Unknown tier code{?s} {.val {unique(t[unknown])}} classified as {.val mid}; extend .tier_class() if {?it is/they are} real.",
+      .frequency = "once", .frequency_id = "citius_tier_unknown")
+  }
   out
+}
+
+
+#' Put every performance on the footing the forecast targets
+#'
+#' The adjustment cascade extracted from [estimate_ability()], which had grown
+#' it to ~350 lines inline: round/tier offsets (event -> family -> pooled
+#' fallback chain), the fitted race effect, the coasting excess, wind,
+#' momentum, indoor, seasonal phase and the championship offset -- in that
+#' order, because the compositions are load-bearing: wind is suppressed on
+#' rows where a race effect was applied, and coasting subtracts the EXCESS
+#' over the round offset already removed. Each layer documents its own trap
+#' inline below.
+#'
+#' Mutates `dt` BY REFERENCE -- every write is a data.table `:=`, and the
+#' block was verified to contain no `dt <-` reassignment when extracted
+#' (2026-08-13). Callers rely on that; the same table returns invisibly.
+#' @keywords internal
+#' @noRd
+.adjust_history_to_target <- function(dt, calibration, adjust_race) {
+  ctx <- if (!is.null(calibration) && !is.null(calibration$round)) {
+    list(round = stats::setNames(calibration$round$offset, calibration$round$round_class),
+         tier  = stats::setNames(calibration$tier$offset, calibration$tier$tier_class))
+  } else estimate_context_effects(dt)
+  rc <- .round_class(if ("round" %in% names(dt)) dt$round else NA_character_)
+  # Tier class, from the MEET where one is supplied, otherwise from the feed's
+  # per-result `tier` code.
+  #
+  # The feed code is not trustworthy: it varies WITHIN a single meet -- the
+  # 2025 Weltklasse Zurich carries A, DF, F and GW across its own results,
+  # classifying as high, mid, low and top at once -- and 189 of 1,341
+  # competitions hold more than one. The direction of the damage is the worst
+  # available: Diamond League marks, the strongest fields in the sport, are
+  # routinely labelled "low" and then adjusted UPWARD by 1.69% as though set
+  # at a slow meet. Those are precisely the athletes and races that make up
+  # the T1 population the model is judged on.
+  #
+  # Pass `meet_tier` on the results (join it from
+  # citiusdata/data/competition_catalogue.parquet) and it is used instead.
+  # Same helper the calibration fits with, so the class an offset was
+  # ESTIMATED for is always the class it is APPLIED to. This mapping used to be
+  # written out here and nowhere else, which is exactly how the two halves came
+  # apart.
+  tc <- .tier_class_of(dt)
+  r_adj <- ctx$round[rc]; r_adj[is.na(r_adj)] <- 0
+  t_adj <- ctx$tier[tc];  t_adj[is.na(t_adj)] <- 0
+  # Prefer the family's own offset where one was fitted; fall back to pooled.
+  # The pooled value averages over events that behave oppositely -- road's
+  # low-tier penalty is -0.45% against throws' -3.59% -- so applying it
+  # uniformly mis-adjusts both ends.
+  reg_c <- .citius_event_registry[, c("event_id", "family")]
+  fam_c <- reg_c$family[match(dt$event_id, reg_c$event_id)]
+  rfam <- if (!is.null(calibration$round_family)) calibration$round_family
+          else ctx$round_family
+  tfam <- if (!is.null(calibration$tier_family)) calibration$tier_family
+          else ctx$tier_family
+  if (!is.null(rfam) && nrow(rfam)) {
+    k <- match(paste(fam_c, rc), paste(rfam$family, rfam$round_class))
+    r_adj[!is.na(k)] <- rfam$offset[k[!is.na(k)]]
+  }
+  if (!is.null(tfam) && nrow(tfam)) {
+    k <- match(paste(fam_c, tc), paste(tfam$family, tfam$tier_class))
+    t_adj[!is.na(k)] <- tfam$offset[k[!is.na(k)]]
+  }
+
+  # The event's own offset wins over its family's, for the same reason the
+  # family's wins over the pooled one: it is the least pooled estimate that
+  # still has data behind it. Applied last so the fallback chain reads
+  # event -> family -> pooled in the order the assignments happen.
+  reve <- if (!is.null(calibration$round_event)) calibration$round_event
+          else ctx$round_event
+  teve <- if (!is.null(calibration$tier_event)) calibration$tier_event
+          else ctx$tier_event
+  if (!is.null(reve) && nrow(reve)) {
+    k <- match(paste(dt$event_id, rc), paste(reve$event_id, reve$round_class))
+    r_adj[!is.na(k)] <- reve$offset[k[!is.na(k)]]
+  }
+  if (!is.null(teve) && nrow(teve)) {
+    k <- match(paste(dt$event_id, tc), paste(teve$event_id, teve$tier_class))
+    t_adj[!is.na(k)] <- teve$offset[k[!is.na(k)]]
+  }
+  dt[, perf := perf - unname(r_adj) - unname(t_adj)]
+
+  # THE RACE EFFECT. `decompose_races()` fits perf = athlete + race + resid,
+  # and until 2026-08-13 this function read none of it: `calibration$race`
+  # shipped in every deployed file, loaded on every run, and was never
+  # consumed. A fast track, a fast night, pacing or altitude therefore flowed
+  # straight into every athlete's estimate.
+  #
+  # This is the correction Pete described from the outside: if everyone in a
+  # race ran 4s slow and an athlete ran 3s slow, they beat the race by 1s and
+  # should be credited with it. `c_r` is the "everyone was 4s slow" term.
+  #
+  # ON THE DEPLOYED (CENTRED) FIT c_r HAS ZERO MEAN -- measured 3.33e-19, sd
+  # 0.0271, 5-95% -0.043..0.039. The queue's warning that subtracting it shifts
+  # ability levels globally was written for the UNCENTRED variant
+  # (`centre = "auto"`), which was A/B'd and rejected on 2026-08-13. It does not
+  # apply here, and marks are safe. Re-check that mean if the default ever
+  # changes.
+  #
+  # WIND IS SUBSUMED, NOT ADDITIONAL. `calibrate()` removes shared wind INTO
+  # the race effect (see the wind block below), so a race with a fitted `c_r`
+  # has already had its wind taken out. Subtracting both double-counts it, and
+  # the wind adjustment is therefore suppressed exactly on the rows where a
+  # race effect applies. This is the same composition trap as the coasting
+  # excess above: two corrections that each look right alone and overlap.
+  # REFERENCED TO TOP-TIER FINALS, not subtracted raw. This is the same shape
+  # as every other context correction here -- round offsets are referenced to
+  # `final`, tier offsets to `top` -- and it is not optional.
+  #
+  # Subtracting raw `c_r` was tried on 2026-08-13 and failed its anchor
+  # immediately: it predicted 2:01 for the world's best 800m women. `c_r` has
+  # zero mean over the WHOLE corpus (3.33e-19), which is what made the raw form
+  # look safe, but the corpus is mostly club racing. Over the races that matter
+  # it is strongly positive -- Werro's finals average +2.88% -- because elite
+  # finals ARE fast races. Subtracting that re-expresses every elite athlete in
+  # average-club conditions and marks them down ~3%.
+  #
+  # A GLOBAL MEAN OF ZERO IS NOT ZERO WITHIN THE POPULATION YOU PREDICT FOR.
+  # Referencing removes the between-race signal we want (this race was fast FOR
+  # a championship final) while leaving the level where a forecast needs it.
+  # DEFAULT OFF until it is backtested. The deployed calibration already
+  # carries `race`, so wiring the reader alone would switch this on in every
+  # forecast the moment it merged -- an unmeasured change shipped by accident,
+  # which is most of what went wrong in this package's history. The anchor is
+  # good (see below) and that is not the same as measured.
+  has_cr <- rep(FALSE, nrow(dt))
+  if (isTRUE(adjust_race) &&
+      !is.null(calibration$race) && nrow(calibration$race) &&
+      "race_key" %in% names(dt)) {
+    rr <- data.table::as.data.table(calibration$race)
+    if (!"ref_c_r" %in% names(rr)) {
+      rr[, .rcl := .round_class(if ("round" %in% names(rr)) round else NA_character_)]
+      rr[, .tcl := .tier_class(if ("tier" %in% names(rr)) tier else NA_character_)]
+      # Per event, the mean race effect of a top-tier final. Fall back to the
+      # event's own mean where an event has none (indoor-only events, thin
+      # ones), and to zero only if even that is unavailable -- never silently
+      # to the corpus mean, which is the failure being fixed.
+      ref <- rr[.rcl == "final" & .tcl == "top",
+                .(ref_c_r = mean(c_r, na.rm = TRUE)), by = event_id]
+      fb <- rr[, .(fb_c_r = mean(c_r, na.rm = TRUE)), by = event_id]
+      rr <- merge(rr, ref, by = "event_id", all.x = TRUE)
+      rr <- merge(rr, fb, by = "event_id", all.x = TRUE)
+      rr[!is.finite(ref_c_r), ref_c_r := fb_c_r]
+      rr[!is.finite(ref_c_r), ref_c_r := 0]
+    }
+    i <- match(as.character(dt$race_key), as.character(rr$race_key))
+    cr <- rr$c_r[i] - rr$ref_c_r[i]
+
+    # SHRINK BY FIELD SIZE. A race effect fitted on a two-athlete race is not
+    # a race effect: with two runners, "the race was slow" and "both athletes
+    # are slow" are the same observation, and the decomposition can only
+    # separate them through athletes who also appear elsewhere.
+    #
+    # Found by anchor on 2026-08-13. An athlete with ONE corpus result --
+    # 2:07.87 in a two-person race, c_r -0.068 against a +0.030 top-final
+    # reference -- was handed a 9.8% uplift and ranked FIRST in the 800m W at
+    # 1:55.29. `decompose_races()` already drops singletons; two is barely
+    # better and was unguarded.
+    #
+    # The weight is n/(n+k) with k = sigma_within^2 / condition_sd^2, which is
+    # the standard precision ratio for a group mean and is MEASURED per event
+    # by calibrate() -- not a constant typed in here. A race effect is worth
+    # believing in proportion to how many athletes it was fitted on relative
+    # to how noisy the event is.
+    n_r <- if ("n_in_race" %in% names(rr)) rr$n_in_race[i] else rep(NA_real_, nrow(dt))
+    n_r[!is.finite(n_r)] <- 0
+    # No events table, or an event with no measured spread, means k is unknown.
+    # Unknown resolves to Inf, i.e. weight 0, i.e. NO race correction -- fail
+    # closed rather than apply an unshrunk one. That is the same choice
+    # `.calibrated_value()` makes with its documented fallback.
+    ev <- calibration$events
+    sw <- cs <- rep(NA_real_, nrow(dt))
+    if (!is.null(ev) && NROW(ev)) {
+      ev <- data.table::as.data.table(ev)
+      j <- match(dt$event_id, ev$event_id)
+      if ("sigma_within" %in% names(ev)) sw <- ev$sigma_within[j]
+      if ("condition_sd" %in% names(ev)) cs <- ev$condition_sd[j]
+    }
+    k <- ifelse(is.finite(sw) & is.finite(cs) & cs > 0, (sw / cs)^2, Inf)
+    wt <- n_r / (n_r + k)
+    wt[!is.finite(wt)] <- 0
+    cr <- cr * wt
+
+    has_cr <- is.finite(cr) & wt > 0
+    cr[!is.finite(cr)] <- 0
+    dt[, perf := perf - cr]
+  }
+
+  # Coasting: the athlete-specific part of running a qualifying round easy.
+  #
+  # The line above has already removed the POPULATION round offset, which on
+  # the current corpus is -0.59% for a heat. That is an average over everyone,
+  # and it is nowhere near enough for an athlete who only needs to finish top
+  # three to advance. Audrey Werro's heats run 5.3% slower than her finals --
+  # nine times the population correction -- so 23 jogged heats outweighed 55
+  # finals (heats carry 2.9x the precision of finals) and the fastest 800m
+  # runner in the field was published ninth. See
+  # ../../docs/incidents/werro-underrated-2026-08-13.md.
+  #
+  # SUBTRACT THE EXCESS, NOT THE TRAIT. `fit_coasting_trait()` measures each
+  # athlete's mean heat deviation from their own athlete-event mean, so the
+  # population heat effect is INSIDE the trait. Subtracting the raw trait here
+  # would remove that component twice -- once via `r_adj` and once via the
+  # trait -- and over-correct every coaster.
+  #
+  # KNOWN APPROXIMATION: the trait is referenced to the athlete's mean across
+  # all rounds, while `r_adj` is referenced to finals. For an athlete who races
+  # mostly finals the two references nearly coincide; for one with an unusual
+  # round mix they do not. Left as an approximation rather than silently
+  # refitting the trait to a final-referenced definition, because that would
+  # change the fitted quantity under the same name. Measure before trusting.
+  #
+  # Gated on the calibration carrying the table, so this is inert until a
+  # calibration is rebuilt with it -- and `test-calibration-wiring.R` now fails
+  # if the deployed one lacks it, rather than letting it skip in silence.
+  if (!is.null(calibration$coasting_trait) &&
+      nrow(calibration$coasting_trait)) {
+    ct <- data.table::as.data.table(calibration$coasting_trait)
+    trait <- ct$coasting_trait[match(dt$athlete_id, ct$athlete_id)]
+    trait[!is.finite(trait)] <- 0
+    # The pooled heat offset, from the same calibration. Not a literal: the
+    # value moves with every rebaseline, and a hardcoded -0.0059 would rot
+    # silently the first time the corpus changed.
+    pooled_heat <- 0
+    rt <- calibration$round
+    if (!is.null(rt) && "round_class" %in% names(rt) && "offset" %in% names(rt)) {
+      ph <- rt$offset[match("heat", rt$round_class)]
+      if (length(ph) && is.finite(ph)) pooled_heat <- ph
+    }
+    excess <- trait - pooled_heat
+    # Only heats. A coaster's finals are raced, and the trait says nothing
+    # about their semis.
+    excess[.round_class(if ("round" %in% names(dt)) dt$round else NA_character_) != "heat"] <- 0
+    dt[, perf := perf - excess]
+  }
+
+  # Wind, where the calibration carries a coefficient for the event. This is
+  # the same adjustment layer as round and tier, and it belongs here rather
+  # than in a pre-adjusted input file: `calibrate()` removes shared wind into
+  # the race effect, but ability estimation never sees a race effect, so
+  # between-race wind flows straight into the estimate.
+  #
+  # That channel is the large one. In the men's 100m the between-race wind
+  # spread is 1.28 m/s against 0.33 within a race, so wind contaminates an
+  # ability estimate by 48% of `sigma_within` while barely reordering any
+  # single race. Measured on the backtest: gold skill +0.237 -> +0.240, with
+  # the entire gain inside wind-legal events (t = +4.63 on 2,104 races) and
+  # exactly none outside them (t = -0.41 on 4,515).
+  # NOTE the variable names. `dt` already carries a column `w` — the recency
+  # and precision weight built above — so a local `w` is SHADOWED inside
+  # `dt[, ...]` and data.table silently uses the column instead. That subtracted
+  # `beta * weight` from every mark rather than `beta * wind`: a constant shift
+  # of 0.4% with the spread untouched, which no ranking test could ever catch.
+  # See the NSE shadowing note in C:/dev/.claude/rules.
+  if (!is.null(calibration$wind) && nrow(calibration$wind) &&
+      "wind" %in% names(dt)) {
+    wind_beta <- calibration$wind$beta[match(dt$event_id, calibration$wind$event_id)]
+    wind_beta[!is.finite(wind_beta)] <- 0
+    wind_val <- dt$wind
+    wind_val[!is.finite(wind_val)] <- 0
+    # Suppressed where a race effect was applied above: `calibrate()` folds
+    # shared wind INTO `c_r`, so those rows have already had it removed and
+    # subtracting again would double-count. Rows with no fitted race effect --
+    # 27% of the corpus, and every row when no calibration carries `race` --
+    # still get the wind correction, which is why this stays rather than being
+    # deleted.
+    wind_beta[has_cr] <- 0
+    dt[, perf := perf - wind_beta * wind_val]
+  }
+
+  # Race momentum: an exponentially decayed count of recent race days. Same
+  # adjustment layer as round, tier and wind, but note what it is NOT.
+  #
+  # Wind is a property of the RACE. Momentum is a property of the ATHLETE at a
+  # moment, so stripping it here makes ability "momentum-neutral" -- what the
+  # athlete is worth in an average state of readiness -- and the athlete's
+  # momentum ON THE DAY has to be added back at prediction time. Strip only,
+  # and every forecast is of an athlete in average form, which is wrong for
+  # exactly the athletes who peak for a championship.
+  #
+  # See `apply_momentum()` for the other half.
+  if (!is.null(calibration$momentum) && nrow(calibration$momentum) &&
+      "momentum" %in% names(dt)) {
+    reg_f <- .citius_event_registry[, c("event_id", "family")]
+    fam <- reg_f$family[match(dt$event_id, reg_f$event_id)]
+    mb <- calibration$momentum$beta[match(fam, calibration$momentum$family)]
+    mb[!is.finite(mb)] <- 0
+    mv <- dt$momentum
+    mv[!is.finite(mv)] <- 0
+    dt[, perf := perf - mb * mv]
+  }
+
+  # Indoor/outdoor. A race-level setting like round and tier, but the sign
+  # differs by family -- sprint and middle are slower indoors, distance is
+  # FASTER (no wind, better pacing) -- so a single global offset would cancel
+  # them against each other.
+  if (!is.null(calibration$indoor) && nrow(calibration$indoor) &&
+      "indoor" %in% names(dt)) {
+    reg_i <- .citius_event_registry[, c("event_id", "family")]
+    fam_i <- reg_i$family[match(dt$event_id, reg_i$event_id)]
+    io <- calibration$indoor$offset[match(fam_i, calibration$indoor$family)]
+    io[!is.finite(io)] <- 0
+    io[!(dt$indoor %in% TRUE)] <- 0
+    dt[, perf := perf - io]
+  }
+
+  # Seasonal phase. Athletes are not equally sharp all year, and a championship
+  # sits in a FIXED seasonal slot while an athlete's record spans the calendar.
+  # Averaging unadjusted marks therefore drags every ability estimate below its
+  # championship-day level, and drags it furthest for whoever happens to have an
+  # early-season-heavy history. Same argument as the round and tier offsets.
+  #
+  # Offsets are centred within family-hemisphere by `fit_season_effect()`, so
+  # this is a phase correction, not an intercept shift: it removes WHEN an
+  # athlete raced, not how good they are. Stripped from history only, with no
+  # add-back on the forecast — that is exactly the form validated out of sample
+  # at -0.66% relative RMSE, and adding a target-month term back would be a
+  # separate change needing its own validation.
+  # `venue_country` is required, not optional. `calibrate()` only fits a season
+  # effect when the fitting data carried it, so a non-NULL `calibration$season`
+  # always holds a real split N/S calendar. Defaulting the SCORING data to "N"
+  # when the column is absent would then look up every southern-hemisphere
+  # athlete against the northern calendar -- six months out of phase, so the
+  # offset lands with the WRONG SIGN rather than merely missing. Skipping the
+  # correction entirely is the safe failure; applying it backwards is not.
+  # The indoor block above re-checks its own column for the same reason.
+  if (!is.null(calibration$season) && nrow(calibration$season) &&
+      all(c("date", "venue_country") %in% names(dt))) {
+    reg_s <- .citius_event_registry[, c("event_id", "family")]
+    fam_s <- reg_s$family[match(dt$event_id, reg_s$event_id)]
+    mon_s <- as.integer(format(as.Date(dt$date), "%m"))
+    hemi_s <- data.table::fifelse(!is.na(dt$venue_country) &
+                                    dt$venue_country %in% .citius_south, "S", "N")
+    # Keyed join, not `match(paste(...), paste(...))`. Pasting three columns
+    # builds one R string per row -- on a full corpus that is 6.6M strings and
+    # hundreds of megabytes that R's own gc() does not account for, only the
+    # OS does. That allocation pattern is what OOM-killed pipeline runs here
+    # before; see the data.table RSS notes in C:/dev/.claude/rules.
+    sk <- data.table::as.data.table(calibration$season)[
+      , .(family, hemi, month, season_off = offset)]
+    so <- sk[data.table::data.table(family = fam_s, hemi = hemi_s, month = mon_s),
+             on = .(family, hemi, month), season_off]
+    so[!is.finite(so)] <- 0
+    dt[, perf := perf - so]
+  }
+
+  # Global championship vs another top-tier final. Round and tier offsets are
+  # referenced to "final" and "top", so a top-tier final gets a zero adjustment
+  # BY CONSTRUCTION and this distinction is currently inexpressible. It is not
+  # zero, and the sign flips by family: endurance goes tactical and runs slower
+  # (road -1.71%), power and technical events arrive tapered and run faster
+  # (throw +1.40%). A pooled version is worse than none.
+  #
+  # Removing it here puts all history on a common NON-championship top-tier
+  # final footing; `project_championship()` adds it back for the target. An
+  # athlete whose record is all championships is unchanged by the round trip,
+  # while one with only Diamond League form is correctly moved.
+  if (!is.null(calibration$championship) && nrow(calibration$championship)) {
+    reg_c <- .citius_event_registry[, c("event_id", "family")]
+    fam_ch <- reg_c$family[match(dt$event_id, reg_c$event_id)]
+    co <- calibration$championship$offset[
+      match(fam_ch, calibration$championship$family)]
+    co[!is.finite(co)] <- 0
+    is_ch <- .is_championship(if ("tier" %in% names(dt)) dt$tier else NA_character_) &
+      .round_class(if ("round" %in% names(dt)) dt$round else NA_character_) == "final"
+    co[!is_ch] <- 0
+    dt[, perf := perf - co]
+  }
+  invisible(dt)
 }
 
 
@@ -649,13 +1057,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                              # carries `race`, so a default of TRUE would change
                              # every shipped forecast the moment this merged.
                              adjust_race = FALSE) {
-  if (!nrow(results)) {
-    return(data.table::data.table(
-      athlete_id = character(), event_id = character(), ability = numeric(),
-      ability_raw = numeric(), sigma = numeric(), n = integer(),
-      n_eff = numeric(), shrinkage = numeric(), last_date = as.Date(character())
-    ))
-  }
+  if (!nrow(results)) return(.empty_ability())
 
   # Surface a non-converged decomposition at the point it affects an answer,
   # not only in the build log nobody reads afterwards. Once per session.
@@ -663,25 +1065,13 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
 
   dt <- data.table::copy(data.table::as.data.table(results))
   dt <- dt[!is.na(perf) & !is.na(event_id)]
-  if (!nrow(dt)) {
-    # Named, not positional. The positional form passed 13 arguments into 14
-    # slots -- `only` landed in `sigma_mode`, and everything after it shifted by
-    # one. Harmless only because `results[0]` returns at the `!nrow(results)`
-    # guard above before any shifted argument is read, which is a property of
-    # the call site rather than of the code, and would break silently the day
-    # anything is added ahead of that guard.
-    return(estimate_ability(results[0], as_of = as_of, half_life = half_life,
-                            trim_tactical = trim_tactical,
-                            min_results = min_results,
-                            adjust_context = adjust_context,
-                            calibration = calibration,
-                            robust_sigma = robust_sigma,
-                            sigma_parts = sigma_parts,
-                            sigma_mode = sigma_mode, only = only,
-                            peak_gamma = peak_gamma,
-                            robust_location = robust_location,
-                            decouple_peak = decouple_peak))
-  }
+  # Empty after filtering: return the empty schema DIRECTLY, never by recursing
+  # with `results[0]`. The recursive form was written three times in this
+  # function -- once named (which then silently dropped `adjust_race` when that
+  # parameter was added) and twice positional, the exact shape a 2026-08-12
+  # review found passing 13 arguments into 14 slots. A helper cannot drift when
+  # the signature grows.
+  if (!nrow(dt)) return(.empty_ability())
 
   dt[, athlete_id := as.character(athlete_id)]
   # Half-life may be a scalar or a fitted per-family table from fit_half_life().
@@ -719,357 +1109,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     dt[calibrated %in% TRUE & is.finite(tactical_index), tactical := tactical_index < -0.5]
   }
 
-  if (isTRUE(adjust_context)) {
-    ctx <- if (!is.null(calibration) && !is.null(calibration$round)) {
-      list(round = stats::setNames(calibration$round$offset, calibration$round$round_class),
-           tier  = stats::setNames(calibration$tier$offset, calibration$tier$tier_class))
-    } else estimate_context_effects(dt)
-    rc <- .round_class(if ("round" %in% names(dt)) dt$round else NA_character_)
-    # Tier class, from the MEET where one is supplied, otherwise from the feed's
-    # per-result `tier` code.
-    #
-    # The feed code is not trustworthy: it varies WITHIN a single meet -- the
-    # 2025 Weltklasse Zurich carries A, DF, F and GW across its own results,
-    # classifying as high, mid, low and top at once -- and 189 of 1,341
-    # competitions hold more than one. The direction of the damage is the worst
-    # available: Diamond League marks, the strongest fields in the sport, are
-    # routinely labelled "low" and then adjusted UPWARD by 1.69% as though set
-    # at a slow meet. Those are precisely the athletes and races that make up
-    # the T1 population the model is judged on.
-    #
-    # Pass `meet_tier` on the results (join it from
-    # citiusdata/data/competition_catalogue.parquet) and it is used instead.
-    # Same helper the calibration fits with, so the class an offset was
-    # ESTIMATED for is always the class it is APPLIED to. This mapping used to be
-    # written out here and nowhere else, which is exactly how the two halves came
-    # apart.
-    tc <- .tier_class_of(dt)
-    r_adj <- ctx$round[rc]; r_adj[is.na(r_adj)] <- 0
-    t_adj <- ctx$tier[tc];  t_adj[is.na(t_adj)] <- 0
-    # Prefer the family's own offset where one was fitted; fall back to pooled.
-    # The pooled value averages over events that behave oppositely -- road's
-    # low-tier penalty is -0.45% against throws' -3.59% -- so applying it
-    # uniformly mis-adjusts both ends.
-    reg_c <- .citius_event_registry[, c("event_id", "family")]
-    fam_c <- reg_c$family[match(dt$event_id, reg_c$event_id)]
-    rfam <- if (!is.null(calibration$round_family)) calibration$round_family
-            else ctx$round_family
-    tfam <- if (!is.null(calibration$tier_family)) calibration$tier_family
-            else ctx$tier_family
-    if (!is.null(rfam) && nrow(rfam)) {
-      k <- match(paste(fam_c, rc), paste(rfam$family, rfam$round_class))
-      r_adj[!is.na(k)] <- rfam$offset[k[!is.na(k)]]
-    }
-    if (!is.null(tfam) && nrow(tfam)) {
-      k <- match(paste(fam_c, tc), paste(tfam$family, tfam$tier_class))
-      t_adj[!is.na(k)] <- tfam$offset[k[!is.na(k)]]
-    }
-
-    # The event's own offset wins over its family's, for the same reason the
-    # family's wins over the pooled one: it is the least pooled estimate that
-    # still has data behind it. Applied last so the fallback chain reads
-    # event -> family -> pooled in the order the assignments happen.
-    reve <- if (!is.null(calibration$round_event)) calibration$round_event
-            else ctx$round_event
-    teve <- if (!is.null(calibration$tier_event)) calibration$tier_event
-            else ctx$tier_event
-    if (!is.null(reve) && nrow(reve)) {
-      k <- match(paste(dt$event_id, rc), paste(reve$event_id, reve$round_class))
-      r_adj[!is.na(k)] <- reve$offset[k[!is.na(k)]]
-    }
-    if (!is.null(teve) && nrow(teve)) {
-      k <- match(paste(dt$event_id, tc), paste(teve$event_id, teve$tier_class))
-      t_adj[!is.na(k)] <- teve$offset[k[!is.na(k)]]
-    }
-    dt[, perf := perf - unname(r_adj) - unname(t_adj)]
-
-    # THE RACE EFFECT. `decompose_races()` fits perf = athlete + race + resid,
-    # and until 2026-08-13 this function read none of it: `calibration$race`
-    # shipped in every deployed file, loaded on every run, and was never
-    # consumed. A fast track, a fast night, pacing or altitude therefore flowed
-    # straight into every athlete's estimate.
-    #
-    # This is the correction Pete described from the outside: if everyone in a
-    # race ran 4s slow and an athlete ran 3s slow, they beat the race by 1s and
-    # should be credited with it. `c_r` is the "everyone was 4s slow" term.
-    #
-    # ON THE DEPLOYED (CENTRED) FIT c_r HAS ZERO MEAN -- measured 3.33e-19, sd
-    # 0.0271, 5-95% -0.043..0.039. The queue's warning that subtracting it shifts
-    # ability levels globally was written for the UNCENTRED variant
-    # (`centre = "auto"`), which was A/B'd and rejected on 2026-08-13. It does not
-    # apply here, and marks are safe. Re-check that mean if the default ever
-    # changes.
-    #
-    # WIND IS SUBSUMED, NOT ADDITIONAL. `calibrate()` removes shared wind INTO
-    # the race effect (see the wind block below), so a race with a fitted `c_r`
-    # has already had its wind taken out. Subtracting both double-counts it, and
-    # the wind adjustment is therefore suppressed exactly on the rows where a
-    # race effect applies. This is the same composition trap as the coasting
-    # excess above: two corrections that each look right alone and overlap.
-    # REFERENCED TO TOP-TIER FINALS, not subtracted raw. This is the same shape
-    # as every other context correction here -- round offsets are referenced to
-    # `final`, tier offsets to `top` -- and it is not optional.
-    #
-    # Subtracting raw `c_r` was tried on 2026-08-13 and failed its anchor
-    # immediately: it predicted 2:01 for the world's best 800m women. `c_r` has
-    # zero mean over the WHOLE corpus (3.33e-19), which is what made the raw form
-    # look safe, but the corpus is mostly club racing. Over the races that matter
-    # it is strongly positive -- Werro's finals average +2.88% -- because elite
-    # finals ARE fast races. Subtracting that re-expresses every elite athlete in
-    # average-club conditions and marks them down ~3%.
-    #
-    # A GLOBAL MEAN OF ZERO IS NOT ZERO WITHIN THE POPULATION YOU PREDICT FOR.
-    # Referencing removes the between-race signal we want (this race was fast FOR
-    # a championship final) while leaving the level where a forecast needs it.
-    # DEFAULT OFF until it is backtested. The deployed calibration already
-    # carries `race`, so wiring the reader alone would switch this on in every
-    # forecast the moment it merged -- an unmeasured change shipped by accident,
-    # which is most of what went wrong in this package's history. The anchor is
-    # good (see below) and that is not the same as measured.
-    has_cr <- rep(FALSE, nrow(dt))
-    if (isTRUE(adjust_race) &&
-        !is.null(calibration$race) && nrow(calibration$race) &&
-        "race_key" %in% names(dt)) {
-      rr <- data.table::as.data.table(calibration$race)
-      if (!"ref_c_r" %in% names(rr)) {
-        rr[, .rcl := .round_class(if ("round" %in% names(rr)) round else NA_character_)]
-        rr[, .tcl := .tier_class(if ("tier" %in% names(rr)) tier else NA_character_)]
-        # Per event, the mean race effect of a top-tier final. Fall back to the
-        # event's own mean where an event has none (indoor-only events, thin
-        # ones), and to zero only if even that is unavailable -- never silently
-        # to the corpus mean, which is the failure being fixed.
-        ref <- rr[.rcl == "final" & .tcl == "top",
-                  .(ref_c_r = mean(c_r, na.rm = TRUE)), by = event_id]
-        fb <- rr[, .(fb_c_r = mean(c_r, na.rm = TRUE)), by = event_id]
-        rr <- merge(rr, ref, by = "event_id", all.x = TRUE)
-        rr <- merge(rr, fb, by = "event_id", all.x = TRUE)
-        rr[!is.finite(ref_c_r), ref_c_r := fb_c_r]
-        rr[!is.finite(ref_c_r), ref_c_r := 0]
-      }
-      i <- match(as.character(dt$race_key), as.character(rr$race_key))
-      cr <- rr$c_r[i] - rr$ref_c_r[i]
-
-      # SHRINK BY FIELD SIZE. A race effect fitted on a two-athlete race is not
-      # a race effect: with two runners, "the race was slow" and "both athletes
-      # are slow" are the same observation, and the decomposition can only
-      # separate them through athletes who also appear elsewhere.
-      #
-      # Found by anchor on 2026-08-13. An athlete with ONE corpus result --
-      # 2:07.87 in a two-person race, c_r -0.068 against a +0.030 top-final
-      # reference -- was handed a 9.8% uplift and ranked FIRST in the 800m W at
-      # 1:55.29. `decompose_races()` already drops singletons; two is barely
-      # better and was unguarded.
-      #
-      # The weight is n/(n+k) with k = sigma_within^2 / condition_sd^2, which is
-      # the standard precision ratio for a group mean and is MEASURED per event
-      # by calibrate() -- not a constant typed in here. A race effect is worth
-      # believing in proportion to how many athletes it was fitted on relative
-      # to how noisy the event is.
-      n_r <- if ("n_in_race" %in% names(rr)) rr$n_in_race[i] else rep(NA_real_, nrow(dt))
-      n_r[!is.finite(n_r)] <- 0
-      # No events table, or an event with no measured spread, means k is unknown.
-      # Unknown resolves to Inf, i.e. weight 0, i.e. NO race correction -- fail
-      # closed rather than apply an unshrunk one. That is the same choice
-      # `.calibrated_value()` makes with its documented fallback.
-      ev <- calibration$events
-      sw <- cs <- rep(NA_real_, nrow(dt))
-      if (!is.null(ev) && NROW(ev)) {
-        ev <- data.table::as.data.table(ev)
-        j <- match(dt$event_id, ev$event_id)
-        if ("sigma_within" %in% names(ev)) sw <- ev$sigma_within[j]
-        if ("condition_sd" %in% names(ev)) cs <- ev$condition_sd[j]
-      }
-      k <- ifelse(is.finite(sw) & is.finite(cs) & cs > 0, (sw / cs)^2, Inf)
-      wt <- n_r / (n_r + k)
-      wt[!is.finite(wt)] <- 0
-      cr <- cr * wt
-
-      has_cr <- is.finite(cr) & wt > 0
-      cr[!is.finite(cr)] <- 0
-      dt[, perf := perf - cr]
-    }
-
-    # Coasting: the athlete-specific part of running a qualifying round easy.
-    #
-    # The line above has already removed the POPULATION round offset, which on
-    # the current corpus is -0.59% for a heat. That is an average over everyone,
-    # and it is nowhere near enough for an athlete who only needs to finish top
-    # three to advance. Audrey Werro's heats run 5.3% slower than her finals --
-    # nine times the population correction -- so 23 jogged heats outweighed 55
-    # finals (heats carry 2.9x the precision of finals) and the fastest 800m
-    # runner in the field was published ninth. See
-    # ../../docs/incidents/werro-underrated-2026-08-13.md.
-    #
-    # SUBTRACT THE EXCESS, NOT THE TRAIT. `fit_coasting_trait()` measures each
-    # athlete's mean heat deviation from their own athlete-event mean, so the
-    # population heat effect is INSIDE the trait. Subtracting the raw trait here
-    # would remove that component twice -- once via `r_adj` and once via the
-    # trait -- and over-correct every coaster.
-    #
-    # KNOWN APPROXIMATION: the trait is referenced to the athlete's mean across
-    # all rounds, while `r_adj` is referenced to finals. For an athlete who races
-    # mostly finals the two references nearly coincide; for one with an unusual
-    # round mix they do not. Left as an approximation rather than silently
-    # refitting the trait to a final-referenced definition, because that would
-    # change the fitted quantity under the same name. Measure before trusting.
-    #
-    # Gated on the calibration carrying the table, so this is inert until a
-    # calibration is rebuilt with it -- and `test-calibration-wiring.R` now fails
-    # if the deployed one lacks it, rather than letting it skip in silence.
-    if (!is.null(calibration$coasting_trait) &&
-        nrow(calibration$coasting_trait)) {
-      ct <- data.table::as.data.table(calibration$coasting_trait)
-      trait <- ct$coasting_trait[match(dt$athlete_id, ct$athlete_id)]
-      trait[!is.finite(trait)] <- 0
-      # The pooled heat offset, from the same calibration. Not a literal: the
-      # value moves with every rebaseline, and a hardcoded -0.0059 would rot
-      # silently the first time the corpus changed.
-      pooled_heat <- 0
-      rt <- calibration$round
-      if (!is.null(rt) && "round_class" %in% names(rt) && "offset" %in% names(rt)) {
-        ph <- rt$offset[match("heat", rt$round_class)]
-        if (length(ph) && is.finite(ph)) pooled_heat <- ph
-      }
-      excess <- trait - pooled_heat
-      # Only heats. A coaster's finals are raced, and the trait says nothing
-      # about their semis.
-      excess[.round_class(if ("round" %in% names(dt)) dt$round else NA_character_) != "heat"] <- 0
-      dt[, perf := perf - excess]
-    }
-
-    # Wind, where the calibration carries a coefficient for the event. This is
-    # the same adjustment layer as round and tier, and it belongs here rather
-    # than in a pre-adjusted input file: `calibrate()` removes shared wind into
-    # the race effect, but ability estimation never sees a race effect, so
-    # between-race wind flows straight into the estimate.
-    #
-    # That channel is the large one. In the men's 100m the between-race wind
-    # spread is 1.28 m/s against 0.33 within a race, so wind contaminates an
-    # ability estimate by 48% of `sigma_within` while barely reordering any
-    # single race. Measured on the backtest: gold skill +0.237 -> +0.240, with
-    # the entire gain inside wind-legal events (t = +4.63 on 2,104 races) and
-    # exactly none outside them (t = -0.41 on 4,515).
-    # NOTE the variable names. `dt` already carries a column `w` — the recency
-    # and precision weight built above — so a local `w` is SHADOWED inside
-    # `dt[, ...]` and data.table silently uses the column instead. That subtracted
-    # `beta * weight` from every mark rather than `beta * wind`: a constant shift
-    # of 0.4% with the spread untouched, which no ranking test could ever catch.
-    # See the NSE shadowing note in C:/dev/.claude/rules.
-    if (!is.null(calibration$wind) && nrow(calibration$wind) &&
-        "wind" %in% names(dt)) {
-      wind_beta <- calibration$wind$beta[match(dt$event_id, calibration$wind$event_id)]
-      wind_beta[!is.finite(wind_beta)] <- 0
-      wind_val <- dt$wind
-      wind_val[!is.finite(wind_val)] <- 0
-      # Suppressed where a race effect was applied above: `calibrate()` folds
-      # shared wind INTO `c_r`, so those rows have already had it removed and
-      # subtracting again would double-count. Rows with no fitted race effect --
-      # 27% of the corpus, and every row when no calibration carries `race` --
-      # still get the wind correction, which is why this stays rather than being
-      # deleted.
-      wind_beta[has_cr] <- 0
-      dt[, perf := perf - wind_beta * wind_val]
-    }
-
-    # Race momentum: an exponentially decayed count of recent race days. Same
-    # adjustment layer as round, tier and wind, but note what it is NOT.
-    #
-    # Wind is a property of the RACE. Momentum is a property of the ATHLETE at a
-    # moment, so stripping it here makes ability "momentum-neutral" -- what the
-    # athlete is worth in an average state of readiness -- and the athlete's
-    # momentum ON THE DAY has to be added back at prediction time. Strip only,
-    # and every forecast is of an athlete in average form, which is wrong for
-    # exactly the athletes who peak for a championship.
-    #
-    # See `apply_momentum()` for the other half.
-    if (!is.null(calibration$momentum) && nrow(calibration$momentum) &&
-        "momentum" %in% names(dt)) {
-      reg_f <- .citius_event_registry[, c("event_id", "family")]
-      fam <- reg_f$family[match(dt$event_id, reg_f$event_id)]
-      mb <- calibration$momentum$beta[match(fam, calibration$momentum$family)]
-      mb[!is.finite(mb)] <- 0
-      mv <- dt$momentum
-      mv[!is.finite(mv)] <- 0
-      dt[, perf := perf - mb * mv]
-    }
-
-    # Indoor/outdoor. A race-level setting like round and tier, but the sign
-    # differs by family -- sprint and middle are slower indoors, distance is
-    # FASTER (no wind, better pacing) -- so a single global offset would cancel
-    # them against each other.
-    if (!is.null(calibration$indoor) && nrow(calibration$indoor) &&
-        "indoor" %in% names(dt)) {
-      reg_i <- .citius_event_registry[, c("event_id", "family")]
-      fam_i <- reg_i$family[match(dt$event_id, reg_i$event_id)]
-      io <- calibration$indoor$offset[match(fam_i, calibration$indoor$family)]
-      io[!is.finite(io)] <- 0
-      io[!(dt$indoor %in% TRUE)] <- 0
-      dt[, perf := perf - io]
-    }
-
-    # Seasonal phase. Athletes are not equally sharp all year, and a championship
-    # sits in a FIXED seasonal slot while an athlete's record spans the calendar.
-    # Averaging unadjusted marks therefore drags every ability estimate below its
-    # championship-day level, and drags it furthest for whoever happens to have an
-    # early-season-heavy history. Same argument as the round and tier offsets.
-    #
-    # Offsets are centred within family-hemisphere by `fit_season_effect()`, so
-    # this is a phase correction, not an intercept shift: it removes WHEN an
-    # athlete raced, not how good they are. Stripped from history only, with no
-    # add-back on the forecast — that is exactly the form validated out of sample
-    # at -0.66% relative RMSE, and adding a target-month term back would be a
-    # separate change needing its own validation.
-    # `venue_country` is required, not optional. `calibrate()` only fits a season
-    # effect when the fitting data carried it, so a non-NULL `calibration$season`
-    # always holds a real split N/S calendar. Defaulting the SCORING data to "N"
-    # when the column is absent would then look up every southern-hemisphere
-    # athlete against the northern calendar -- six months out of phase, so the
-    # offset lands with the WRONG SIGN rather than merely missing. Skipping the
-    # correction entirely is the safe failure; applying it backwards is not.
-    # The indoor block above re-checks its own column for the same reason.
-    if (!is.null(calibration$season) && nrow(calibration$season) &&
-        all(c("date", "venue_country") %in% names(dt))) {
-      reg_s <- .citius_event_registry[, c("event_id", "family")]
-      fam_s <- reg_s$family[match(dt$event_id, reg_s$event_id)]
-      mon_s <- as.integer(format(as.Date(dt$date), "%m"))
-      hemi_s <- data.table::fifelse(!is.na(dt$venue_country) &
-                                      dt$venue_country %in% .citius_south, "S", "N")
-      # Keyed join, not `match(paste(...), paste(...))`. Pasting three columns
-      # builds one R string per row -- on a full corpus that is 6.6M strings and
-      # hundreds of megabytes that R's own gc() does not account for, only the
-      # OS does. That allocation pattern is what OOM-killed pipeline runs here
-      # before; see the data.table RSS notes in C:/dev/.claude/rules.
-      sk <- data.table::as.data.table(calibration$season)[
-        , .(family, hemi, month, season_off = offset)]
-      so <- sk[data.table::data.table(family = fam_s, hemi = hemi_s, month = mon_s),
-               on = .(family, hemi, month), season_off]
-      so[!is.finite(so)] <- 0
-      dt[, perf := perf - so]
-    }
-
-    # Global championship vs another top-tier final. Round and tier offsets are
-    # referenced to "final" and "top", so a top-tier final gets a zero adjustment
-    # BY CONSTRUCTION and this distinction is currently inexpressible. It is not
-    # zero, and the sign flips by family: endurance goes tactical and runs slower
-    # (road -1.71%), power and technical events arrive tapered and run faster
-    # (throw +1.40%). A pooled version is worse than none.
-    #
-    # Removing it here puts all history on a common NON-championship top-tier
-    # final footing; `project_championship()` adds it back for the target. An
-    # athlete whose record is all championships is unchanged by the round trip,
-    # while one with only Diamond League form is correctly moved.
-    if (!is.null(calibration$championship) && nrow(calibration$championship)) {
-      reg_c <- .citius_event_registry[, c("event_id", "family")]
-      fam_ch <- reg_c$family[match(dt$event_id, reg_c$event_id)]
-      co <- calibration$championship$offset[
-        match(fam_ch, calibration$championship$family)]
-      co[!is.finite(co)] <- 0
-      is_ch <- .is_championship(if ("tier" %in% names(dt)) dt$tier else NA_character_) &
-        .round_class(if ("round" %in% names(dt)) dt$round else NA_character_) == "final"
-      co[!is_ch] <- 0
-      dt[, perf := perf - co]
-    }
-  }
+  if (isTRUE(adjust_context)) .adjust_history_to_target(dt, calibration, adjust_race)
 
   if (trim_tactical > 0) {
     # Vectorised rank-and-filter, not `.SD[...]` per group. The `.SD` form made
@@ -1124,7 +1164,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     if (isTRUE(robust_location) && !isTRUE(decouple_peak)) {
       pri <- dt[w > 0, {
         sig_ref <- data.table::first(cv_prior)
-        if (!is.finite(sig_ref) || sig_ref <= 0) sig_ref <- 0.02
+        if (!is.finite(sig_ref) || sig_ref <= 0) sig_ref <- .CITIUS_FALLBACK_CV
         .(n = .N,
           ability_raw = .asymmetric_huber_mean(perf, w, sig_target = sig_ref, k = 2.5))
       }, by = .(athlete_id, event_id)]
@@ -1158,9 +1198,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     n_by <- dt[, .(n = .N), by = .(athlete_id, event_id)]
     k_ids <- unique(as.character(n_by[n >= 10L]$athlete_id))
     dt <- dt[as.character(athlete_id) %in% union(keep_ids, k_ids)]
-    if (!nrow(dt)) return(estimate_ability(results[0], as_of, half_life, trim_tactical,
-                                           min_results, adjust_context, calibration,
-                                           robust_sigma, sigma_parts))
+    if (!nrow(dt)) return(.empty_ability())
   }
 
   ab <- dt[, {
@@ -1168,7 +1206,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     mu <- if (sum(ok)) {
       if (isTRUE(robust_location) && !isTRUE(decouple_peak)) {
         sig_ref <- data.table::first(cv_prior)
-        if (!is.finite(sig_ref) || sig_ref <= 0) sig_ref <- 0.02
+        if (!is.finite(sig_ref) || sig_ref <= 0) sig_ref <- .CITIUS_FALLBACK_CV
         .asymmetric_huber_mean(perf[ok], w[ok], sig_target = sig_ref, k = 2.5)
       } else {
         stats::weighted.mean(perf[ok], w[ok])
@@ -1177,7 +1215,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
 
     mu_peak <- if (sum(ok) && isTRUE(decouple_peak)) {
       sig_ref <- data.table::first(cv_prior)
-      if (!is.finite(sig_ref) || sig_ref <= 0) sig_ref <- 0.02
+      if (!is.finite(sig_ref) || sig_ref <= 0) sig_ref <- .CITIUS_FALLBACK_CV
       .asymmetric_huber_mean(perf[ok], w[ok], sig_target = sig_ref, k = 2.5)
     } else mu
 
@@ -1199,9 +1237,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   }, by = .(athlete_id, event_id)]
 
   ab <- ab[n >= min_results & !is.na(ability_raw)]
-  if (!nrow(ab)) return(estimate_ability(results[0], as_of, half_life, trim_tactical,
-                                         min_results, adjust_context, calibration,
-                                         robust_sigma, sigma_parts))
+  if (!nrow(ab)) return(.empty_ability())
 
   # Event-level priors drive the shrinkage strength. With `only` set these were
   # computed above from the WHOLE population, because taking them from the
@@ -1371,9 +1407,11 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # Mirror the blend with the measured target BEFORE `sigma` is overwritten, so
   # the two paths differ in exactly one input and nothing else.
   if (!is.null(sigma_shr_target)) {
-    ab[, sigma_shr := (shrink_w * sigma + 2 * sigma_shr_target) / (shrink_w + 2)]
+    ab[, sigma_shr := (shrink_w * sigma + .CITIUS_SIGMA_PSEUDO_N * sigma_shr_target) /
+                      (shrink_w + .CITIUS_SIGMA_PSEUDO_N)]
   }
-  ab[, sigma := (shrink_w * sigma + 2 * sigma_target) / (shrink_w + 2)]
+  ab[, sigma := (shrink_w * sigma + .CITIUS_SIGMA_PSEUDO_N * sigma_target) /
+                (shrink_w + .CITIUS_SIGMA_PSEUDO_N)]
 
   # Rescale to the context being FORECAST. sigma is fitted across the pooled
   # history, but the target is a top-tier final, and that is a narrower slice of
@@ -1518,6 +1556,27 @@ condition_prior <- function(ability, field = NULL, weight = 1) {
 }
 
 
+#' The empty ability table, in the SAME schema the non-empty path emits
+#'
+#' One definition, used by every early return in [estimate_ability()]. Before
+#' this existed the empty case was produced by recursing with `results[0]` from
+#' three call sites -- two positional (the argument-shift trap a review had
+#' already caught once in this function) and one named that silently dropped
+#' `adjust_race` when the signature grew. The old top-guard table was also
+#' missing `ability_se`, `w_total`, `prior_mu` and `age_ref`, so the empty case
+#' had a different schema from every non-empty result.
+#' @keywords internal
+#' @noRd
+.empty_ability <- function() {
+  data.table::data.table(
+    athlete_id = character(), event_id = character(), ability = numeric(),
+    ability_raw = numeric(), sigma = numeric(), ability_se = numeric(),
+    n = integer(), n_eff = numeric(), w_total = numeric(),
+    shrinkage = numeric(), prior_mu = numeric(), age_ref = numeric(),
+    last_date = as.Date(character())
+  )
+}
+
 #' Drop the worst-performing fraction of a set of results
 #' @keywords internal
 #' @noRd
@@ -1655,7 +1714,7 @@ apply_momentum <- function(ability, momentum, calibration) {
   ab[]
 }
 
-.asymmetric_huber_mean <- function(x, w, sig_target = 0.02, k = 2.5) {
+.asymmetric_huber_mean <- function(x, w, sig_target = .CITIUS_FALLBACK_CV, k = 2.5) {
   if (!length(x) || sum(w) <= 0) return(NA_real_)
   mu <- stats::weighted.mean(x, w)
   if (length(x) < 3L || !is.finite(sig_target) || sig_target <= 0) return(mu)

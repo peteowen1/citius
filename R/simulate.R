@@ -111,7 +111,13 @@ condition_sensitivity <- function(ability, event_id, calibration = NULL) {
 #' @param calibration Optional `citius_calibration` from [calibrate()]. Supplies
 #'   the measured shared-shock magnitude, per-athlete condition sensitivity and
 #'   foul rate. Without it the simulator falls back to registry placeholders.
-#' @param seed Optional integer seed for reproducibility.
+#' @param condition_prior_weight Weight in `[0, 1]` for re-shrinking each
+#'   entrant toward this field's own mean via [condition_prior()] before
+#'   simulating. `0` (the default) leaves the ability table as supplied; only
+#'   applied when the table carries `ability_raw`, `shrinkage` and `prior_mu`.
+#' @param seed Optional integer seed for reproducibility. The RNG state is
+#'   restored on exit, so a seeded simulation does not change the draws of
+#'   whatever runs after it.
 #' @return An object of class `citius_sim`: a list with the raw `perf` matrix
 #'   (`n_sims` x athletes), `rank` matrix, the `ability` input and the settings
 #'   used.
@@ -126,11 +132,16 @@ condition_sensitivity <- function(ability, event_id, calibration = NULL) {
 #' sim <- simulate_event(ab, n_sims = 2000, seed = 1)
 #' medal_probs(sim)
 #' @export
+# NOTE: no `round_class` parameter. One existed here, was accepted, and was
+# never read by a single line of the body -- so `round_class = "heat"` bought a
+# final's simulation with no warning. Removed 2026-08-13; if heat simulation is
+# ever built, it needs the round-specific foul table (`calibration$foul_round`,
+# currently on the wiring guard's KNOWN_UNREAD register) and a measured
+# coasting treatment, not just an argument.
 simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
                            df = NULL, foul_prob = NULL, taper = 0,
                            form_sd = NULL, calibration = NULL,
-                           condition_prior_weight = 0.0,
-                           round_class = "final", seed = NULL) {
+                           condition_prior_weight = 0.0, seed = NULL) {
   ab <- data.table::as.data.table(ability)
   req <- c("athlete_id", "event_id", "ability", "sigma")
   missing <- setdiff(req, names(ab))
@@ -175,7 +186,25 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
     }
   }
 
-  if (!is.null(seed)) set.seed(seed)
+  # Seeded runs restore the caller's RNG state on exit. A bare set.seed() here
+  # silently pinned the GLOBAL stream, so any unseeded stochastic code running
+  # AFTER a seeded simulation was unknowingly deterministic off this seed --
+  # hidden coupling, not reproducibility. Callers that pass `seed` re-seed on
+  # every call, so their own results are unchanged by the restore.
+  if (!is.null(seed)) {
+    old_seed <- if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) {
+      get(".Random.seed", envir = globalenv(), inherits = FALSE)
+    } else NULL
+    on.exit(
+      if (is.null(old_seed)) {
+        rm(".Random.seed", envir = globalenv())
+      } else {
+        assign(".Random.seed", old_seed, envir = globalenv())
+      },
+      add = TRUE
+    )
+    set.seed(seed)
+  }
   n_sims <- as.integer(n_sims)
 
   # One shared shock per simulated race, common to the whole field.

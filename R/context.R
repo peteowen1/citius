@@ -47,8 +47,13 @@ fit_context_effect <- function(results, covariate, by_event = TRUE, min_n = 30L)
   dt[, lev_eff := 0]
   for (i in 1:50) {
     dt[, ath_eff := mean(perf - lev_eff), by = .(athlete_id, event_id)]
-    new <- dt[, .(le = mean(perf - ath_eff)), by = grp]
-    dt <- merge(dt, new, by = grp, all.x = TRUE, sort = FALSE)
+    # Grouped update IN PLACE, not a merge. The old form built an intermediate
+    # per-level table and merge()d it back -- rebuilding every row and column of
+    # the table once per sweep purely to attach one number per level, which is
+    # the identical pattern decompose_races() documents and fixed with an
+    # update join. Here no join is needed at all: a grouped `:=` writes the
+    # level mean straight onto the rows.
+    dt[, le := mean(perf - ath_eff), by = grp]
     delta <- max(abs(dt$le - dt$lev_eff), na.rm = TRUE)
     dt[, lev_eff := le][, le := NULL]
     if (is.finite(delta) && delta < 1e-9) break

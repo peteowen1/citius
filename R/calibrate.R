@@ -424,7 +424,13 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
     fr <- raw[!is.na(.rc), .(foul_rate = mean(is.na(perf)), n_obs = .N), by = .(event_id, round_class = .rc)]
     raw[, .rc := NULL]
     fr <- merge(fr, fouls[, .(event_id, global_foul = foul_rate)], by = "event_id", all.x = TRUE)
-    fr[, foul_rate := (n_obs * foul_rate + 30 * global_foul) / (n_obs + 30)]
+    # Pseudo-count blend toward the event's global rate. 30 is a PLACEHOLDER,
+    # never fitted -- and nothing currently reads `foul_round` (it is on the
+    # wiring guard's KNOWN_UNREAD register), so fitting it before a consumer
+    # exists would be measuring a dead layer. Named here so the day a consumer
+    # is wired, the constant is one grep away rather than a bare literal.
+    foul_pool_n <- 30
+    fr[, foul_rate := (n_obs * foul_rate + foul_pool_n * global_foul) / (n_obs + foul_pool_n)]
     fr[, global_foul := NULL]
     fr[]
   } else NULL
@@ -442,16 +448,16 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
   # measurement from the application is what let a fitted wind coefficient sit
   # unused while `adjust_wind()` appeared only inside a comment.
   wind <- if ("wind" %in% names(results)) {
-    tryCatch(data.table::as.data.table(fit_wind_effect(results)),
-             error = function(e) NULL)
+    .fit_layer_or_warn(data.table::as.data.table(fit_wind_effect(results)), "wind")
   } else NULL
 
-  cfam <- tryCatch(estimate_context_effects(
-                     results,
-                     per_family = isTRUE(context_per_family),
-                     per_event  = isTRUE(context_per_event)),
-                   error = function(e) list(round_family = NULL, tier_family = NULL,
-                                            round_event = NULL, tier_event = NULL))
+  cfam <- .fit_layer_or_warn(
+    estimate_context_effects(results,
+                             per_family = isTRUE(context_per_family),
+                             per_event  = isTRUE(context_per_event)),
+    "round_family/tier_family")
+  if (is.null(cfam)) cfam <- list(round_family = NULL, tier_family = NULL,
+                                  round_event = NULL, tier_event = NULL)
   ctx <- .context_stats(d)
   athlete <- .athlete_sensitivity(d, ev)
   tail_fit <- fit_tail_df(list(data = d))
@@ -481,11 +487,11 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
     # is fitted across the whole history but the forecast targets a top-tier
     # final, and those are different distributions -- narrower for field events,
     # wider for road. estimate_ability() applies this to the sigma it returns.
-    sigma_context = tryCatch(fit_sigma_context(results), error = function(e) NULL),
+    sigma_context = .fit_layer_or_warn(fit_sigma_context(results), "sigma_context"),
     # How a global championship final differs from another top-tier final. Round
     # and tier offsets reference "final" and "top", so this distinction is
     # otherwise inexpressible -- and it is not zero.
-    championship = tryCatch(fit_championship_effect(results), error = function(e) NULL),
+    championship = .fit_layer_or_warn(fit_championship_effect(results), "championship"),
     # Indoor/outdoor and seasonal phase. Both were built, tested and — for season
     # — validated out of sample (offsets fitted pre-2020 improved 2020+ top-tier
     # final prediction by 0.66% relative RMSE), and then neither was ever
@@ -496,7 +502,7 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
     # measurement and application live in different files — so they are attached
     # HERE, next to the other context effects, rather than by a pipeline script.
     indoor = if (isTRUE(context_indoor) && "indoor" %in% names(results)) {
-      tryCatch(fit_indoor_effect(results), error = function(e) NULL)
+      .fit_layer_or_warn(fit_indoor_effect(results), "indoor")
     } else NULL,
     # Needs `venue_country` to split the hemispheres. Without it every mark
     # classifies northern and southern athletes get a calendar six months out of
@@ -504,7 +510,7 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
     # fit a pooled calendar.
     season = if (isTRUE(context_season) &&
                  all(c("date", "venue_country") %in% names(results))) {
-      tryCatch(fit_season_effect(results), error = function(e) NULL)
+      .fit_layer_or_warn(fit_season_effect(results), "season")
     } else NULL,
     min_races = min_races,
     min_race_size = min_race_size,
@@ -792,6 +798,33 @@ print.citius_calibration <- function(x, ...) {
     print(utils::head(show[, cols, with = FALSE], 10L))
   }
   invisible(x)
+}
+
+
+#' Fit a calibration layer, and NEVER let it fail silently
+#'
+#' `calibrate()` wrapped five of its layer fitters in
+#' `tryCatch(..., error = function(e) NULL)`. That converts a fitter error into
+#' a silently absent layer -- which is this package's single recurring defect
+#' class, and the reason `test-calibration-wiring.R` exists. The wiring guard
+#' checks the deployed ARTEFACT, so a layer lost this way is caught only at
+#' deployment and only if it is on the guard's registers; a build that loses
+#' `sigma_context` to a refactor-induced error would otherwise print nothing.
+#'
+#' The catch is kept -- a broken optional layer should not abort a calibration
+#' that is 95% usable -- but it now says what it dropped and why.
+#'
+#' @keywords internal
+#' @noRd
+.fit_layer_or_warn <- function(expr, layer) {
+  tryCatch(expr, error = function(e) {
+    cli::cli_warn(c(
+      "Fitting calibration layer {.field {layer}} failed; this calibration will not carry it.",
+      x = conditionMessage(e),
+      i = "A silently absent layer is this package's recurring defect class. Treat this as a build failure unless the absence is intended."
+    ))
+    NULL
+  })
 }
 
 

@@ -11,7 +11,9 @@ calibrate(
   context_per_family = FALSE,
   context_per_event = FALSE,
   context_season = FALSE,
-  context_indoor = FALSE
+  context_indoor = FALSE,
+  centre = c("always", "auto"),
+  max_iter = 400L
 )
 }
 \arguments{
