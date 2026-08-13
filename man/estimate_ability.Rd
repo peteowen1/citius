@@ -18,7 +18,8 @@ estimate_ability(
   only = NULL,
   peak_gamma = 0,
   robust_location = FALSE,
-  decouple_peak = FALSE
+  decouple_peak = FALSE,
+  adjust_race = FALSE
 )
 }
 \arguments{

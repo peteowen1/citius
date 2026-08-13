@@ -54,26 +54,90 @@ KNOWN_UNREAD <- c(
   # (gold Brier +1.83%); kept in the calibration so the measurement is not lost.
   # (2026-08-06)
   "foul_round",
-  # build_calibration_coasting.R:23, recalibrate.R:28, run_foul_screening.R:21.
-  # Fitted for 107,181 athletes and read by NOTHING. This is failure 3 above and
-  # the reason this file exists. Registered rather than deleted because the
-  # measurement is real; wire it or drop it, but do not ship it as adopted.
-  # (2026-08-06, ticket 15)
-  "coasting_trait",
   # run_athlete_foul_screening.R:13 calls `fit_athlete_foul_trait()`, which no
   # longer exists anywhere in the package - so that script cannot run at all and
   # the slot it writes is doubly dead. (2026-08-06)
   "athlete_foul"
 )
 
+# Layers the package reads that the DEPLOYED calibration deliberately omits.
+# Every entry names the experiment that refuted it, so "off on purpose" cannot be
+# confused with "silently lost". Populated from a real audit on 2026-08-12; see
+# the deployment test at the bottom of this file.
+# ONLY `season` is a choice. The other three are DEFECTS, registered so that a
+# FIFTH one fails loudly rather than joining them unnoticed. Fixing any of them
+# also fails this test until its line is removed -- the register must not rot
+# into a permanent mute.
+DEPLOYED_OFF <- c(
+  # `casym`. Measured gold Brier -0.62% and medal -0.24%, BOTH SIGNIFICANT, and
+  # OPTIMISATION-FRAMEWORK.md SS7 still lists it "pending - decide on the new
+  # metric". A measured BENEFIT that has never reached a deployed calibration.
+  # This is the most expensive entry here. (2026-08-12)
+  "asymmetry",
+  # Failure 1 in this file's own header, still absent. `estimate_ability()` has
+  # read `calibration$indoor` since before this guard existed and no deployed
+  # calibration has ever carried it. (2026-08-12)
+  "indoor",
+  # `apply_momentum()` strips momentum from history and adds it back at forecast
+  # time, and no deployed calibration carries the table -- so BOTH halves are
+  # inert and every forecast is of an athlete in average readiness. (2026-08-12)
+  "momentum",
+  # THE ONLY DELIBERATE ONE. A/B'd on 250 meets and REJECTED 2026-08-04: gold
+  # Brier +2.02% on majors (p = 0.00059) and +0.74% across 948 scored finals
+  # (p = 0.00019). Marks improved while placings degraded, because 59% of the
+  # shift is common to the race and cancels from every pairwise comparison.
+  # Keep it off. (2026-08-12)
+  "season",
+
+  # --- Found 2026-08-13, when this test stopped accepting a NULL element as a
+  # carried table (see the note in the deployment check below). All five were
+  # NULL in every deployed calibration and invisible to the old name-based
+  # check. None is a defect; each is off by a documented default, and each is
+  # listed so that "off by design" stays distinguishable from "silently lost".
+  #
+  # calibrate.R:472 sets it NULL outright: fit_form_sd() needs held-out meets,
+  # so it cannot be fitted inside the same call.
+  "form_sd",
+  # context_per_family defaults FALSE (calibrate.R:326). Recorded as a
+  # deliberate non-wiring on 2026-08-03.
+  "round_family", "tier_family",
+  # context_per_event defaults FALSE (calibrate.R:326). A family is still a pool
+  # of events that behave differently, but the per-event fitter was refuted by
+  # the backtest even at k = 0.
+  "round_event", "tier_event"
+)
+
 # Slots that are diagnostics or run metadata, never model inputs. The estimator
 # is not supposed to read these, so their absence from the read set is correct
 # rather than a defect.
+#
+# Be sparing. An entry here is a claim that nothing SHOULD read the slot, and it
+# switches this guard off for that slot permanently and silently -- which is the
+# one failure mode the register below cannot express, because a metadata entry
+# never fails when the slot gets wired. `race` sat here until 2026-08-13 and hid
+# the package's largest unwired quantity; see its note in KNOWN_UNREAD. If the
+# honest reason is "nothing reads it YET", that is KNOWN_UNREAD, not this list.
 CALIBRATION_METADATA <- c(
-  "ability", "race",                       # the raw two-way decomposition
-  "min_races", "min_race_size",            # the thresholds it was fitted under
-  "converged", "delta", "sweeps",          # solver diagnostics
-  "provenance"                             # rebaseline_chain.R's audit stamp
+  # Audited 2026-08-13, after `race` was found hiding here. Each remaining entry
+  # was checked against BOTH the package and citiusdata/scripts.
+  #
+  # `converged`/`delta`/`sweeps` LEFT THIS LIST in the same audit: they were
+  # stamped at build time, printed by rebaseline_chain.R:97 as the file was
+  # written, and never consulted again -- so the deployed calibration has shipped
+  # `converged = FALSE` (delta 1.66e-04) through every forecast and published
+  # rating with nothing saying so. `.warn_unconverged()` now reads all three.
+  "ability",                               # per-athlete side of the decomposition;
+                                           # superseded by estimate_ability(), which
+                                           # refits with recency, shrinkage and
+                                           # context. Read by nothing anywhere --
+                                           # revisit if it is ever wanted as a
+                                           # race-adjusted prior. (2026-08-13)
+  "min_races", "min_race_size",            # thresholds the fit was run under;
+                                           # describe the fit, never adjust a
+                                           # prediction. (2026-08-13)
+  "provenance"                             # audit stamp; read by
+                                           # backtest_athletics.R:69, outside the
+                                           # package by design. (2026-08-13)
 )
 
 # Objects in the pipeline scripts that hold a calibration. Anything assigned into
@@ -127,13 +191,33 @@ wiring_calibrate_slots <- function() {
   names(suppressWarnings(calibrate(data.table::rbindlist(rows))))
 }
 
-#' The citiusverse root, or NULL. Tests run from `tests/testthat` under
+#' The citiusdata repository directory, or NULL.
+#'
+#' Returns the DIRECTORY, not a verse root, because every caller wants
+#' `<citiusdata>/scripts` and hardcoding the `"citiusdata"` segment downstream
+#' is what broke this on CI. Tests run from `tests/testthat` under
 #' `devtools::test()` and from a check directory under `R CMD check`, so the
-#' sibling data repo is found by walking up rather than by a fixed offset.
-wiring_verse_root <- function() {
+#' repo is found by walking up rather than at a fixed offset.
+#'
+#' TWO LAYOUTS MUST BOTH WORK, and only one of them ever did. Local dev has
+#' `citiusverse/citiusdata`; CI checks the private sibling out under a
+#' different name (`citiusdata-sibling`) beside the package. Accepting only the
+#' first meant that on 2026-08-14, once the checkout itself was finally
+#' authenticated, all four tests below STILL skipped -- a green run that
+#' verified nothing, which is this file's own failure mode one level out.
+#' `CITIUS_DATA_DIR` is set explicitly by the workflow so CI does not depend on
+#' the walk at all.
+wiring_citiusdata_dir <- function() {
+  env <- Sys.getenv("CITIUS_DATA_DIR", "")
+  if (nzchar(env) && dir.exists(file.path(env, "scripts"))) {
+    return(normalizePath(env, winslash = "/", mustWork = FALSE))
+  }
   p <- normalizePath(testthat::test_path("."), winslash = "/", mustWork = FALSE)
   for (i in seq_len(6L)) {
-    if (dir.exists(file.path(p, "citiusdata", "scripts"))) return(p)
+    for (nm in c("citiusdata", "citiusdata-sibling")) {
+      cand <- file.path(p, nm)
+      if (dir.exists(file.path(cand, "scripts"))) return(cand)
+    }
     up <- dirname(p)
     if (identical(up, p)) break
     p <- up
@@ -142,8 +226,8 @@ wiring_verse_root <- function() {
 }
 
 #' Every element a pipeline script attaches to a calibration object.
-wiring_script_setters <- function(root) {
-  dir <- file.path(root, "citiusdata", "scripts")
+wiring_script_setters <- function(citiusdata) {
+  dir <- file.path(citiusdata, "scripts")
   fs <- list.files(dir, pattern = "[.]R$", full.names = TRUE)
   pat <- "^\\s*([A-Za-z_.][A-Za-z0-9_.]*)\\$([A-Za-z_][A-Za-z0-9_.]*)\\s*<-"
   out <- list()
@@ -179,13 +263,16 @@ test_that("the wiring scan finds something to check", {
 })
 
 test_that("every calibration element the package reads is set by something", {
-  reads <- wiring_reads()
-  set_by <- wiring_calibrate_slots()
+  # Script-side setters (momentum, asymmetry, ...) live in citiusdata/scripts,
+  # so without the sibling repo this test cannot tell "set by a script" from
+  # "set by nothing" and reports false orphans. Same environment guard as the
+  # two tests below — the full check is local-dev-only, like theirs.
+  cdata <- wiring_citiusdata_dir()
+  skip_if(is.null(cdata),
+          "citiusdata/scripts not found beside the package; script-side setters invisible, orphan check unreliable")
 
-  root <- wiring_verse_root()
-  if (!is.null(root)) {
-    set_by <- union(set_by, wiring_script_setters(root)$element)
-  }
+  reads <- wiring_reads()
+  set_by <- union(wiring_calibrate_slots(), wiring_script_setters(cdata)$element)
 
   orphans <- sort(setdiff(unique(reads$element), set_by))
   owners <- vapply(orphans, function(e)
@@ -216,11 +303,11 @@ test_that("every element calibrate() produces is read, or is declared metadata",
 })
 
 test_that("every element a pipeline script attaches to a calibration is read", {
-  root <- wiring_verse_root()
-  skip_if(is.null(root),
+  cdata <- wiring_citiusdata_dir()
+  skip_if(is.null(cdata),
           "citiusdata/scripts not found beside the package; script-side wiring unchecked")
 
-  setters <- wiring_script_setters(root)
+  setters <- wiring_script_setters(cdata)
   # Same vacuity trap as above: an empty scan must fail, not pass quietly.
   expect_gte(nrow(setters), 10L)
 
@@ -241,10 +328,72 @@ test_that("every element a pipeline script attaches to a calibration is read", {
       paste0("  ", orphans, "  <- set at ", where, collapse = "\n")))
 })
 
+test_that("the DEPLOYED calibration carries a table for every layer the package reads", {
+  # THE GAP THE THREE TESTS ABOVE CANNOT SEE (2026-08-12).
+  #
+  # They check that CODE reads what CODE sets. All three pass while the model
+  # runs with half its adjustment layers switched off, because every layer is
+  # gated on `!is.null(calibration$x)` and SKIPS IN SILENCE when the deployed
+  # file has no table for it. A setter existing in some build script is not the
+  # same claim as the shipped calibration carrying the result.
+  #
+  # Audited 2026-08-12 against calibration_corpus_csigma.rds: five of ten layers
+  # were absent, three of them unintentionally. That is the same failure as the
+  # `indoor` and `season` incidents this file was written for, one level further
+  # out -- and it is why "we built that feature" and "that feature affects the
+  # answer" keep coming apart here.
+  #
+  # A layer that is off ON PURPOSE goes on DEPLOYED_OFF with the experiment that
+  # refuted it. Deliberately-off and silently-lost must not look identical.
+  cdata <- wiring_citiusdata_dir()
+  skip_if(is.null(cdata), "citiusdata not found beside the package")
+  dep <- file.path(cdata, "scripts", "_deployed.R")
+  skip_if_not(file.exists(dep), "_deployed.R not found")
+
+  src <- readLines(dep, warn = FALSE)
+  hit <- grep("^\\s*calibration\\s*=", src, value = TRUE)
+  skip_if(!length(hit), "_deployed.R names no calibration")
+  cal_file <- file.path(cdata, "data",
+                        sub('^[^"]*"([^"]*)".*$', "\\1", hit[1]))
+  skip_if_not(file.exists(cal_file),
+              paste("deployed calibration not present:", basename(cal_file)))
+
+  # NON-NULL, not merely NAMED (fixed 2026-08-13, found by deploying `coast`).
+  #
+  # `names()` alone gave a FALSE PASS. `calibrate.R:498` builds the list as
+  # `indoor = if (isTRUE(context_indoor) ...) {...}`, and when that condition is
+  # FALSE the element still EXISTS, holding NULL. So `names()` reported `indoor`
+  # and `season` as carried while both were empty -- and every application site
+  # is gated on `!is.null()`, so both were doing nothing.
+  #
+  # That is this test's own failure mode reproduced inside the test: a layer
+  # present in form, absent in effect, reported as fine. The old deployed file
+  # predated that calibrate() version and had no such names at all, which is the
+  # only reason the gap stayed hidden.
+  cal_obj <- readRDS(cal_file)
+  have <- names(cal_obj)[!vapply(cal_obj, is.null, logical(1))]
+  expect_gte(length(have), 10L)          # vacuity floor: an unreadable file must fail
+
+  reads <- unique(wiring_reads()$element)
+  # KNOWN_UNSET is already registered as "nothing anywhere produces this", so it
+  # cannot also count as a deployment gap.
+  candidates <- setdiff(reads, KNOWN_UNSET)
+  missing <- sort(setdiff(candidates, have))
+
+  expect_equal(
+    missing, sort(intersect(DEPLOYED_OFF, candidates)),
+    info = paste0(
+      "The deployed calibration (", basename(cal_file), ") carries no table for: ",
+      paste(missing, collapse = ", "),
+      ".\nEach of those adjustment layers is gated on !is.null() and is doing ",
+      "NOTHING in every shipped forecast, silently. Rebuild the calibration with ",
+      "it, or add it to DEPLOYED_OFF naming the experiment that refuted it."))
+})
+
 test_that("the deployed stamp names the deployed calibration", {
-  root <- wiring_verse_root()
-  skip_if(is.null(root), "citiusdata/scripts not found beside the package")
-  f <- file.path(root, "citiusdata", "scripts", "_deployed.R")
+  cdata <- wiring_citiusdata_dir()
+  skip_if(is.null(cdata), "citiusdata/scripts not found beside the package")
+  f <- file.path(cdata, "scripts", "_deployed.R")
   skip_if_not(file.exists(f), "_deployed.R not found")
 
   src <- readLines(f, warn = FALSE)

@@ -68,21 +68,41 @@ swimengland_rankings <- function(stroke, pool = "L", sex = "M", year = "A",
     "&TargetNationality=%s&TargetRegion=P&TargetCounty=XXXX&TargetClub=XXXX"),
     swimengland_base_url(), pool, stroke, sex, year, start, n, nationality)
 
-  html <- tryCatch(citius_get_html(url), error = function(e) NULL)
+  # Fetch errors PROPAGATE -- see the note in aquatics_athlete_results(): the
+  # harvesters' own tryCatch is what separates "retry next run" from "cache the
+  # empty page", and swallowing the error here breaks that at the source. A
+  # definitive 404 returns NULL and stays a legitimate empty result.
+  html <- citius_get_html(url)
   if (is.null(html)) return(.empty_se_dt())
   tabs <- rvest::html_elements(html, "table")
-  if (!length(tabs)) return(.empty_se_dt())
+  # A page that fetched but does not hold the expected structure is a SCHEMA
+  # signal, not an empty rankings list -- a site redesign would otherwise read
+  # as "nobody ranked anywhere" for an entire sweep. Rate-limited: one warning
+  # identifies the problem; two thousand identical ones bury it.
+  if (!length(tabs)) {
+    cli::cli_warn("Swim England page has no tables; returning empty. Site structure may have changed.",
+                  .frequency = "once", .frequency_id = "citius_se_no_tables")
+    return(.empty_se_dt())
+  }
   # The page carries more than one table and the rankings are the biggest, but
   # sizing them by parsing each one costs 0.042s against 0.096s of network --
   # 20% of the request spent on work that is thrown away. Counting <tr> nodes
   # answers the same question 42x faster.
   sizes <- vapply(tabs, function(x) length(rvest::html_elements(x, "tr")), integer(1))
   best <- tabs[[which.max(sizes)]]
-  tab <- tryCatch(rvest::html_table(best, fill = TRUE), error = function(e) NULL)
+  tab <- tryCatch(rvest::html_table(best, fill = TRUE), error = function(e) {
+    cli::cli_warn("Swim England table failed to parse; returning empty. Site structure may have changed.",
+                  .frequency = "once", .frequency_id = "citius_se_parse_fail")
+    NULL
+  })
   if (is.null(tab) || !nrow(tab)) return(.empty_se_dt())
   tab <- data.table::as.data.table(tab)
   need <- c("Rank", "Name", "Time", "Date")
-  if (!all(need %in% names(tab))) return(.empty_se_dt())
+  if (!all(need %in% names(tab))) {
+    cli::cli_warn("Swim England table lacks column{?s} {.field {setdiff(need, names(tab))}}; returning empty.",
+                  .frequency = "once", .frequency_id = "citius_se_missing_cols")
+    return(.empty_se_dt())
+  }
 
   # Pull the swimmer id per ROW rather than from the page, so a row without a
   # link cannot shift every subsequent id by one.
@@ -92,8 +112,9 @@ swimengland_rankings <- function(stroke, pool = "L", sex = "M", year = "A",
     h <- rvest::html_attr(a, "href")
     if (is.na(h)) NA_character_ else sub(".*tiref=([0-9]+).*", "\\1", h)
   }, character(1))
-  tiref <- tiref[!is.na(tiref) | seq_along(tiref) > 0L]
-  # Header rows carry no link; align by dropping leading non-data rows.
+  # Header rows carry no link; align by dropping leading non-data rows. (An
+  # always-true filter that claimed to do this was removed 2026-08-14 -- the
+  # tail() below is the whole alignment.)
   tiref <- utils::tail(tiref, nrow(tab))
 
   disc <- swimengland_strokes()[stroke_code == as.integer(stroke), discipline]
@@ -102,13 +123,16 @@ swimengland_rankings <- function(stroke, pool = "L", sex = "M", year = "A",
     tiref        = tiref,
     athlete_name = trimws(as.character(tab$Name)),
     club         = if ("Ranked Club" %in% names(tab)) trimws(as.character(tab$`Ranked Club`)) else NA_character_,
-    yob          = suppressWarnings(as.integer(tab$YoB)),
+    # Guarded like `club` and `comp_name`: an absent column is NULL, and
+    # as.integer(NULL) is integer(0), which crashes the data.table() call on a
+    # length mismatch instead of degrading to NA like its siblings.
+    yob          = if ("YoB" %in% names(tab)) suppressWarnings(as.integer(tab$YoB)) else NA_integer_,
     sport        = "Swimming",
     discipline   = if (length(disc)) disc else NA_character_,
     mark_string  = trimws(as.character(tab$Time)),
     place        = suppressWarnings(as.integer(tab$Rank)),
     comp_name    = if ("Meet" %in% names(tab)) trimws(as.character(tab$Meet)) else NA_character_,
-    date         = as.Date(as.character(tab$Date), format = "%d/%m/%y"),
+    date         = .se_parse_date(tab$Date),
     course       = if (pool == "L") "LCM" else "SCM",
     sex          = sex,
     nationality  = nationality,
@@ -118,6 +142,34 @@ swimengland_rankings <- function(stroke, pool = "L", sex = "M", year = "A",
     # to know that this source is different from the others.
     is_best      = TRUE)
   out[!is.na(athlete_name) & nzchar(athlete_name)]
+}
+
+#' Parse the feed's dd/mm/yy dates without the POSIX century roll
+#'
+#' `as.Date(x, "%d/%m/%y")` maps two-digit years 00-68 to the 2000s and 69-99
+#' to the 1900s, so an all-time (`year = "A"`) archive row from 1965 silently
+#' lands in 2065-adjacent territory. The feed cannot contain future results, so
+#' the rule here is: a parsed year later than next year belongs to the previous
+#' century.
+#' @keywords internal
+#' @noRd
+.se_parse_date <- function(x) {
+  d <- as.Date(as.character(x), format = "%d/%m/%y")
+  # An unparseable date is not merely missing: result_weight() gives an NA
+  # date FULL recency weight (documented choice in ability.R), so silent NAs
+  # here quietly promote mis-formatted rows. Count them out loud.
+  n_bad <- sum(is.na(d) & !is.na(x) & nzchar(trimws(as.character(x))))
+  if (n_bad) {
+    cli::cli_warn("{n_bad} Swim England date{?s} failed to parse as dd/mm/yy and {?is/are} NA.",
+                  .frequency = "once", .frequency_id = "citius_se_bad_dates")
+  }
+  yr <- as.integer(format(d, "%Y"))
+  ceiling_yr <- as.integer(format(Sys.Date(), "%Y")) + 1L
+  roll <- !is.na(yr) & yr > ceiling_yr
+  if (any(roll)) {
+    d[roll] <- as.Date(sprintf("%04d-%s", yr[roll] - 100L, format(d[roll], "%m-%d")))
+  }
+  d
 }
 
 .empty_se_dt <- function() {

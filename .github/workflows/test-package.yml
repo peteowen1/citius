@@ -1,0 +1,75 @@
+name: R Package Tests
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: ubuntu-latest (R release)
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+      # Point the wiring and podium tests straight at the sibling checkout.
+      # They also walk up looking for it, but the walk depends on where
+      # R CMD check happens to run the suite from -- and a discovery miss makes
+      # them SKIP, i.e. pass while verifying nothing. Explicit beats inferred
+      # for the tests whose whole job is catching silently-inert config.
+      CITIUS_DATA_DIR: ${{ github.workspace }}/citiusdata-sibling
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # citiusdata beside the package, because three tests in
+      # test-calibration-wiring.R resolve it via wiring_verse_root() and
+      # skip_if() when it is absent. Without this step they SKIPPED SILENTLY on
+      # every CI run -- including the deployment check that asserts every
+      # adjustment layer the package reads is present in the shipped
+      # calibration. A guard built to catch "half the layers are inert and
+      # nobody knows" was itself never running. Found 2026-08-13.
+      # No continue-on-error: a failed checkout would make wiring_verse_root()
+      # return NULL, all four wiring tests skip_if(), and CI report green --
+      # re-creating the silent-skip this step exists to prevent. If this step
+      # fails the build must fail loudly.
+      - name: Checkout citiusdata (siblings for the wiring tests)
+        uses: actions/checkout@v7
+        with:
+          repository: peteowen1/citiusdata
+          path: citiusdata-sibling
+          # citiusdata is PRIVATE, and the default GITHUB_TOKEN is scoped to
+          # this repository only -- it 404s on the sibling, which is why this
+          # step failed silently under continue-on-error from 2026-08-13 until
+          # the review made it hard on 2026-08-14. Fine-grained PAT, Contents
+          # read-only on peteowen1/citiusdata. If CI starts reporting "Not
+          # Found" here again, the token has expired: reissue and re-set it.
+          token: ${{ secrets.SIBLING_READ_PAT }}
+
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+          use-public-rspm: true
+
+      - name: Setup R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::rcmdcheck
+          needs: check
+
+      - name: Check package
+        uses: r-lib/actions/check-r-package@v2
+        with:
+          upload-snapshots: true
+          build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
+          error-on: '"error"'

@@ -12,7 +12,12 @@ fit_coasting_trait(results, min_heats = 2L, shrink_k = 5)
 
 \item{min_heats}{Minimum heat marks required to report an athlete. Default 2.}
 
-\item{shrink_k}{Prior weight for Empirical Bayes shrinkage. Default 5.}
+\item{shrink_k}{Prior weight for Empirical Bayes shrinkage. \strong{The default 5
+is hand-set, not fitted} — an exception to the no-hand-tuned-constants
+rule, recorded here. The principled value is the precision ratio
+\code{sigma_within^2 / sd(trait)^2} fitted out of sample, the way
+\code{.fit_context_shrink()} fits \code{k} for the context offsets; fit it before
+tuning forecasts that lean on the coasting trait.}
 }
 \value{
 A \code{data.table} of \code{athlete_id}, \code{coasting_trait}, and \code{n_heats}.

@@ -33,11 +33,6 @@ canonical_nation <- function(x) {
   st <- gsub("\\s+[a-z]$", "", st)
   st <- trimws(gsub("\\s+", " ", st))
 
-  glued <- c("United Statesa" = "United States", "United Statesb" = "United States",
-             "Cubaa" = "Cuba", "Cubab" = "Cuba", "Canadaa" = "Canada",
-             "Brazila" = "Brazil", "Mexicoa" = "Mexico", "Argentinaa" = "Argentina")
-  hit <- unname(glued[st]); st <- ifelse(is.na(hit), st, hit)
-
   renames <- c(
     "Western Samoa" = "Samoa", "Tahiti" = "French Polynesia",
     "Papua and New Guinea" = "Papua New Guinea",
@@ -61,6 +56,18 @@ canonical_nation <- function(x) {
     "Saint Vincent" = "Saint Vincent and the Grenadines",
     "Northern Marianas" = "Northern Mariana Islands"
   )
+  # Footnote letters glued straight onto the name ("United Statesa", "Cubab").
+  # Previously a hand map of the six nations observed so far, which silently
+  # missed any nation whose glued footnote had not been seen yet -- the exact
+  # failure class this file exists to close. General rule instead: strip one
+  # trailing lowercase letter ONLY when the string as written resolves to
+  # nothing and the stripped string resolves to a known nation. "Cuba" is
+  # untouched (it already resolves); "Cubab" is not a nation, "Cuba" is.
+  known <- function(v) !is.na(nation_iso3(v)) | v %in% names(renames)
+  cand <- sub("[a-z]$", "", st)
+  fixable <- !is.na(st) & st != cand & !known(st) & known(cand)
+  st[fixable] <- cand[fixable]
+
   hit2 <- unname(renames[st])
   ifelse(is.na(hit2), st, hit2)
 }

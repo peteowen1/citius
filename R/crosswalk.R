@@ -89,7 +89,12 @@ loose_key <- function(x, name_order = c("surname_first", "given_first")) {
 #' @return `x`, modified by reference.
 #' @keywords internal
 .link_by_key <- function(x, key, method, guard = TRUE, scope = NULL) {
-  d <- x[!is.na(get(key)), .(k = get(key), person_id, source, birthdate)]
+  # `[[`-extract, never `get()` inside `[...]`: get() breaks data.table's fast
+  # column-reference path and has left multi-GB of unreclaimed RSS on tables a
+  # fraction of this crosswalk's size (see r-datatable-gotchas.md). The key
+  # lands in a plain vector first, then the subset uses that vector.
+  kv <- x[[key]]
+  d <- x[!is.na(kv), .(k = kv[!is.na(kv)], person_id, source, birthdate)]
   if (!nrow(d)) return(x)
   # Scope restricts which links may FIRE, not which keys exist. Both sides of a
   # link need a key -- blanking the counterparty's key makes the link

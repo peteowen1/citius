@@ -4,7 +4,13 @@
 \alias{decompose_races}
 \title{Split performances into athlete, race and residual components}
 \usage{
-decompose_races(results, max_iter = 400L, tol = 1e-08, min_race_size = 2L)
+decompose_races(
+  results,
+  max_iter = 400L,
+  tol = 1e-08,
+  min_race_size = 2L,
+  centre = c("always", "auto")
+)
 }
 \arguments{
 \item{results}{Canonical results containing a \code{race_key} column identifying

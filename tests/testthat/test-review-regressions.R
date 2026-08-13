@@ -101,6 +101,16 @@ test_that("pooled context offsets fall back when no reference round exists", {
   expect_true(all(is.finite(ctx$round)))
   # Referenced to the fallback (the slowest context), so one entry is exactly 0.
   expect_true(any(abs(ctx$round) < 1e-12))
+
+  # THE TIER HALF OF THE SAME BUG, found 2026-08-13 -- the round block was fixed
+  # and the tier block three lines below it kept the subtract-then-test order.
+  # This very data triggers it: no `tier` column classifies everything "mid", so
+  # there is no "top" reference row, and before the fix ctx$tier came back
+  # all-NA -- which estimate_ability() reads as a silent zero adjustment.
+  expect_true(is.numeric(ctx$tier))
+  expect_false(all(is.na(ctx$tier)))
+  expect_true(all(is.finite(ctx$tier)))
+  expect_true(any(abs(ctx$tier) < 1e-12))
 })
 
 

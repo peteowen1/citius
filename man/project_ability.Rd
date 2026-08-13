@@ -12,6 +12,11 @@ column giving each athlete's age at the target date, and \code{age_ref} giving
 the mean age of the results the estimate was built from.}
 
 \item{aging}{A \code{citius_aging} from \code{\link[=fit_aging_curve]{fit_aging_curve()}}.}
+
+\item{max_shift}{Shift size, on the log performance scale, beyond which a
+projection is reported as suspicious. Not a clamp — the shift is still
+applied — but a warning names the usual cause (an \code{age_ref} that is a
+career mean rather than the weighted mean from \code{\link[=estimate_ability]{estimate_ability()}}).}
 }
 \value{
 \code{ability} with \code{ability} shifted by the age difference and an

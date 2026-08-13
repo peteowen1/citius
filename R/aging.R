@@ -193,6 +193,10 @@ age_adjustment <- function(age, event_id, aging) {
 #'   column giving each athlete's age at the target date, and `age_ref` giving
 #'   the mean age of the results the estimate was built from.
 #' @param aging A `citius_aging` from [fit_aging_curve()].
+#' @param max_shift Shift size, on the log performance scale, beyond which a
+#'   projection is reported as suspicious. Not a clamp — the shift is still
+#'   applied — but a warning names the usual cause (an `age_ref` that is a
+#'   career mean rather than the weighted mean from [estimate_ability()]).
 #' @return `ability` with `ability` shifted by the age difference and an
 #'   `age_shift` column recording the adjustment applied.
 #' @export

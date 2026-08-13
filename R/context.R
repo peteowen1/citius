@@ -47,8 +47,13 @@ fit_context_effect <- function(results, covariate, by_event = TRUE, min_n = 30L)
   dt[, lev_eff := 0]
   for (i in 1:50) {
     dt[, ath_eff := mean(perf - lev_eff), by = .(athlete_id, event_id)]
-    new <- dt[, .(le = mean(perf - ath_eff)), by = grp]
-    dt <- merge(dt, new, by = grp, all.x = TRUE, sort = FALSE)
+    # Grouped update IN PLACE, not a merge. The old form built an intermediate
+    # per-level table and merge()d it back -- rebuilding every row and column of
+    # the table once per sweep purely to attach one number per level, which is
+    # the identical pattern decompose_races() documents and fixed with an
+    # update join. Here no join is needed at all: a grouped `:=` writes the
+    # level mean straight onto the rows.
+    dt[, le := mean(perf - ath_eff), by = grp]
     delta <- max(abs(dt$le - dt$lev_eff), na.rm = TRUE)
     dt[, lev_eff := le][, le := NULL]
     if (is.finite(delta) && delta < 1e-9) break
@@ -140,7 +145,7 @@ fit_numeric_effect <- function(results, covariate, by_event = TRUE,
 #'   mean covariate value, and `numeric_adj` recording the shift.
 #' @export
 adjust_numeric <- function(results, numeric_effect, covariate) {
-  dt <- data.table::copy(data.table::as.data.table(results))
+  dt <- .one_copy_dt(results)
   if (is.null(numeric_effect) || !nrow(numeric_effect) || !covariate %in% names(dt)) {
     dt[, numeric_adj := 0]
     return(dt[])
@@ -174,7 +179,7 @@ adjust_numeric <- function(results, numeric_effect, covariate) {
 #'   Levels with no estimate are unchanged.
 #' @export
 adjust_context <- function(results, context_effect, covariate) {
-  dt <- data.table::copy(data.table::as.data.table(results))
+  dt <- .one_copy_dt(results)
   if (is.null(context_effect) || !nrow(context_effect) || !covariate %in% names(dt)) {
     dt[, context_adj := 0]
     return(dt[])
@@ -619,7 +624,12 @@ project_tier <- function(ability, tier, calibration = NULL, shrink = 0.5) {
 #' @param results Canonical results table containing `perf`, `athlete_id`,
 #'   `event_id`, `round`, and `tier`.
 #' @param min_heats Minimum heat marks required to report an athlete. Default 2.
-#' @param shrink_k Prior weight for Empirical Bayes shrinkage. Default 5.
+#' @param shrink_k Prior weight for Empirical Bayes shrinkage. **The default 5
+#'   is hand-set, not fitted** — an exception to the no-hand-tuned-constants
+#'   rule, recorded here. The principled value is the precision ratio
+#'   `sigma_within^2 / sd(trait)^2` fitted out of sample, the way
+#'   `.fit_context_shrink()` fits `k` for the context offsets; fit it before
+#'   tuning forecasts that lean on the coasting trait.
 #' @return A `data.table` of `athlete_id`, `coasting_trait`, and `n_heats`.
 #' @export
 fit_coasting_trait <- function(results, min_heats = 2L, shrink_k = 5.0) {
@@ -633,16 +643,60 @@ fit_coasting_trait <- function(results, min_heats = 2L, shrink_k = 5.0) {
   dt[, athlete_id := as.character(athlete_id)]
   dt[, rc := .round_class(if ("round" %in% names(dt)) round else NA_character_)]
 
-  dt[, ath_mean := mean(perf, na.rm = TRUE), by = .(athlete_id, event_id)]
-  dt[, r := perf - ath_mean]
+  # REFERENCE TO FINALS, NOT TO THE ATHLETE'S OVERALL MEAN (fixed 2026-08-13).
+  #
+  # This measured `perf - mean(perf over ALL rounds)`, while its own
+  # documentation and DECISIONS 2026-08-01 both describe it as a "heat-vs-FINAL"
+  # trait -- and the round offset it has to compose with in `estimate_ability()`
+  # is final-referenced too. The two references are not interchangeable: an
+  # athlete's overall mean already contains their slow heats, so deviation from
+  # it is systematically SMALLER than deviation from their finals.
+  #
+  # The size of that error is not subtle. On the current corpus the old form gave
+  # a trait mean of -0.00111 against a pooled heat offset of -0.00649, so
+  # subtracting the pooled offset to get the athlete-specific excess produced
+  # +0.00537 -- POSITIVE, i.e. it would have pushed every jogged heat further
+  # DOWN, the exact opposite of the correction intended.
+  #
+  # Referencing finals makes the trait mean comparable to the pooled offset by
+  # construction, so the excess is a real athlete-specific residual.
+  ref <- dt[rc == "final", .(ref_mean = mean(perf, na.rm = TRUE)),
+            by = .(athlete_id, event_id)]
+  if (!nrow(ref)) return(empty)
+  dt <- merge(dt, ref, by = c("athlete_id", "event_id"))
+  dt[, r := perf - ref_mean]
 
+  # An athlete with heats but no finals in an event has no reference and is
+  # dropped by that join, which is correct: "how much easier than their final"
+  # is undefined without a final. Silently defaulting them to 0 would put a
+  # made-up trait on exactly the thin-evidence athletes shrinkage exists for.
   heats <- dt[rc == "heat", .(dev = mean(r, na.rm = TRUE), n_heats = .N), by = athlete_id]
   if (!nrow(heats)) return(empty)
 
   heats <- heats[n_heats >= min_heats]
   if (!nrow(heats)) return(empty)
 
-  heats[, coasting_trait := (n_heats / (n_heats + shrink_k)) * dev]
+  # SHRINK TOWARD THE POPULATION HEAT EFFECT, NOT TOWARD ZERO (fixed 2026-08-13).
+  #
+  # This was `(n/(n+k)) * dev`, which pulls a thin-evidence athlete toward
+  # "races heats exactly as hard as finals". Nobody does; the population runs
+  # heats measurably easier. Every other shrinkage in this package targets the
+  # pooled value -- see `ability.R:332`,
+  # `offset = pooled + (raw - pooled) * n/(n+k)` -- and this one did not.
+  #
+  # The consequence was not a small bias. Shrinking to zero drove the trait mean
+  # to -0.0025 against a pooled heat offset of -0.00649, so the trait looked
+  # like LESS coasting than the population average, and the athlete-specific
+  # excess came out positive for most athletes. Shrinkage strength was
+  # masquerading as a measurement.
+  #
+  # Referenced to finals (above) and shrunk to the pooled deviation (here), the
+  # trait is now on the same scale as the round offset, so `estimate_ability()`
+  # can subtract the difference and get a real athlete-specific residual.
+  pooled_dev <- mean(dt[rc == "heat", r], na.rm = TRUE)
+  if (!is.finite(pooled_dev)) pooled_dev <- 0
+  heats[, coasting_trait := pooled_dev +
+          (n_heats / (n_heats + shrink_k)) * (dev - pooled_dev)]
   heats[, .(athlete_id, coasting_trait, n_heats)]
 }
 

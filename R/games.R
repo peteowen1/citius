@@ -173,8 +173,11 @@ get_games_medals <- function(games = NULL, year = NULL, nation = NULL) {
     dt <- dt[year %in% yr_vec]
   }
   if (!is.null(nation)) {
-    nat_vec <- nation
-    dt <- dt[grepl(paste(nat_vec, collapse = "|"), nation, ignore.case = TRUE)]
+    # Caller strings are matched as literal substrings, not raw regex: an
+    # unescaped "Congo (DRC)" is a regex parse error, and metacharacters in a
+    # name silently over- or under-match.
+    esc <- gsub("([][{}().|^$*+?\\\\])", "\\\\\\1", nation)
+    dt <- dt[grepl(paste(esc, collapse = "|"), nation, ignore.case = TRUE)]
   }
   
   data.table::setorder(dt, games, -year, -gold, -silver, -bronze)
@@ -210,12 +213,15 @@ get_games_medals <- function(games = NULL, year = NULL, nation = NULL) {
 summary_games_dominance <- function(games = NULL, top_n = 20L, min_golds = 5L, method = "raw", gamma = NULL) {
   if (method == "raw") {
     dt <- get_games_medals(games = games)
-    dt <- dt[gold >= min_golds]
-    data.table::setorder(dt, -gold_share, -gold)
-    
+    # The Games-wide total must be summed over EVERY nation, so the fallback
+    # recompute has to run before the min_golds filter -- after it, the "total"
+    # was the medal-table leaders' golds only, silently inflating every
+    # gold_pct/excess/multiplier derived from it.
     if (!"total_golds_in_games" %in% names(dt)) {
       dt[, total_golds_in_games := sum(gold, na.rm = TRUE), by = .(games, year)]
     }
+    dt <- dt[gold >= min_golds]
+    data.table::setorder(dt, -gold_share, -gold)
     
     res <- dt[, .(
       games,
@@ -233,7 +239,10 @@ summary_games_dominance <- function(games = NULL, top_n = 20L, min_golds = 5L, m
   } else if (method == "excess_nations") {
     return(summary_games_excess_gold(games = games, top_n = top_n, min_golds = min_golds))
   } else if (method == "multiplier_nations") {
-    dt <- summary_games_excess_gold(games = games, top_n = 1000L, min_golds = min_golds)
+    # top_n = Inf: the candidate pool must be complete before re-ranking by
+    # multiplier -- a finite cap here silently excluded qualifying rows from
+    # the re-sort whenever more than that many nation-Games qualified.
+    dt <- summary_games_excess_gold(games = games, top_n = Inf, min_golds = min_golds)
     dt[, mult_num := as.numeric(gsub("x", "", gold_multiplier))]
     data.table::setorder(dt, -mult_num, -golds)
     dt[, mult_num := NULL]
@@ -313,7 +322,7 @@ summary_games_logit_dominance <- function(games = NULL, top_n = 20L, min_golds =
   dt[, comp_nations := data.table::fifelse(!is.na(competing_nations) & competing_nations > 0, competing_nations, data.table::uniqueN(nation))]
   
   dt[, p_act := as.numeric(gold) / total_golds_in_games]
-  dt[p_act >= 0.999, p_act := 0.999]
+  dt[p_act >= .citius_logit_clip, p_act := .citius_logit_clip]
   dt[, p_exp := 1.0 / comp_nations]
   
   logit_fun <- function(p) log(p / (1.0 - p))

@@ -30,7 +30,15 @@
 #' @export
 aquatics_athlete_results <- function(athlete_id, sex = NULL) {
   url <- sprintf("%s/athletes/%s/results", aquatics_base_url(), as.character(athlete_id))
-  r <- tryCatch(citius_get_json(url), error = function(e) NULL)
+  # Fetch errors PROPAGATE, exactly like athletics_athlete_results(). A first
+  # fix warned and returned an empty table instead -- which looked louder but
+  # kept the real bug: every harvester wraps this call in its own
+  # tryCatch(error = ...) precisely to distinguish "fetch failed, retry next
+  # run" from "genuinely empty, cache it", and a function that converts errors
+  # to empty tables internally makes that distinction impossible at the only
+  # place it matters. A definitive 404 still returns NULL (a genuine
+  # "no results" answer), so the empty table below remains cacheable fact.
+  r <- citius_get_json(url)
   if (is.null(r) || is.null(r$Results) || !length(r$Results)) return(.empty_result_dt())
   res <- r$Results
   nm <- r$FullName %||% NA_character_

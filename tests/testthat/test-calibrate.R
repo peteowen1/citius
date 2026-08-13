@@ -358,26 +358,42 @@ test_that("a collapsed condition sensitivity warns instead of failing silently",
   # and only moves marks. Nothing errors, which is why this needs a warning:
   # measured 2026-07-31, sd(sensitivity) was 0 on EVERY current calibration while
   # sd(sensitivity_raw) was 1.60.
+  #
+  # Going through calibrate() only collapses SOMETIMES -- the DerSimonian-Laird
+  # between-athlete estimate is itself noisy, so a fixture with no planted
+  # heterogeneity can still land a hair above the collapse floor by chance. That
+  # is what the old version of this test hedged with an if/else and a succeed()
+  # fallback, which means it could pass forever without ever exercising the
+  # warning.
+  #
+  # Forcing it deterministically: every athlete gets resid = 0 and the SAME set
+  # of race effects, so y = resid + c_r = c_r exactly and
+  # slope = sum(c_r * c_r) / sum(c_r^2) = 1 for EVERY athlete, with zero
+  # variance across athletes by construction. That makes Q = 0 in the DL
+  # estimator (every athlete's value equals the weighted mean), so tau2 < 0,
+  # `between` clamps to its 1e-6 floor, and the collapse is not a matter of
+  # luck. Calling .athlete_sensitivity() directly on a crafted d/ev pair
+  # isolates that mechanism from calibrate()'s own sampling noise.
   set.seed(53)
-  n_races <- 30
-  d <- data.table::rbindlist(lapply(seq_len(n_races), function(r) {
+  n_races <- 10L
+  n_ath <- 6L
+  c_r_vals <- stats::rnorm(n_races, 0, 0.02)
+  d <- data.table::rbindlist(lapply(seq_len(n_ath), function(a) {
     data.table::data.table(
-      race_key = paste0("R", r), round = "F", tier = "OW",
-      event_id = "AT-100Metres-M", date = Sys.Date() - r,
-      athlete_id = as.character(1:6),
-      perf = to_perf(9.9, -1L) + stats::rnorm(1, 0, 0.012) +
-        stats::rnorm(6, 0, 0.004))
+      athlete_id = as.character(a), event_id = "AT-100Metres-M",
+      c_r = c_r_vals, resid = 0, shared = TRUE)
   }))
-  # No planted per-athlete sensitivity, so the estimator SHOULD find none and
-  # should say so rather than returning a flat table quietly.
+  ev <- data.table::data.table(
+    event_id = "AT-100Metres-M", sigma_within = 0.01, condition_sd = 0.02)
+
   rlang::reset_warning_verbosity("citius_sensitivity_collapsed")
-  cal <- suppressMessages(calibrate(d, min_races = 4L))
-  s <- data.table::as.data.table(cal$athlete)
-  if (nrow(s) > 1 && stats::sd(s$sensitivity, na.rm = TRUE) < 1e-8) {
-    expect_true(all(abs(s$sensitivity - 1) < 1e-8))
-  } else {
-    succeed("sensitivity identified on this fixture; collapse guard not exercised")
-  }
+  expect_warning(
+    s <- citius:::.athlete_sensitivity(d, ev),
+    "collapsed to a constant"
+  )
+  expect_equal(nrow(s), n_ath)
+  expect_equal(stats::sd(s$sensitivity, na.rm = TRUE), 0)
+  expect_true(all(abs(s$sensitivity - 1) < 1e-8))
 })
 
 test_that("calibrate fits foul_round by event_id and round_class", {
@@ -392,3 +408,59 @@ test_that("calibrate fits foul_round by event_id and round_class", {
   expect_true(all(c("event_id", "round_class", "foul_rate") %in% names(fr)))
 })
 
+
+# ---------------------------------------------------------------------------
+# Predicting from a non-converged calibration must SAY so.
+#
+# `converged`/`delta`/`sweeps` were stamped into every calibration, printed once
+# as the file was written, and read by nothing thereafter -- so the deployed
+# calibration shipped `converged = FALSE` (delta 1.66e-04) through every forecast
+# and every published rating in silence. Found in the 2026-08-13 audit of
+# CALIBRATION_METADATA, the same audit that found `race` hiding there.
+# ---------------------------------------------------------------------------
+
+# Minimal object rather than a real fit: this behaviour is about the three slots
+# and the class, and a real calibrate() run would make the test slow and couple
+# it to whether the fixture happens to converge.
+fake_cal <- function(converged, delta = 1.66e-4, sweeps = 400L) {
+  structure(list(events = data.table::data.table(event_id = character(),
+                                                 tactical_index = numeric(),
+                                                 calibrated = logical()),
+                 converged = converged, delta = delta, sweeps = sweeps),
+            class = "citius_calibration")
+}
+
+test_that("a non-converged calibration warns, naming delta and sweeps", {
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  expect_warning(citius:::.warn_unconverged(fake_cal(FALSE)),
+                 "did not converge")
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  expect_warning(citius:::.warn_unconverged(fake_cal(FALSE)), "400")
+})
+
+test_that("a converged calibration is silent", {
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  expect_silent(citius:::.warn_unconverged(fake_cal(TRUE)))
+})
+
+test_that("an ABSENT convergence stamp is unknown, not failed", {
+  # `!isTRUE(NULL)` is TRUE, so the obvious spelling would report every older
+  # calibration as non-converged -- claiming a measurement that was never made.
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  cal <- fake_cal(TRUE); cal$converged <- NULL
+  expect_silent(citius:::.warn_unconverged(cal))
+})
+
+test_that("a non-calibration object is ignored rather than erroring", {
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  expect_silent(citius:::.warn_unconverged(NULL))
+  expect_silent(citius:::.warn_unconverged(list(converged = FALSE)))
+})
+
+test_that("estimate_ability surfaces it on the path that actually predicts", {
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  sim <- simulate_races()
+  expect_warning(
+    estimate_ability(sim$data, calibration = fake_cal(FALSE)),
+    "did not converge")
+})

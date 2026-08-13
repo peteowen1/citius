@@ -1,3 +1,8 @@
+# The upper clip applied to an actual gold share before it enters a logit.
+# One definition: games.R and economic.R each carried their own 0.999, so
+# tuning one silently diverged from the other.
+.citius_logit_clip <- 0.999
+
 # Declare data.table non-standard-evaluation symbols so R CMD check stays quiet.
 utils::globalVariables(c(
   ".", ".N", ".SD",

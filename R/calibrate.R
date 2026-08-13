@@ -79,6 +79,16 @@ flag_implausible <- function(results, k = 5) {
 add_race_key <- function(results) {
   dt <- data.table::copy(if (data.table::is.data.table(results)) results
                          else data.table::as.data.table(results))
+  # Without a competition to separate them, every same-event/round/date result
+  # worldwide collapses into one "race" and the decomposition reads a whole
+  # day's meets as a single shared shock. That must never happen silently.
+  if (!"competition_id" %in% names(dt)) {
+    cli::cli_warn(c(
+      "{.arg results} has no {.field competition_id}; race keys will pool every
+       result sharing an event, round and date into one race.",
+      i = "Harvest with a source that carries competition ids before calibrating."
+    ))
+  }
   comp <- if ("competition_id" %in% names(dt)) dt$competition_id else NA
   rnd <- if ("round" %in% names(dt)) dt$round else NA
   dt[, race_key := paste(comp, event_id, rnd, as.character(date), sep = "|")]
@@ -116,7 +126,39 @@ add_race_key <- function(results) {
 #'   effect table, the augmented `data` carrying `resid`, and `converged`.
 #' @export
 decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
-                            min_race_size = 2L) {
+                            min_race_size = 2L,
+                            centre = c("always", "auto")) {
+  # `centre = "auto"` is the FIX for the non-convergence this function has always
+  # had on athletics, MEASURED 2026-08-13. It is not the default only because
+  # flipping it moves sigma_within, condition_sd, tail_df and every context
+  # offset in every calibration, and no shipped number changes without an A/B.
+  #
+  # WHY "always" IS WRONG WHENEVER ANY RACE IS PINNED. Races below
+  # `min_race_size` keep `c_r == 0` by construction, and a pinned race FIXES THE
+  # ZERO POINT -- the additive confounding between `a` and `c` is already
+  # resolved. Centring the free effects to mean zero then imposes a SECOND,
+  # incompatible constraint. The system is over-determined, there is no fixed
+  # point, and the iteration drifts forever: the pinned races pull the level one
+  # way each sweep and the centring pushes it back.
+  #
+  # Measured on the men's 100m, 183,738 results, min_race_size = 4:
+  #
+  #   variant                     delta @400   delta @2000   sd(c_r) 400->2000
+  #   centred (today)             3.21e-04     2.72e-04      +117.3%  never converges
+  #   NOT centred                 1.36e-05     9.98e-09      +0.0%    converged, 1038 sweeps
+  #   centred over all rows       3.23e-04     2.84e-04      +120.9%  never converges
+  #
+  # cor between the centred and uncentred answers is 0.40, so this is a WRONG
+  # ANSWER, not a slow one. The converged race-effect sd is 0.01390 (1.40% of a
+  # mark); the centred run was still climbing through 0.03646 at 2,000 sweeps.
+  # Without the fix, `condition_sd` -- which is computed from these effects
+  # rather than the residuals -- is unreliable. `sigma_within` and `tail_df` come
+  # from the residuals and move only 0.38%, so they are largely unaffected.
+  #
+  # The uncentred solution has a non-zero mean (the pinned races define the
+  # origin, not the average race), so any consumer comparing `c_r` across
+  # decompositions must not assume it is centred.
+  centre <- match.arg(centre)
   dt <- data.table::as.data.table(results)
   if (!"race_key" %in% names(dt)) {
     cli::cli_abort("{.arg results} must contain a {.field race_key} column; use {.fn athletics_competition_results}.")
@@ -177,7 +219,12 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
     dt[, a_i := mean(perf - c_r), by = ae_id]
     new_c <- dt[shared == TRUE, .(c_new = mean(perf - a_i)), by = rk_id]
     if (!nrow(new_c)) { converged <- TRUE; break }
-    new_c[, c_new := c_new - mean(c_new)]        # centre: resolves the confounding
+    # Centre only when it is actually needed. With any race pinned at zero the
+    # level is already identified and this constraint is redundant AND harmful --
+    # see the note at the top of this function.
+    if (identical(centre, "always") || all(dt$shared)) {
+      new_c[, c_new := c_new - mean(c_new)]      # centre: resolves the confounding
+    }
     # An update join, NOT a merge. `merge()` here rebuilt the entire table --
     # every row, every column -- on each of up to 50 sweeps, purely to attach one
     # number per race. This writes in place.
@@ -287,9 +334,24 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
 #' @export
 calibrate <- function(results, min_races = 8L, min_race_size = 2L,
                       context_per_family = FALSE, context_per_event = FALSE,
-                      context_season = FALSE, context_indoor = FALSE) {
+                      context_season = FALSE, context_indoor = FALSE,
+                      centre = c("always", "auto"), max_iter = 400L) {
+  centre <- match.arg(centre)
+  # `centre` and `max_iter` are exposed so the convergence fix is REACHABLE from
+  # a calibration build. Both defaults reproduce the previous behaviour exactly.
+  # They travel together on purpose: `centre = "auto"` converges on the men's
+  # 100m only after ~1,038 sweeps, so passing it with the 400 default would
+  # produce an unconverged fit under a name that claims otherwise -- a worse
+  # failure than the one being fixed.
+  if (identical(centre, "auto") && max_iter <= 400L) {
+    cli::cli_warn(c(
+      "{.code centre = \"auto\"} with {.code max_iter = {max_iter}} may not converge.",
+      i = "The uncentred fit needed 1,038 sweeps on the men's 100m. Check {.field converged} on the result."
+    ))
+  }
   results <- .drop_best_only(results, "calibrate()")
-  dec <- decompose_races(results, min_race_size = min_race_size)
+  dec <- decompose_races(results, min_race_size = min_race_size,
+                         centre = centre, max_iter = max_iter)
   if (is.null(dec$race) || !nrow(dec$race)) {
     return(.empty_calibration())
   }
@@ -372,7 +434,13 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
     fr <- raw[!is.na(.rc), .(foul_rate = mean(is.na(perf)), n_obs = .N), by = .(event_id, round_class = .rc)]
     raw[, .rc := NULL]
     fr <- merge(fr, fouls[, .(event_id, global_foul = foul_rate)], by = "event_id", all.x = TRUE)
-    fr[, foul_rate := (n_obs * foul_rate + 30 * global_foul) / (n_obs + 30)]
+    # Pseudo-count blend toward the event's global rate. 30 is a PLACEHOLDER,
+    # never fitted -- and nothing currently reads `foul_round` (it is on the
+    # wiring guard's KNOWN_UNREAD register), so fitting it before a consumer
+    # exists would be measuring a dead layer. Named here so the day a consumer
+    # is wired, the constant is one grep away rather than a bare literal.
+    foul_pool_n <- 30
+    fr[, foul_rate := (n_obs * foul_rate + foul_pool_n * global_foul) / (n_obs + foul_pool_n)]
     fr[, global_foul := NULL]
     fr[]
   } else NULL
@@ -390,16 +458,16 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
   # measurement from the application is what let a fitted wind coefficient sit
   # unused while `adjust_wind()` appeared only inside a comment.
   wind <- if ("wind" %in% names(results)) {
-    tryCatch(data.table::as.data.table(fit_wind_effect(results)),
-             error = function(e) NULL)
+    .fit_layer_or_warn(data.table::as.data.table(fit_wind_effect(results)), "wind")
   } else NULL
 
-  cfam <- tryCatch(estimate_context_effects(
-                     results,
-                     per_family = isTRUE(context_per_family),
-                     per_event  = isTRUE(context_per_event)),
-                   error = function(e) list(round_family = NULL, tier_family = NULL,
-                                            round_event = NULL, tier_event = NULL))
+  cfam <- .fit_layer_or_warn(
+    estimate_context_effects(results,
+                             per_family = isTRUE(context_per_family),
+                             per_event  = isTRUE(context_per_event)),
+    "round_family/tier_family")
+  if (is.null(cfam)) cfam <- list(round_family = NULL, tier_family = NULL,
+                                  round_event = NULL, tier_event = NULL)
   ctx <- .context_stats(d)
   athlete <- .athlete_sensitivity(d, ev)
   tail_fit <- fit_tail_df(list(data = d))
@@ -429,11 +497,11 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
     # is fitted across the whole history but the forecast targets a top-tier
     # final, and those are different distributions -- narrower for field events,
     # wider for road. estimate_ability() applies this to the sigma it returns.
-    sigma_context = tryCatch(fit_sigma_context(results), error = function(e) NULL),
+    sigma_context = .fit_layer_or_warn(fit_sigma_context(results), "sigma_context"),
     # How a global championship final differs from another top-tier final. Round
     # and tier offsets reference "final" and "top", so this distinction is
     # otherwise inexpressible -- and it is not zero.
-    championship = tryCatch(fit_championship_effect(results), error = function(e) NULL),
+    championship = .fit_layer_or_warn(fit_championship_effect(results), "championship"),
     # Indoor/outdoor and seasonal phase. Both were built, tested and — for season
     # — validated out of sample (offsets fitted pre-2020 improved 2020+ top-tier
     # final prediction by 0.66% relative RMSE), and then neither was ever
@@ -444,7 +512,7 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
     # measurement and application live in different files — so they are attached
     # HERE, next to the other context effects, rather than by a pipeline script.
     indoor = if (isTRUE(context_indoor) && "indoor" %in% names(results)) {
-      tryCatch(fit_indoor_effect(results), error = function(e) NULL)
+      .fit_layer_or_warn(fit_indoor_effect(results), "indoor")
     } else NULL,
     # Needs `venue_country` to split the hemispheres. Without it every mark
     # classifies northern and southern athletes get a calendar six months out of
@@ -452,7 +520,7 @@ calibrate <- function(results, min_races = 8L, min_race_size = 2L,
     # fit a pooled calendar.
     season = if (isTRUE(context_season) &&
                  all(c("date", "venue_country") %in% names(results))) {
-      tryCatch(fit_season_effect(results), error = function(e) NULL)
+      .fit_layer_or_warn(fit_season_effect(results), "season")
     } else NULL,
     min_races = min_races,
     min_race_size = min_race_size,
@@ -513,7 +581,17 @@ fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, 
     expected <- if (is.infinite(v)) {
       2 * stats::pnorm(-probes)
     } else {
-      2 * stats::pt(-probes / sqrt(v / (v - 2)), df = v)
+      # MULTIPLY by the t scale, do not divide (fixed 2026-08-14). The z-scores
+      # are standardised to unit variance, and a unit-variance t_v is t/sqrt(
+      # v/(v-2)), so P(|z| > k) = P(|t| > k * sqrt(v/(v-2))). The old division
+      # overstated the expected tail mass of every low-df candidate, so
+      # genuinely heavy-tailed residuals fitted as NEARLY NORMAL -- planted
+      # df = 5 came back ranked worst of ten candidates while df = 30 won.
+      # That is the opposite failure to the hard-coded df = 6 this fitter
+      # replaced, and it was invisible on near-normal input, which is why no
+      # earlier test caught it. NOTE: rebuilt calibrations will carry a lower
+      # (fatter-tailed) tail_df than deployed ones; A/B before shipping one.
+      2 * stats::pt(-probes * sqrt(v / (v - 2)), df = v)
     }
     # Relative error, so the rarer probes are not swamped by the common ones.
     data.table::data.table(df = v, err = mean(abs(expected - observed) / observed))
@@ -740,6 +818,71 @@ print.citius_calibration <- function(x, ...) {
     print(utils::head(show[, cols, with = FALSE], 10L))
   }
   invisible(x)
+}
+
+
+#' Fit a calibration layer, and NEVER let it fail silently
+#'
+#' `calibrate()` wrapped five of its layer fitters in
+#' `tryCatch(..., error = function(e) NULL)`. That converts a fitter error into
+#' a silently absent layer -- which is this package's single recurring defect
+#' class, and the reason `test-calibration-wiring.R` exists. The wiring guard
+#' checks the deployed ARTEFACT, so a layer lost this way is caught only at
+#' deployment and only if it is on the guard's registers; a build that loses
+#' `sigma_context` to a refactor-induced error would otherwise print nothing.
+#'
+#' The catch is kept -- a broken optional layer should not abort a calibration
+#' that is 95% usable -- but it now says what it dropped and why.
+#'
+#' @keywords internal
+#' @noRd
+.fit_layer_or_warn <- function(expr, layer) {
+  tryCatch(expr, error = function(e) {
+    cli::cli_warn(c(
+      "Fitting calibration layer {.field {layer}} failed; this calibration will not carry it.",
+      x = conditionMessage(e),
+      i = "A silently absent layer is this package's recurring defect class. Treat this as a build failure unless the absence is intended."
+    ))
+    NULL
+  })
+}
+
+
+#' Warn once when predicting from a calibration that never converged
+#'
+#' `decompose_races()` stamps `converged`, `delta` and `sweeps` into every
+#' calibration, `rebaseline_chain.R` prints them as it writes the file, and until
+#' 2026-08-13 **nothing read them again**. So every forecast, every published
+#' rating and every backtest ran off whatever the solver happened to reach, with
+#' no way to tell from the output.
+#'
+#' That is not hypothetical. The deployed calibration is `converged = FALSE` at
+#' `delta = 1.66e-04` -- race effects still moving by 1% of the residual sd -- and
+#' every variance estimate downstream is computed from those residuals.
+#'
+#' It warns rather than aborts because the unconverged fit is, measured, the one
+#' that forecasts BETTER: `centre = "auto"` reached delta 2.5e-07 and lost on gold
+#' Brier by +0.56% (p = 0.00078). So non-convergence here is a fact to surface,
+#' not a fault to refuse on. See DECISIONS.md 2026-08-13.
+#'
+#' @keywords internal
+#' @noRd
+.warn_unconverged <- function(calibration) {
+  if (is.null(calibration) || !inherits(calibration, "citius_calibration")) {
+    return(invisible(FALSE))
+  }
+  # `isFALSE` not `!isTRUE`: an older calibration carrying no `converged` slot is
+  # unknown, not failed, and must not be reported as if it had been measured.
+  if (!isFALSE(calibration$converged)) return(invisible(FALSE))
+  d <- calibration$delta
+  s <- calibration$sweeps
+  cli::cli_warn(c(
+    "Predicting from a calibration whose decomposition did not converge.",
+    "*" = "{.field delta} {.val {if (is.null(d)) NA else signif(d, 3)}} after
+           {.val {if (is.null(s)) NA else s}} sweep{?s}.",
+    i = "Every variance estimate downstream is computed from these residuals."
+  ), .frequency = "once", .frequency_id = "citius_calibration_unconverged")
+  invisible(TRUE)
 }
 
 

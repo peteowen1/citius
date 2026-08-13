@@ -272,20 +272,48 @@ test_that("wind is stripped from ability, and the local name does not shadow `w`
 
   truth <- data.table::data.table(athlete_id = as.character(seq_len(n_ath)),
                                   true = ability)
+  # adjust_race = TRUE throughout: the race path is default-OFF until it is
+  # backtested, so these assertions must opt in or they silently test nothing.
   err <- function(cl) {
-    m <- merge(estimate_ability(rows, as_of = Sys.Date(), calibration = cl),
+    m <- merge(estimate_ability(rows, as_of = Sys.Date(), calibration = cl,
+                                adjust_race = TRUE),
                truth, by = "athlete_id")
     stats::sd(m$ability - m$true)
   }
-  cal_off <- cal; cal_off$wind <- NULL
-  # Removing a real covariate must SHARPEN the estimate, not merely shift it.
-  expect_lt(err(cal), err(cal_off) * 0.9)
+  # REWRITTEN 2026-08-13, when estimate_ability() started reading the race
+  # effect. The old form compared wind-on against wind-off while BOTH carried
+  # `calibration$race`, and once the race effect is applied that comparison is
+  # empty: wind here is constant within a race, so `c_r` absorbs ALL of it.
+  # That is precisely why the wind adjustment is now suppressed on rows with a
+  # fitted race effect -- subtracting both removes the same quantity twice.
+  #
+  # So the property under test becomes: a calibration carrying EITHER correction
+  # must beat one carrying neither, and the two must not stack.
+  cal_none <- cal; cal_none$wind <- NULL; cal_none$race <- NULL
+  cal_wind <- cal; cal_wind$race <- NULL          # wind only, old behaviour
+  cal_race <- cal; cal_race$wind <- NULL          # race only
+
+  expect_lt(err(cal_wind), err(cal_none) * 0.9)   # wind alone still sharpens
+  expect_lt(err(cal_race), err(cal_none) * 0.9)   # the race effect subsumes it
+
+  # NOT DOUBLE-COUNTED. With both tables present the answer must match the race
+  # effect alone, because wind is suppressed wherever a c_r applied. If the
+  # suppression is ever removed this fails, which is the point.
+  expect_equal(err(cal), err(cal_race), tolerance = 1e-8)
 
   # A shadowed `w` shows up as a level shift with the spread unchanged, so test
-  # the level explicitly too.
-  m <- merge(estimate_ability(rows, as_of = Sys.Date(), calibration = cal),
+  # the level explicitly too. Kept from the original: this is the assertion that
+  # would have caught the beta * weight bug.
+  m <- merge(estimate_ability(rows, as_of = Sys.Date(), calibration = cal,
+                              adjust_race = TRUE),
              truth, by = "athlete_id")
   expect_lt(abs(mean(m$ability - m$true)), 0.001)
+
+  # And the gate itself: default OFF must reproduce the pre-2026-08-13 answer
+  # exactly, so merging this cannot move a shipped forecast.
+  expect_equal(
+    estimate_ability(rows, as_of = Sys.Date(), calibration = cal)$ability,
+    estimate_ability(rows, as_of = Sys.Date(), calibration = cal_wind)$ability)
 })
 
 test_that("apply_momentum accepts every input form and respects shrinkage", {

@@ -18,12 +18,16 @@ Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Imports:
+    chromote,
     cli,
     data.table (>= 1.14.0),
+    dplyr,
     httr2,
     jsonlite,
     rlang,
-    stats
+    rvest,
+    stats,
+    xml2
 Suggests:
     arrow (>= 10.0.0),
     ggplot2,

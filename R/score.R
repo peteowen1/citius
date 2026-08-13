@@ -55,9 +55,38 @@ score_predictions <- function(predictions, outcomes, prob_col = "p_gold") {
   if (!nrow(d)) {
     cli::cli_abort("No predictions matched an outcome; check {.field athlete_id} keys.")
   }
+  # The 1/field baseline was computed from the MATCHED rows, so an outcomes
+  # table covering only part of a field silently shrank it and moved the skill
+  # figure -- outcomes holding only winners made base = 1/1. Field size now
+  # comes from the predictions side, counted before the inner join, and rows
+  # lost to the join are loud rather than silent.
+  if (nrow(d) < nrow(p)) {
+    cli::cli_warn(c(
+      "{nrow(p) - nrow(d)} of {nrow(p)} prediction{?s} had no matching outcome row and were dropped.",
+      i = "Brier and log loss score only the matched rows; the baseline keeps the full predicted field size."
+    ))
+  }
 
   d[, hit := as.integer(hit)]
-  d[, field := .N, by = race_id]
+  # Field size for the 1/field baseline: the LARGER of the predicted and
+  # outcome-side counts per race. Predictions-only undercounts when the model
+  # forecast a subset of the true field (outcomes carry entrants nobody
+  # predicted); outcomes-only undercounts in the mirror case the warning above
+  # covers. Either subset silently flatters or sandbags skill; max of the two
+  # is the best available estimate of the true field, and disagreement is loud.
+  pf <- p[, .(field_p = .N), by = race_id]
+  of <- o[, .(field_o = .N), by = race_id]
+  fld <- merge(pf, of, by = "race_id", all.x = TRUE)
+  fld[is.na(field_o), field_o := 0L]
+  if (any(fld$field_o > fld$field_p)) {
+    n_bigger <- sum(fld$field_o > fld$field_p)
+    cli::cli_warn(c(
+      "Outcomes list more athletes than predictions in {n_bigger} race{?s}.",
+      i = "The baseline uses the outcome-side field size there; predictions cover only part of the field."
+    ))
+  }
+  fld[, field := pmax(field_p, field_o)]
+  d[fld, on = "race_id", field := i.field]
   d[, base := 1 / field]
 
   eps <- 1e-15
@@ -83,7 +112,12 @@ score_predictions <- function(predictions, outcomes, prob_col = "p_gold") {
     observed_rate = mean(d$hit)
   )
 
-  list(overall = overall, by_race = by_race[], reliability = reliability_table(d))
+  # Classed, so print.citius_score actually dispatches -- it existed for a
+  # plain list nothing ever tagged, i.e. dead code from day one.
+  structure(
+    list(overall = overall, by_race = by_race[], reliability = reliability_table(d)),
+    class = "citius_score"
+  )
 }
 
 
