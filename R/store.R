@@ -53,27 +53,64 @@ write_results_store <- function(results, path, partition_by = "event_id") {
   # (disk full, killed process, bad partition value) destroyed the only copy of
   # the corpus and left an incomplete replacement, with nothing detecting it.
   # The expensive, fallible step must finish before the old store is touched.
+  #
+  # THE INVARIANT, kept on every path below including compound failures: a
+  # known-good store always exists at `path`, `.old-write` or `.tmp-write`,
+  # and the abort message says which. Review 2026-08-14 reproduced a two-
+  # failure sequence (crash between the renames, then the retry's own rename
+  # failing) where a first version deleted the only surviving copy and then
+  # claimed "previous store restored" -- a false message on a total loss.
+  old <- paste0(path, ".old-write")
+  # A previous call that crashed between its two renames leaves `path` missing
+  # and the good store under `.old-write`. Recover it BEFORE anything else --
+  # the first version unconditionally unlink()ed `old` here, destroying the
+  # only good copy three lines above the branch that would have needed it.
+  if (!dir.exists(path) && dir.exists(old)) {
+    cli::cli_warn("Recovering store at {.path {path}} from an interrupted previous write.")
+    if (!file.rename(old, path)) {
+      cli::cli_abort(c(
+        "A previous write crashed mid-swap and the backup cannot be moved back.",
+        i = "The last good store is at {.path {old}}; restore it manually before writing."
+      ))
+    }
+  }
   tmp <- paste0(path, ".tmp-write")
   unlink(tmp, recursive = TRUE)
-  arrow::write_dataset(dt, tmp, partitioning = partition_by, format = "parquet")
+  # Clean the temp dir on a mid-write throw too -- otherwise it lingers until
+  # the next call. The error itself still propagates untouched.
+  tryCatch(
+    arrow::write_dataset(dt, tmp, partitioning = partition_by, format = "parquet"),
+    error = function(e) { unlink(tmp, recursive = TRUE); stop(e) }
+  )
   if (!dir.exists(tmp) || !length(list.files(tmp, recursive = TRUE))) {
     unlink(tmp, recursive = TRUE)
     cli::cli_abort("Write to {.path {tmp}} produced no files; existing store left untouched.")
   }
-  old <- paste0(path, ".old-write")
-  unlink(old, recursive = TRUE)
-  if (dir.exists(path) && !file.rename(path, old)) {
-    unlink(tmp, recursive = TRUE)
-    cli::cli_abort(c(
-      "Could not move the existing store aside; it is left untouched.",
-      i = "Something may be holding files open under {.path {path}}."
-    ))
+  # Only now may a stale backup be cleared: this call is about to repopulate it.
+  if (dir.exists(path)) {
+    unlink(old, recursive = TRUE)
+    if (!file.rename(path, old)) {
+      unlink(tmp, recursive = TRUE)
+      cli::cli_abort(c(
+        "Could not move the existing store aside; it is left untouched.",
+        i = "Something may be holding files open under {.path {path}}."
+      ))
+    }
   }
   if (!file.rename(tmp, path)) {
-    # Put the old store back before failing, so a valid store always remains.
-    if (dir.exists(old)) file.rename(old, path)
-    unlink(tmp, recursive = TRUE)
-    cli::cli_abort("Could not move the new store into place; previous store restored.")
+    # Put the old store back before failing. If even that fails, say exactly
+    # where the surviving copies are and DELETE NOTHING -- `tmp` holds the
+    # freshly validated new store and must outlive a failed swap.
+    restored <- dir.exists(old) && file.rename(old, path)
+    if (restored) {
+      unlink(tmp, recursive = TRUE)
+      cli::cli_abort("Could not move the new store into place; previous store restored.")
+    }
+    cli::cli_abort(c(
+      "Could not move the new store into place, and the previous store could not be restored.",
+      i = "The new store is intact at {.path {tmp}}; the previous one, if any, at {.path {old}}.",
+      i = "Nothing was deleted. Resolve the lock and rename one of them to {.path {path}}."
+    ))
   }
   unlink(old, recursive = TRUE)
   invisible(path)

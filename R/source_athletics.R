@@ -254,10 +254,23 @@ athletics_competition_results <- function(competition_id, days = 1:12) {
   base <- paste0(athletics_base_url(), "/competitions/",
                  as.integer(competition_id), "/results")
 
+  # A failed day must not vanish silently: one lost day of a championship reads
+  # as "no events that day", and paging is the difference between a sixth of
+  # the meet and all of it (see docstring). Count failures and say so once.
+  failed_days <- integer(0)
   pages <- lapply(days, function(d) {
-    r <- tryCatch(citius_get_json(paste0(base, "?day=", d)), error = function(e) NULL)
+    r <- tryCatch(citius_get_json(paste0(base, "?day=", d)), error = function(e) {
+      failed_days <<- c(failed_days, d)
+      NULL
+    })
     r$events %||% list()
   })
+  if (length(failed_days)) {
+    cli::cli_warn(c(
+      "{length(failed_days)} day-page fetch{?es} failed for competition {.val {competition_id}} (day{?s} {failed_days}).",
+      i = "Those days' events are MISSING from this harvest, not empty; re-run to fill them."
+    ))
+  }
   events <- unlist(pages, recursive = FALSE)
   # Fall back to the unpaged call for competitions that ignore `day`.
   if (!length(events)) events <- (citius_get_json(base) %||% list())$events %||% list()

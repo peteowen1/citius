@@ -68,8 +68,25 @@ score_predictions <- function(predictions, outcomes, prob_col = "p_gold") {
   }
 
   d[, hit := as.integer(hit)]
-  pf <- p[, .(field = .N), by = race_id]
-  d[pf, on = "race_id", field := i.field]
+  # Field size for the 1/field baseline: the LARGER of the predicted and
+  # outcome-side counts per race. Predictions-only undercounts when the model
+  # forecast a subset of the true field (outcomes carry entrants nobody
+  # predicted); outcomes-only undercounts in the mirror case the warning above
+  # covers. Either subset silently flatters or sandbags skill; max of the two
+  # is the best available estimate of the true field, and disagreement is loud.
+  pf <- p[, .(field_p = .N), by = race_id]
+  of <- o[, .(field_o = .N), by = race_id]
+  fld <- merge(pf, of, by = "race_id", all.x = TRUE)
+  fld[is.na(field_o), field_o := 0L]
+  if (any(fld$field_o > fld$field_p)) {
+    n_bigger <- sum(fld$field_o > fld$field_p)
+    cli::cli_warn(c(
+      "Outcomes list more athletes than predictions in {n_bigger} race{?s}.",
+      i = "The baseline uses the outcome-side field size there; predictions cover only part of the field."
+    ))
+  }
+  fld[, field := pmax(field_p, field_o)]
+  d[fld, on = "race_id", field := i.field]
   d[, base := 1 / field]
 
   eps <- 1e-15

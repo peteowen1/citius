@@ -68,30 +68,41 @@ swimengland_rankings <- function(stroke, pool = "L", sex = "M", year = "A",
     "&TargetNationality=%s&TargetRegion=P&TargetCounty=XXXX&TargetClub=XXXX"),
     swimengland_base_url(), pool, stroke, sex, year, start, n, nationality)
 
-  # Degrade to an empty table, but never silently: a transient failure during a
-  # rankings sweep is otherwise indistinguishable from a genuinely empty page,
-  # and the sweep caches "nobody ranked" forever.
-  html <- tryCatch(citius_get_html(url), error = function(e) {
-    cli::cli_warn(c(
-      "Swim England fetch failed; returning an empty table.",
-      x = conditionMessage(e), i = "{.url {url}}"
-    ))
-    NULL
-  })
+  # Fetch errors PROPAGATE -- see the note in aquatics_athlete_results(): the
+  # harvesters' own tryCatch is what separates "retry next run" from "cache the
+  # empty page", and swallowing the error here breaks that at the source. A
+  # definitive 404 returns NULL and stays a legitimate empty result.
+  html <- citius_get_html(url)
   if (is.null(html)) return(.empty_se_dt())
   tabs <- rvest::html_elements(html, "table")
-  if (!length(tabs)) return(.empty_se_dt())
+  # A page that fetched but does not hold the expected structure is a SCHEMA
+  # signal, not an empty rankings list -- a site redesign would otherwise read
+  # as "nobody ranked anywhere" for an entire sweep. Rate-limited: one warning
+  # identifies the problem; two thousand identical ones bury it.
+  if (!length(tabs)) {
+    cli::cli_warn("Swim England page has no tables; returning empty. Site structure may have changed.",
+                  .frequency = "once", .frequency_id = "citius_se_no_tables")
+    return(.empty_se_dt())
+  }
   # The page carries more than one table and the rankings are the biggest, but
   # sizing them by parsing each one costs 0.042s against 0.096s of network --
   # 20% of the request spent on work that is thrown away. Counting <tr> nodes
   # answers the same question 42x faster.
   sizes <- vapply(tabs, function(x) length(rvest::html_elements(x, "tr")), integer(1))
   best <- tabs[[which.max(sizes)]]
-  tab <- tryCatch(rvest::html_table(best, fill = TRUE), error = function(e) NULL)
+  tab <- tryCatch(rvest::html_table(best, fill = TRUE), error = function(e) {
+    cli::cli_warn("Swim England table failed to parse; returning empty. Site structure may have changed.",
+                  .frequency = "once", .frequency_id = "citius_se_parse_fail")
+    NULL
+  })
   if (is.null(tab) || !nrow(tab)) return(.empty_se_dt())
   tab <- data.table::as.data.table(tab)
   need <- c("Rank", "Name", "Time", "Date")
-  if (!all(need %in% names(tab))) return(.empty_se_dt())
+  if (!all(need %in% names(tab))) {
+    cli::cli_warn("Swim England table lacks column{?s} {.field {setdiff(need, names(tab))}}; returning empty.",
+                  .frequency = "once", .frequency_id = "citius_se_missing_cols")
+    return(.empty_se_dt())
+  }
 
   # Pull the swimmer id per ROW rather than from the page, so a row without a
   # link cannot shift every subsequent id by one.
@@ -144,6 +155,14 @@ swimengland_rankings <- function(stroke, pool = "L", sex = "M", year = "A",
 #' @noRd
 .se_parse_date <- function(x) {
   d <- as.Date(as.character(x), format = "%d/%m/%y")
+  # An unparseable date is not merely missing: result_weight() gives an NA
+  # date FULL recency weight (documented choice in ability.R), so silent NAs
+  # here quietly promote mis-formatted rows. Count them out loud.
+  n_bad <- sum(is.na(d) & !is.na(x) & nzchar(trimws(as.character(x))))
+  if (n_bad) {
+    cli::cli_warn("{n_bad} Swim England date{?s} failed to parse as dd/mm/yy and {?is/are} NA.",
+                  .frequency = "once", .frequency_id = "citius_se_bad_dates")
+  }
   yr <- as.integer(format(d, "%Y"))
   ceiling_yr <- as.integer(format(Sys.Date(), "%Y")) + 1L
   roll <- !is.na(yr) & yr > ceiling_yr
