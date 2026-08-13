@@ -8,11 +8,22 @@
 # could regress with the suite green. Same sibling-repo discovery as
 # test-calibration-wiring.R; CI checks citiusdata out beside the package.
 
+# Both layouts, same reason as test-calibration-wiring.R: local dev has
+# `citiusverse/citiusdata`, CI checks the private sibling out as
+# `citiusdata-sibling` and sets CITIUS_DATA_DIR. Accepting only the first is a
+# test that silently stops running the moment it moves to CI.
 podium_lib_path <- function() {
+  env <- Sys.getenv("CITIUS_DATA_DIR", "")
+  if (nzchar(env)) {
+    lib <- file.path(env, "scripts", "lib", "podium_parsing.R")
+    if (file.exists(lib)) return(lib)
+  }
   p <- normalizePath(testthat::test_path("."), winslash = "/", mustWork = FALSE)
   for (i in seq_len(6L)) {
-    lib <- file.path(p, "citiusdata", "scripts", "lib", "podium_parsing.R")
-    if (file.exists(lib)) return(lib)
+    for (nm in c("citiusdata", "citiusdata-sibling")) {
+      lib <- file.path(p, nm, "scripts", "lib", "podium_parsing.R")
+      if (file.exists(lib)) return(lib)
+    }
     up <- dirname(p)
     if (identical(up, p)) break
     p <- up

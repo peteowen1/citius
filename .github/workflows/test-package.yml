@@ -20,6 +20,12 @@ jobs:
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
+      # Point the wiring and podium tests straight at the sibling checkout.
+      # They also walk up looking for it, but the walk depends on where
+      # R CMD check happens to run the suite from -- and a discovery miss makes
+      # them SKIP, i.e. pass while verifying nothing. Explicit beats inferred
+      # for the tests whose whole job is catching silently-inert config.
+      CITIUS_DATA_DIR: ${{ github.workspace }}/citiusdata-sibling
 
     steps:
       - name: Checkout repository

@@ -191,13 +191,33 @@ wiring_calibrate_slots <- function() {
   names(suppressWarnings(calibrate(data.table::rbindlist(rows))))
 }
 
-#' The citiusverse root, or NULL. Tests run from `tests/testthat` under
+#' The citiusdata repository directory, or NULL.
+#'
+#' Returns the DIRECTORY, not a verse root, because every caller wants
+#' `<citiusdata>/scripts` and hardcoding the `"citiusdata"` segment downstream
+#' is what broke this on CI. Tests run from `tests/testthat` under
 #' `devtools::test()` and from a check directory under `R CMD check`, so the
-#' sibling data repo is found by walking up rather than by a fixed offset.
-wiring_verse_root <- function() {
+#' repo is found by walking up rather than at a fixed offset.
+#'
+#' TWO LAYOUTS MUST BOTH WORK, and only one of them ever did. Local dev has
+#' `citiusverse/citiusdata`; CI checks the private sibling out under a
+#' different name (`citiusdata-sibling`) beside the package. Accepting only the
+#' first meant that on 2026-08-14, once the checkout itself was finally
+#' authenticated, all four tests below STILL skipped -- a green run that
+#' verified nothing, which is this file's own failure mode one level out.
+#' `CITIUS_DATA_DIR` is set explicitly by the workflow so CI does not depend on
+#' the walk at all.
+wiring_citiusdata_dir <- function() {
+  env <- Sys.getenv("CITIUS_DATA_DIR", "")
+  if (nzchar(env) && dir.exists(file.path(env, "scripts"))) {
+    return(normalizePath(env, winslash = "/", mustWork = FALSE))
+  }
   p <- normalizePath(testthat::test_path("."), winslash = "/", mustWork = FALSE)
   for (i in seq_len(6L)) {
-    if (dir.exists(file.path(p, "citiusdata", "scripts"))) return(p)
+    for (nm in c("citiusdata", "citiusdata-sibling")) {
+      cand <- file.path(p, nm)
+      if (dir.exists(file.path(cand, "scripts"))) return(cand)
+    }
     up <- dirname(p)
     if (identical(up, p)) break
     p <- up
@@ -206,8 +226,8 @@ wiring_verse_root <- function() {
 }
 
 #' Every element a pipeline script attaches to a calibration object.
-wiring_script_setters <- function(root) {
-  dir <- file.path(root, "citiusdata", "scripts")
+wiring_script_setters <- function(citiusdata) {
+  dir <- file.path(citiusdata, "scripts")
   fs <- list.files(dir, pattern = "[.]R$", full.names = TRUE)
   pat <- "^\\s*([A-Za-z_.][A-Za-z0-9_.]*)\\$([A-Za-z_][A-Za-z0-9_.]*)\\s*<-"
   out <- list()
@@ -247,12 +267,12 @@ test_that("every calibration element the package reads is set by something", {
   # so without the sibling repo this test cannot tell "set by a script" from
   # "set by nothing" and reports false orphans. Same environment guard as the
   # two tests below — the full check is local-dev-only, like theirs.
-  root <- wiring_verse_root()
-  skip_if(is.null(root),
+  cdata <- wiring_citiusdata_dir()
+  skip_if(is.null(cdata),
           "citiusdata/scripts not found beside the package; script-side setters invisible, orphan check unreliable")
 
   reads <- wiring_reads()
-  set_by <- union(wiring_calibrate_slots(), wiring_script_setters(root)$element)
+  set_by <- union(wiring_calibrate_slots(), wiring_script_setters(cdata)$element)
 
   orphans <- sort(setdiff(unique(reads$element), set_by))
   owners <- vapply(orphans, function(e)
@@ -283,11 +303,11 @@ test_that("every element calibrate() produces is read, or is declared metadata",
 })
 
 test_that("every element a pipeline script attaches to a calibration is read", {
-  root <- wiring_verse_root()
-  skip_if(is.null(root),
+  cdata <- wiring_citiusdata_dir()
+  skip_if(is.null(cdata),
           "citiusdata/scripts not found beside the package; script-side wiring unchecked")
 
-  setters <- wiring_script_setters(root)
+  setters <- wiring_script_setters(cdata)
   # Same vacuity trap as above: an empty scan must fail, not pass quietly.
   expect_gte(nrow(setters), 10L)
 
@@ -325,15 +345,15 @@ test_that("the DEPLOYED calibration carries a table for every layer the package 
   #
   # A layer that is off ON PURPOSE goes on DEPLOYED_OFF with the experiment that
   # refuted it. Deliberately-off and silently-lost must not look identical.
-  root <- wiring_verse_root()
-  skip_if(is.null(root), "citiusdata not found beside the package")
-  dep <- file.path(root, "citiusdata", "scripts", "_deployed.R")
+  cdata <- wiring_citiusdata_dir()
+  skip_if(is.null(cdata), "citiusdata not found beside the package")
+  dep <- file.path(cdata, "scripts", "_deployed.R")
   skip_if_not(file.exists(dep), "_deployed.R not found")
 
   src <- readLines(dep, warn = FALSE)
   hit <- grep("^\\s*calibration\\s*=", src, value = TRUE)
   skip_if(!length(hit), "_deployed.R names no calibration")
-  cal_file <- file.path(root, "citiusdata", "data",
+  cal_file <- file.path(cdata, "data",
                         sub('^[^"]*"([^"]*)".*$', "\\1", hit[1]))
   skip_if_not(file.exists(cal_file),
               paste("deployed calibration not present:", basename(cal_file)))
@@ -371,9 +391,9 @@ test_that("the DEPLOYED calibration carries a table for every layer the package 
 })
 
 test_that("the deployed stamp names the deployed calibration", {
-  root <- wiring_verse_root()
-  skip_if(is.null(root), "citiusdata/scripts not found beside the package")
-  f <- file.path(root, "citiusdata", "scripts", "_deployed.R")
+  cdata <- wiring_citiusdata_dir()
+  skip_if(is.null(cdata), "citiusdata/scripts not found beside the package")
+  f <- file.path(cdata, "scripts", "_deployed.R")
   skip_if_not(file.exists(f), "_deployed.R not found")
 
   src <- readLines(f, warn = FALSE)
