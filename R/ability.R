@@ -651,6 +651,10 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     ))
   }
 
+  # Surface a non-converged decomposition at the point it affects an answer,
+  # not only in the build log nobody reads afterwards. Once per session.
+  .warn_unconverged(calibration)
+
   dt <- data.table::copy(data.table::as.data.table(results))
   dt <- dt[!is.na(perf) & !is.na(event_id)]
   if (!nrow(dt)) {

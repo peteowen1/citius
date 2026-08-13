@@ -795,6 +795,44 @@ print.citius_calibration <- function(x, ...) {
 }
 
 
+#' Warn once when predicting from a calibration that never converged
+#'
+#' `decompose_races()` stamps `converged`, `delta` and `sweeps` into every
+#' calibration, `rebaseline_chain.R` prints them as it writes the file, and until
+#' 2026-08-13 **nothing read them again**. So every forecast, every published
+#' rating and every backtest ran off whatever the solver happened to reach, with
+#' no way to tell from the output.
+#'
+#' That is not hypothetical. The deployed calibration is `converged = FALSE` at
+#' `delta = 1.66e-04` -- race effects still moving by 1% of the residual sd -- and
+#' every variance estimate downstream is computed from those residuals.
+#'
+#' It warns rather than aborts because the unconverged fit is, measured, the one
+#' that forecasts BETTER: `centre = "auto"` reached delta 2.5e-07 and lost on gold
+#' Brier by +0.56% (p = 0.00078). So non-convergence here is a fact to surface,
+#' not a fault to refuse on. See DECISIONS.md 2026-08-13.
+#'
+#' @keywords internal
+#' @noRd
+.warn_unconverged <- function(calibration) {
+  if (is.null(calibration) || !inherits(calibration, "citius_calibration")) {
+    return(invisible(FALSE))
+  }
+  # `isFALSE` not `!isTRUE`: an older calibration carrying no `converged` slot is
+  # unknown, not failed, and must not be reported as if it had been measured.
+  if (!isFALSE(calibration$converged)) return(invisible(FALSE))
+  d <- calibration$delta
+  s <- calibration$sweeps
+  cli::cli_warn(c(
+    "Predicting from a calibration whose decomposition did not converge.",
+    "*" = "{.field delta} {.val {if (is.null(d)) NA else signif(d, 3)}} after
+           {.val {if (is.null(s)) NA else s}} sweep{?s}.",
+    i = "Every variance estimate downstream is computed from these residuals."
+  ), .frequency = "once", .frequency_id = "citius_calibration_unconverged")
+  invisible(TRUE)
+}
+
+
 #' Look up a calibrated value with a documented fallback
 #' @keywords internal
 #' @noRd

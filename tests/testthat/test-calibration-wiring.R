@@ -123,10 +123,26 @@ DEPLOYED_OFF <- c(
 # the package's largest unwired quantity; see its note in KNOWN_UNREAD. If the
 # honest reason is "nothing reads it YET", that is KNOWN_UNREAD, not this list.
 CALIBRATION_METADATA <- c(
-  "ability",                               # per-athlete side of the decomposition
-  "min_races", "min_race_size",            # the thresholds it was fitted under
-  "converged", "delta", "sweeps",          # solver diagnostics
-  "provenance"                             # rebaseline_chain.R's audit stamp
+  # Audited 2026-08-13, after `race` was found hiding here. Each remaining entry
+  # was checked against BOTH the package and citiusdata/scripts.
+  #
+  # `converged`/`delta`/`sweeps` LEFT THIS LIST in the same audit: they were
+  # stamped at build time, printed by rebaseline_chain.R:97 as the file was
+  # written, and never consulted again -- so the deployed calibration has shipped
+  # `converged = FALSE` (delta 1.66e-04) through every forecast and published
+  # rating with nothing saying so. `.warn_unconverged()` now reads all three.
+  "ability",                               # per-athlete side of the decomposition;
+                                           # superseded by estimate_ability(), which
+                                           # refits with recency, shrinkage and
+                                           # context. Read by nothing anywhere --
+                                           # revisit if it is ever wanted as a
+                                           # race-adjusted prior. (2026-08-13)
+  "min_races", "min_race_size",            # thresholds the fit was run under;
+                                           # describe the fit, never adjust a
+                                           # prediction. (2026-08-13)
+  "provenance"                             # audit stamp; read by
+                                           # backtest_athletics.R:69, outside the
+                                           # package by design. (2026-08-13)
 )
 
 # Objects in the pipeline scripts that hold a calibration. Anything assigned into

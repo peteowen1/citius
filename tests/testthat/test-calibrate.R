@@ -392,3 +392,59 @@ test_that("calibrate fits foul_round by event_id and round_class", {
   expect_true(all(c("event_id", "round_class", "foul_rate") %in% names(fr)))
 })
 
+
+# ---------------------------------------------------------------------------
+# Predicting from a non-converged calibration must SAY so.
+#
+# `converged`/`delta`/`sweeps` were stamped into every calibration, printed once
+# as the file was written, and read by nothing thereafter -- so the deployed
+# calibration shipped `converged = FALSE` (delta 1.66e-04) through every forecast
+# and every published rating in silence. Found in the 2026-08-13 audit of
+# CALIBRATION_METADATA, the same audit that found `race` hiding there.
+# ---------------------------------------------------------------------------
+
+# Minimal object rather than a real fit: this behaviour is about the three slots
+# and the class, and a real calibrate() run would make the test slow and couple
+# it to whether the fixture happens to converge.
+fake_cal <- function(converged, delta = 1.66e-4, sweeps = 400L) {
+  structure(list(events = data.table::data.table(event_id = character(),
+                                                 tactical_index = numeric(),
+                                                 calibrated = logical()),
+                 converged = converged, delta = delta, sweeps = sweeps),
+            class = "citius_calibration")
+}
+
+test_that("a non-converged calibration warns, naming delta and sweeps", {
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  expect_warning(citius:::.warn_unconverged(fake_cal(FALSE)),
+                 "did not converge")
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  expect_warning(citius:::.warn_unconverged(fake_cal(FALSE)), "400")
+})
+
+test_that("a converged calibration is silent", {
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  expect_silent(citius:::.warn_unconverged(fake_cal(TRUE)))
+})
+
+test_that("an ABSENT convergence stamp is unknown, not failed", {
+  # `!isTRUE(NULL)` is TRUE, so the obvious spelling would report every older
+  # calibration as non-converged -- claiming a measurement that was never made.
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  cal <- fake_cal(TRUE); cal$converged <- NULL
+  expect_silent(citius:::.warn_unconverged(cal))
+})
+
+test_that("a non-calibration object is ignored rather than erroring", {
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  expect_silent(citius:::.warn_unconverged(NULL))
+  expect_silent(citius:::.warn_unconverged(list(converged = FALSE)))
+})
+
+test_that("estimate_ability surfaces it on the path that actually predicts", {
+  rlang::reset_warning_verbosity("citius_calibration_unconverged")
+  sim <- simulate_races()
+  expect_warning(
+    estimate_ability(sim$data, calibration = fake_cal(FALSE)),
+    "did not converge")
+})
