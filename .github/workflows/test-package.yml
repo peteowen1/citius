@@ -25,6 +25,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # citiusdata beside the package, because three tests in
+      # test-calibration-wiring.R resolve it via wiring_verse_root() and
+      # skip_if() when it is absent. Without this step they SKIPPED SILENTLY on
+      # every CI run -- including the deployment check that asserts every
+      # adjustment layer the package reads is present in the shipped
+      # calibration. A guard built to catch "half the layers are inert and
+      # nobody knows" was itself never running. Found 2026-08-13.
+      - name: Checkout citiusdata (siblings for the wiring tests)
+        uses: actions/checkout@v7
+        continue-on-error: true
+        with:
+          repository: peteowen1/citiusdata
+          path: citiusdata-sibling
+
       - name: Setup R
         uses: r-lib/actions/setup-r@v2
         with:

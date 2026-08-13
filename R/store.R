@@ -30,7 +30,14 @@
 #' }
 #' @export
 write_results_store <- function(results, path, partition_by = "event_id") {
-  dt <- data.table::copy(data.table::as.data.table(results))
+  # `as.data.table()` on an already-valid data.table is a FULL DEEP COPY, not the
+  # no-op it looks like -- so `copy(as.data.table(x))` costs TWO copies of a
+  # 6.6M-row corpus where one is needed. Documented in
+  # C:/dev/.claude/rules/r-datatable-gotchas.md, and this is the function whose
+  # whole purpose is making corpus I/O cheap. One copy, because the `:=` below
+  # must not mutate the caller's table.
+  dt <- data.table::copy(if (data.table::is.data.table(results)) results else
+                         data.table::as.data.table(results))
   if (!partition_by %in% names(dt)) {
     cli::cli_abort("{.arg partition_by} column {.field {partition_by}} not found.")
   }
