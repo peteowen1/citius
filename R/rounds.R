@@ -80,9 +80,13 @@ simulate_rounds <- function(ability, structure, n_sims = 10000L,
   base <- matrix(ab$ability, n_sims, n_ath, byrow = TRUE) + meet_offset
 
   df <- .calibrated_value(calibration, event_id, "tail_df", NA_real_)
-  if (!is.finite(df)) df <- if (!is.null(calibration) && is.finite(calibration$tail_df %||% NA)) {
-    calibration$tail_df
-  } else 20
+  if (!is.finite(df)) df <- calibration$tail_df %||% NA
+  # 20 is the documented NO-CALIBRATION fallback, not a measured value -- the
+  # same placeholder simulate_event() uses, kept identical on purpose so the
+  # two simulators cannot disagree about tails. It exists only so the simulator
+  # runs before any data has been harvested; fit_tail_df() supplies the real
+  # number. (An exception to the no-hand-tuned-constants rule, recorded here.)
+  if (!is.finite(df)) df <- 20
   cond_sd <- race_conditions(event_id, calibration)
   sens <- condition_sensitivity(ab, event_id, calibration)
 

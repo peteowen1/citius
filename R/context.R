@@ -145,7 +145,7 @@ fit_numeric_effect <- function(results, covariate, by_event = TRUE,
 #'   mean covariate value, and `numeric_adj` recording the shift.
 #' @export
 adjust_numeric <- function(results, numeric_effect, covariate) {
-  dt <- data.table::copy(data.table::as.data.table(results))
+  dt <- .one_copy_dt(results)
   if (is.null(numeric_effect) || !nrow(numeric_effect) || !covariate %in% names(dt)) {
     dt[, numeric_adj := 0]
     return(dt[])
@@ -179,7 +179,7 @@ adjust_numeric <- function(results, numeric_effect, covariate) {
 #'   Levels with no estimate are unchanged.
 #' @export
 adjust_context <- function(results, context_effect, covariate) {
-  dt <- data.table::copy(data.table::as.data.table(results))
+  dt <- .one_copy_dt(results)
   if (is.null(context_effect) || !nrow(context_effect) || !covariate %in% names(dt)) {
     dt[, context_adj := 0]
     return(dt[])
@@ -624,7 +624,12 @@ project_tier <- function(ability, tier, calibration = NULL, shrink = 0.5) {
 #' @param results Canonical results table containing `perf`, `athlete_id`,
 #'   `event_id`, `round`, and `tier`.
 #' @param min_heats Minimum heat marks required to report an athlete. Default 2.
-#' @param shrink_k Prior weight for Empirical Bayes shrinkage. Default 5.
+#' @param shrink_k Prior weight for Empirical Bayes shrinkage. **The default 5
+#'   is hand-set, not fitted** — an exception to the no-hand-tuned-constants
+#'   rule, recorded here. The principled value is the precision ratio
+#'   `sigma_within^2 / sd(trait)^2` fitted out of sample, the way
+#'   `.fit_context_shrink()` fits `k` for the context offsets; fit it before
+#'   tuning forecasts that lean on the coasting trait.
 #' @return A `data.table` of `athlete_id`, `coasting_trait`, and `n_heats`.
 #' @export
 fit_coasting_trait <- function(results, min_heats = 2L, shrink_k = 5.0) {

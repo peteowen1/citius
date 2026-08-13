@@ -79,6 +79,16 @@ flag_implausible <- function(results, k = 5) {
 add_race_key <- function(results) {
   dt <- data.table::copy(if (data.table::is.data.table(results)) results
                          else data.table::as.data.table(results))
+  # Without a competition to separate them, every same-event/round/date result
+  # worldwide collapses into one "race" and the decomposition reads a whole
+  # day's meets as a single shared shock. That must never happen silently.
+  if (!"competition_id" %in% names(dt)) {
+    cli::cli_warn(c(
+      "{.arg results} has no {.field competition_id}; race keys will pool every
+       result sharing an event, round and date into one race.",
+      i = "Harvest with a source that carries competition ids before calibrating."
+    ))
+  }
   comp <- if ("competition_id" %in% names(dt)) dt$competition_id else NA
   rnd <- if ("round" %in% names(dt)) dt$round else NA
   dt[, race_key := paste(comp, event_id, rnd, as.character(date), sep = "|")]
@@ -571,7 +581,17 @@ fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, 
     expected <- if (is.infinite(v)) {
       2 * stats::pnorm(-probes)
     } else {
-      2 * stats::pt(-probes / sqrt(v / (v - 2)), df = v)
+      # MULTIPLY by the t scale, do not divide (fixed 2026-08-14). The z-scores
+      # are standardised to unit variance, and a unit-variance t_v is t/sqrt(
+      # v/(v-2)), so P(|z| > k) = P(|t| > k * sqrt(v/(v-2))). The old division
+      # overstated the expected tail mass of every low-df candidate, so
+      # genuinely heavy-tailed residuals fitted as NEARLY NORMAL -- planted
+      # df = 5 came back ranked worst of ten candidates while df = 30 won.
+      # That is the opposite failure to the hard-coded df = 6 this fitter
+      # replaced, and it was invisible on near-normal input, which is why no
+      # earlier test caught it. NOTE: rebuilt calibrations will carry a lower
+      # (fatter-tailed) tail_df than deployed ones; A/B before shipping one.
+      2 * stats::pt(-probes * sqrt(v / (v - 2)), df = v)
     }
     # Relative error, so the rarer probes are not swamped by the common ones.
     data.table::data.table(df = v, err = mean(abs(expected - observed) / observed))

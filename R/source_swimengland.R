@@ -68,7 +68,16 @@ swimengland_rankings <- function(stroke, pool = "L", sex = "M", year = "A",
     "&TargetNationality=%s&TargetRegion=P&TargetCounty=XXXX&TargetClub=XXXX"),
     swimengland_base_url(), pool, stroke, sex, year, start, n, nationality)
 
-  html <- tryCatch(citius_get_html(url), error = function(e) NULL)
+  # Degrade to an empty table, but never silently: a transient failure during a
+  # rankings sweep is otherwise indistinguishable from a genuinely empty page,
+  # and the sweep caches "nobody ranked" forever.
+  html <- tryCatch(citius_get_html(url), error = function(e) {
+    cli::cli_warn(c(
+      "Swim England fetch failed; returning an empty table.",
+      x = conditionMessage(e), i = "{.url {url}}"
+    ))
+    NULL
+  })
   if (is.null(html)) return(.empty_se_dt())
   tabs <- rvest::html_elements(html, "table")
   if (!length(tabs)) return(.empty_se_dt())
@@ -92,8 +101,9 @@ swimengland_rankings <- function(stroke, pool = "L", sex = "M", year = "A",
     h <- rvest::html_attr(a, "href")
     if (is.na(h)) NA_character_ else sub(".*tiref=([0-9]+).*", "\\1", h)
   }, character(1))
-  tiref <- tiref[!is.na(tiref) | seq_along(tiref) > 0L]
-  # Header rows carry no link; align by dropping leading non-data rows.
+  # Header rows carry no link; align by dropping leading non-data rows. (An
+  # always-true filter that claimed to do this was removed 2026-08-14 -- the
+  # tail() below is the whole alignment.)
   tiref <- utils::tail(tiref, nrow(tab))
 
   disc <- swimengland_strokes()[stroke_code == as.integer(stroke), discipline]
@@ -102,13 +112,16 @@ swimengland_rankings <- function(stroke, pool = "L", sex = "M", year = "A",
     tiref        = tiref,
     athlete_name = trimws(as.character(tab$Name)),
     club         = if ("Ranked Club" %in% names(tab)) trimws(as.character(tab$`Ranked Club`)) else NA_character_,
-    yob          = suppressWarnings(as.integer(tab$YoB)),
+    # Guarded like `club` and `comp_name`: an absent column is NULL, and
+    # as.integer(NULL) is integer(0), which crashes the data.table() call on a
+    # length mismatch instead of degrading to NA like its siblings.
+    yob          = if ("YoB" %in% names(tab)) suppressWarnings(as.integer(tab$YoB)) else NA_integer_,
     sport        = "Swimming",
     discipline   = if (length(disc)) disc else NA_character_,
     mark_string  = trimws(as.character(tab$Time)),
     place        = suppressWarnings(as.integer(tab$Rank)),
     comp_name    = if ("Meet" %in% names(tab)) trimws(as.character(tab$Meet)) else NA_character_,
-    date         = as.Date(as.character(tab$Date), format = "%d/%m/%y"),
+    date         = .se_parse_date(tab$Date),
     course       = if (pool == "L") "LCM" else "SCM",
     sex          = sex,
     nationality  = nationality,
@@ -118,6 +131,26 @@ swimengland_rankings <- function(stroke, pool = "L", sex = "M", year = "A",
     # to know that this source is different from the others.
     is_best      = TRUE)
   out[!is.na(athlete_name) & nzchar(athlete_name)]
+}
+
+#' Parse the feed's dd/mm/yy dates without the POSIX century roll
+#'
+#' `as.Date(x, "%d/%m/%y")` maps two-digit years 00-68 to the 2000s and 69-99
+#' to the 1900s, so an all-time (`year = "A"`) archive row from 1965 silently
+#' lands in 2065-adjacent territory. The feed cannot contain future results, so
+#' the rule here is: a parsed year later than next year belongs to the previous
+#' century.
+#' @keywords internal
+#' @noRd
+.se_parse_date <- function(x) {
+  d <- as.Date(as.character(x), format = "%d/%m/%y")
+  yr <- as.integer(format(d, "%Y"))
+  ceiling_yr <- as.integer(format(Sys.Date(), "%Y")) + 1L
+  roll <- !is.na(yr) & yr > ceiling_yr
+  if (any(roll)) {
+    d[roll] <- as.Date(sprintf("%04d-%s", yr[roll] - 100L, format(d[roll], "%m-%d")))
+  }
+  d
 }
 
 .empty_se_dt <- function() {

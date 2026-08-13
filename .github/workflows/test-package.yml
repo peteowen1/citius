@@ -32,9 +32,12 @@ jobs:
       # adjustment layer the package reads is present in the shipped
       # calibration. A guard built to catch "half the layers are inert and
       # nobody knows" was itself never running. Found 2026-08-13.
+      # No continue-on-error: a failed checkout would make wiring_verse_root()
+      # return NULL, all four wiring tests skip_if(), and CI report green --
+      # re-creating the silent-skip this step exists to prevent. If this step
+      # fails the build must fail loudly.
       - name: Checkout citiusdata (siblings for the wiring tests)
         uses: actions/checkout@v7
-        continue-on-error: true
         with:
           repository: peteowen1/citiusdata
           path: citiusdata-sibling

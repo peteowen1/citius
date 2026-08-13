@@ -30,7 +30,17 @@
 #' @export
 aquatics_athlete_results <- function(athlete_id, sex = NULL) {
   url <- sprintf("%s/athletes/%s/results", aquatics_base_url(), as.character(athlete_id))
-  r <- tryCatch(citius_get_json(url), error = function(e) NULL)
+  # Degrade to empty, but never silently: a timeout mid-harvest was returning
+  # the same empty-but-valid table as "this athlete genuinely has zero swims",
+  # so a harvester could cache the failure as a fact. The warning is what lets
+  # a sweep count its failures and leave them uncached for retry.
+  r <- tryCatch(citius_get_json(url), error = function(e) {
+    cli::cli_warn(c(
+      "Aquatics fetch failed for athlete {.val {athlete_id}}; returning an empty table.",
+      x = conditionMessage(e)
+    ))
+    NULL
+  })
   if (is.null(r) || is.null(r$Results) || !length(r$Results)) return(.empty_result_dt())
   res <- r$Results
   nm <- r$FullName %||% NA_character_

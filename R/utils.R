@@ -2,6 +2,18 @@
 #' @noRd
 copy_dt <- function(x) data.table::copy(x)
 
+#' One independent data.table copy of any table-like input
+#'
+#' `copy(as.data.table(x))` costs TWO deep copies when `x` is already a
+#' data.table, because `as.data.table()` is not the no-op it looks like (see
+#' C:/dev/.claude/rules/r-datatable-gotchas.md). This is the single-copy idiom
+#' `store.R` documents, extracted so corpus-sized callers stop paying twice.
+#' @keywords internal
+#' @noRd
+.one_copy_dt <- function(x) {
+  data.table::copy(if (data.table::is.data.table(x)) x else data.table::as.data.table(x))
+}
+
 #' @keywords internal
 #' @noRd
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0L) b else a
@@ -40,7 +52,19 @@ citius_get_json <- function(url, max_tries = 4L, throttle = 0.25) {
     cli::cli_abort("Request to {.url {url}} failed with status {status}.")
   }
 
-  jsonlite::fromJSON(httr2::resp_body_string(resp), simplifyVector = FALSE)
+  # A 200 that is not JSON -- a WAF or CDN interstitial, a truncated body --
+  # otherwise surfaces as a raw jsonlite parse error pointing nowhere near the
+  # cause, and only one of the eight call sites wraps this in tryCatch.
+  tryCatch(
+    jsonlite::fromJSON(httr2::resp_body_string(resp), simplifyVector = FALSE),
+    error = function(e) {
+      cli::cli_abort(c(
+        "Response from {.url {url}} returned status {status} but is not parseable JSON.",
+        i = "Usually a CDN or WAF interstitial page served with a success status.",
+        x = conditionMessage(e)
+      ))
+    }
+  )
 }
 
 #' Perform an HTML GET with retry and a descriptive user agent
@@ -71,7 +95,17 @@ citius_get_html <- function(url, max_tries = 4L, throttle = 0.25) {
   if (status >= 400L) {
     cli::cli_abort("Request to {.url {url}} failed with status {status}.")
   }
-  xml2::read_html(httr2::resp_body_string(resp))
+  # Same guard as citius_get_json(): a 200 whose body is not parseable markup
+  # must fail with the URL attached, not a bare xml2 error.
+  tryCatch(
+    xml2::read_html(httr2::resp_body_string(resp)),
+    error = function(e) {
+      cli::cli_abort(c(
+        "Response from {.url {url}} returned status {status} but is not parseable HTML.",
+        x = conditionMessage(e)
+      ))
+    }
+  )
 }
 
 #' Drop ranked-list rows before estimating any variance

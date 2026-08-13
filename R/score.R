@@ -55,9 +55,21 @@ score_predictions <- function(predictions, outcomes, prob_col = "p_gold") {
   if (!nrow(d)) {
     cli::cli_abort("No predictions matched an outcome; check {.field athlete_id} keys.")
   }
+  # The 1/field baseline was computed from the MATCHED rows, so an outcomes
+  # table covering only part of a field silently shrank it and moved the skill
+  # figure -- outcomes holding only winners made base = 1/1. Field size now
+  # comes from the predictions side, counted before the inner join, and rows
+  # lost to the join are loud rather than silent.
+  if (nrow(d) < nrow(p)) {
+    cli::cli_warn(c(
+      "{nrow(p) - nrow(d)} of {nrow(p)} prediction{?s} had no matching outcome row and were dropped.",
+      i = "Brier and log loss score only the matched rows; the baseline keeps the full predicted field size."
+    ))
+  }
 
   d[, hit := as.integer(hit)]
-  d[, field := .N, by = race_id]
+  pf <- p[, .(field = .N), by = race_id]
+  d[pf, on = "race_id", field := i.field]
   d[, base := 1 / field]
 
   eps <- 1e-15
@@ -83,7 +95,12 @@ score_predictions <- function(predictions, outcomes, prob_col = "p_gold") {
     observed_rate = mean(d$hit)
   )
 
-  list(overall = overall, by_race = by_race[], reliability = reliability_table(d))
+  # Classed, so print.citius_score actually dispatches -- it existed for a
+  # plain list nothing ever tagged, i.e. dead code from day one.
+  structure(
+    list(overall = overall, by_race = by_race[], reliability = reliability_table(d)),
+    class = "citius_score"
+  )
 }
 
 

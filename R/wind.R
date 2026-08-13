@@ -84,7 +84,7 @@ fit_wind_effect <- function(results, min_n = 200L, max_wind = 6) {
 #'   unchanged.
 #' @export
 adjust_wind <- function(results, wind_effect) {
-  dt <- data.table::copy(data.table::as.data.table(results))
+  dt <- .one_copy_dt(results)
   if (is.null(wind_effect) || !nrow(wind_effect)) {
     dt[, wind_adj := 0]
     return(dt[])

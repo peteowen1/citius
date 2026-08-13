@@ -123,7 +123,7 @@ summary_games_economic_dominance <- function(games = NULL, top_n = 20L, min_gold
   
   # Logistic Logit Shifts
   merged[, p_act := as.numeric(gold) / total_golds_in_games]
-  merged[p_act >= 0.999, p_act := 0.999]
+  merged[p_act >= .citius_logit_clip, p_act := .citius_logit_clip]
   merged[, p_pop := pop_share_pct / 100.0]
   merged[, p_gdp := gdp_share_pct / 100.0]
   merged[, p_log_pop := log_pop_share_pct / 100.0]

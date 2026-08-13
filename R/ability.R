@@ -53,6 +53,11 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
                           calibration = NULL) {
   n <- length(date)
   age_days <- as.numeric(as_of - as.Date(date))
+  # KNOWN CHOICE, not an oversight: an NA or future date gets age 0, i.e. FULL
+  # recency weight -- a result with an unparseable date is treated as set
+  # today. The conservative alternative (weight 0, excluding it) changes every
+  # ability estimate built on a feed with missing dates, so it must ship
+  # through a measured arm, not a review fix. Flagged 2026-08-14.
   age_days[is.na(age_days) | age_days < 0] <- 0
   recency <- 0.5^(age_days / half_life)
 
@@ -1063,7 +1068,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # not only in the build log nobody reads afterwards. Once per session.
   .warn_unconverged(calibration)
 
-  dt <- data.table::copy(data.table::as.data.table(results))
+  dt <- .one_copy_dt(results)
   dt <- dt[!is.na(perf) & !is.na(event_id)]
   # Empty after filtering: return the empty schema DIRECTLY, never by recursing
   # with `results[0]`. The recursive form was written three times in this

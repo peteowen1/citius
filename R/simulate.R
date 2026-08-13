@@ -207,6 +207,13 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
   }
   n_sims <- as.integer(n_sims)
 
+  # The unit-variance scaling below computes sqrt((df - 2) / df): at df <= 2 a
+  # t distribution has no finite variance, the scale is NaN, and every entry of
+  # the performance matrix -- and every rank -- is silently NaN.
+  if (!is.numeric(df) || !is.finite(df) || df <= 2) {
+    cli::cli_abort("{.arg df} must be a finite number greater than 2, not {.val {df}}.")
+  }
+
   # One shared shock per simulated race, common to the whole field.
   cond <- stats::rnorm(n_sims, mean = 0, sd = condition_sd)
 

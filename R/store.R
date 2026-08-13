@@ -30,6 +30,7 @@
 #' }
 #' @export
 write_results_store <- function(results, path, partition_by = "event_id") {
+  .require_arrow("write_results_store")
   # `as.data.table()` on an already-valid data.table is a FULL DEEP COPY, not the
   # no-op it looks like -- so `copy(as.data.table(x))` costs TWO copies of a
   # 6.6M-row corpus where one is needed. Documented in
@@ -46,8 +47,35 @@ write_results_store <- function(results, path, partition_by = "event_id") {
   # specs, off-track races -- are a real category worth keeping, so label them
   # explicitly and restore the NA on read.
   dt[is.na(get(partition_by)), (partition_by) := "__unmatched__"]
-  unlink(path, recursive = TRUE)
-  arrow::write_dataset(dt, path, partitioning = partition_by, format = "parquet")
+
+  # Write to a temp sibling and swap in AFTER the write succeeds. The previous
+  # order -- unlink the live store, then write -- meant any mid-write failure
+  # (disk full, killed process, bad partition value) destroyed the only copy of
+  # the corpus and left an incomplete replacement, with nothing detecting it.
+  # The expensive, fallible step must finish before the old store is touched.
+  tmp <- paste0(path, ".tmp-write")
+  unlink(tmp, recursive = TRUE)
+  arrow::write_dataset(dt, tmp, partitioning = partition_by, format = "parquet")
+  if (!dir.exists(tmp) || !length(list.files(tmp, recursive = TRUE))) {
+    unlink(tmp, recursive = TRUE)
+    cli::cli_abort("Write to {.path {tmp}} produced no files; existing store left untouched.")
+  }
+  old <- paste0(path, ".old-write")
+  unlink(old, recursive = TRUE)
+  if (dir.exists(path) && !file.rename(path, old)) {
+    unlink(tmp, recursive = TRUE)
+    cli::cli_abort(c(
+      "Could not move the existing store aside; it is left untouched.",
+      i = "Something may be holding files open under {.path {path}}."
+    ))
+  }
+  if (!file.rename(tmp, path)) {
+    # Put the old store back before failing, so a valid store always remains.
+    if (dir.exists(old)) file.rename(old, path)
+    unlink(tmp, recursive = TRUE)
+    cli::cli_abort("Could not move the new store into place; previous store restored.")
+  }
+  unlink(old, recursive = TRUE)
   invisible(path)
 }
 
@@ -76,6 +104,7 @@ write_results_store <- function(results, path, partition_by = "event_id") {
 #' @export
 read_results_store <- function(path, events = NULL, from = NULL, to = NULL,
                                columns = NULL) {
+  .require_arrow("read_results_store")
   if (!dir.exists(path)) cli::cli_abort("No store at {.path {path}}.")
   ds <- arrow::open_dataset(path)
   q <- ds
@@ -92,4 +121,20 @@ read_results_store <- function(path, events = NULL, from = NULL, to = NULL,
     out[event_id == "__unmatched__", event_id := NA_character_]
   }
   out[]
+}
+
+#' Fail with an installation hint when arrow is absent
+#'
+#' `arrow` sits in Suggests -- most of the package works without it -- so the
+#' store functions must not die with a raw "there is no package called 'arrow'"
+#' on an install that legitimately skipped it.
+#' @keywords internal
+#' @noRd
+.require_arrow <- function(caller) {
+  if (!requireNamespace("arrow", quietly = TRUE)) {
+    cli::cli_abort(c(
+      "{.fn {caller}} needs the {.pkg arrow} package.",
+      i = 'Install it with {.code install.packages("arrow")}.'
+    ))
+  }
 }

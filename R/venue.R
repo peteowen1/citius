@@ -78,7 +78,7 @@ fit_venue_effect <- function(results, venue_col = "comp_name", min_n = 15L) {
 #'   Marks at venues with no estimate are unchanged.
 #' @export
 adjust_venue <- function(results, venue_effect, venue_col = "comp_name") {
-  dt <- data.table::copy(data.table::as.data.table(results))
+  dt <- .one_copy_dt(results)
   if (is.null(venue_effect) || !nrow(venue_effect) || !venue_col %in% names(dt)) {
     dt[, venue_adj := 0]
     return(dt[])
