@@ -57,23 +57,7 @@ KNOWN_UNREAD <- c(
   # run_athlete_foul_screening.R:13 calls `fit_athlete_foul_trait()`, which no
   # longer exists anywhere in the package - so that script cannot run at all and
   # the slot it writes is doubly dead. (2026-08-06)
-  "athlete_foul",
-  # MOVED HERE FROM `CALIBRATION_METADATA` ON 2026-08-13. `race` carries 350,401
-  # fitted `c_r` values and was classified a diagnostic - "never a model input,
-  # so its absence from the read set is correct". That classification was wrong,
-  # and it silenced this guard on the largest unwired quantity in the package.
-  #
-  # `c_r` is the correction for a tactically slow race: it absorbs "everyone was
-  # 4s down" so the residual keeps an athlete's credit for being only 3s down.
-  # With it unread, Audrey Werro was published 9th in the 800m W having run three
-  # of the ten fastest times in history that season, rated principally on heats
-  # she jogged. See ../../../docs/incidents/werro-underrated-2026-08-13.md.
-  #
-  # Registered rather than wired because wiring it is not the one-line join the
-  # queue assumed: the ratings page is sourced from championship_results.rds,
-  # whose race keys share 0 of 509,650 with the calibration's. Real on the
-  # corpus, impossible on the page. (2026-08-13)
-  "race"
+  "athlete_foul"
 )
 
 # Layers the package reads that the DEPLOYED calibration deliberately omits.

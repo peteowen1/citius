@@ -642,7 +642,13 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                              sigma_mode = c("athlete", "event"),
                              only = NULL, peak_gamma = 0,
                              robust_location = FALSE,
-                             decouple_peak = FALSE) {
+                             decouple_peak = FALSE,
+                             # Subtract the fitted race effect, referenced to
+                             # top-tier finals and shrunk by field size. OFF
+                             # until backtested: the deployed calibration
+                             # carries `race`, so a default of TRUE would change
+                             # every shipped forecast the moment this merged.
+                             adjust_race = FALSE) {
   if (!nrow(results)) {
     return(data.table::data.table(
       athlete_id = character(), event_id = character(), ability = numeric(),
@@ -777,6 +783,112 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     }
     dt[, perf := perf - unname(r_adj) - unname(t_adj)]
 
+    # THE RACE EFFECT. `decompose_races()` fits perf = athlete + race + resid,
+    # and until 2026-08-13 this function read none of it: `calibration$race`
+    # shipped in every deployed file, loaded on every run, and was never
+    # consumed. A fast track, a fast night, pacing or altitude therefore flowed
+    # straight into every athlete's estimate.
+    #
+    # This is the correction Pete described from the outside: if everyone in a
+    # race ran 4s slow and an athlete ran 3s slow, they beat the race by 1s and
+    # should be credited with it. `c_r` is the "everyone was 4s slow" term.
+    #
+    # ON THE DEPLOYED (CENTRED) FIT c_r HAS ZERO MEAN -- measured 3.33e-19, sd
+    # 0.0271, 5-95% -0.043..0.039. The queue's warning that subtracting it shifts
+    # ability levels globally was written for the UNCENTRED variant
+    # (`centre = "auto"`), which was A/B'd and rejected on 2026-08-13. It does not
+    # apply here, and marks are safe. Re-check that mean if the default ever
+    # changes.
+    #
+    # WIND IS SUBSUMED, NOT ADDITIONAL. `calibrate()` removes shared wind INTO
+    # the race effect (see the wind block below), so a race with a fitted `c_r`
+    # has already had its wind taken out. Subtracting both double-counts it, and
+    # the wind adjustment is therefore suppressed exactly on the rows where a
+    # race effect applies. This is the same composition trap as the coasting
+    # excess above: two corrections that each look right alone and overlap.
+    # REFERENCED TO TOP-TIER FINALS, not subtracted raw. This is the same shape
+    # as every other context correction here -- round offsets are referenced to
+    # `final`, tier offsets to `top` -- and it is not optional.
+    #
+    # Subtracting raw `c_r` was tried on 2026-08-13 and failed its anchor
+    # immediately: it predicted 2:01 for the world's best 800m women. `c_r` has
+    # zero mean over the WHOLE corpus (3.33e-19), which is what made the raw form
+    # look safe, but the corpus is mostly club racing. Over the races that matter
+    # it is strongly positive -- Werro's finals average +2.88% -- because elite
+    # finals ARE fast races. Subtracting that re-expresses every elite athlete in
+    # average-club conditions and marks them down ~3%.
+    #
+    # A GLOBAL MEAN OF ZERO IS NOT ZERO WITHIN THE POPULATION YOU PREDICT FOR.
+    # Referencing removes the between-race signal we want (this race was fast FOR
+    # a championship final) while leaving the level where a forecast needs it.
+    # DEFAULT OFF until it is backtested. The deployed calibration already
+    # carries `race`, so wiring the reader alone would switch this on in every
+    # forecast the moment it merged -- an unmeasured change shipped by accident,
+    # which is most of what went wrong in this package's history. The anchor is
+    # good (see below) and that is not the same as measured.
+    has_cr <- rep(FALSE, nrow(dt))
+    if (isTRUE(adjust_race) &&
+        !is.null(calibration$race) && nrow(calibration$race) &&
+        "race_key" %in% names(dt)) {
+      rr <- data.table::as.data.table(calibration$race)
+      if (!"ref_c_r" %in% names(rr)) {
+        rr[, .rcl := .round_class(if ("round" %in% names(rr)) round else NA_character_)]
+        rr[, .tcl := .tier_class(if ("tier" %in% names(rr)) tier else NA_character_)]
+        # Per event, the mean race effect of a top-tier final. Fall back to the
+        # event's own mean where an event has none (indoor-only events, thin
+        # ones), and to zero only if even that is unavailable -- never silently
+        # to the corpus mean, which is the failure being fixed.
+        ref <- rr[.rcl == "final" & .tcl == "top",
+                  .(ref_c_r = mean(c_r, na.rm = TRUE)), by = event_id]
+        fb <- rr[, .(fb_c_r = mean(c_r, na.rm = TRUE)), by = event_id]
+        rr <- merge(rr, ref, by = "event_id", all.x = TRUE)
+        rr <- merge(rr, fb, by = "event_id", all.x = TRUE)
+        rr[!is.finite(ref_c_r), ref_c_r := fb_c_r]
+        rr[!is.finite(ref_c_r), ref_c_r := 0]
+      }
+      i <- match(as.character(dt$race_key), as.character(rr$race_key))
+      cr <- rr$c_r[i] - rr$ref_c_r[i]
+
+      # SHRINK BY FIELD SIZE. A race effect fitted on a two-athlete race is not
+      # a race effect: with two runners, "the race was slow" and "both athletes
+      # are slow" are the same observation, and the decomposition can only
+      # separate them through athletes who also appear elsewhere.
+      #
+      # Found by anchor on 2026-08-13. An athlete with ONE corpus result --
+      # 2:07.87 in a two-person race, c_r -0.068 against a +0.030 top-final
+      # reference -- was handed a 9.8% uplift and ranked FIRST in the 800m W at
+      # 1:55.29. `decompose_races()` already drops singletons; two is barely
+      # better and was unguarded.
+      #
+      # The weight is n/(n+k) with k = sigma_within^2 / condition_sd^2, which is
+      # the standard precision ratio for a group mean and is MEASURED per event
+      # by calibrate() -- not a constant typed in here. A race effect is worth
+      # believing in proportion to how many athletes it was fitted on relative
+      # to how noisy the event is.
+      n_r <- if ("n_in_race" %in% names(rr)) rr$n_in_race[i] else rep(NA_real_, nrow(dt))
+      n_r[!is.finite(n_r)] <- 0
+      # No events table, or an event with no measured spread, means k is unknown.
+      # Unknown resolves to Inf, i.e. weight 0, i.e. NO race correction -- fail
+      # closed rather than apply an unshrunk one. That is the same choice
+      # `.calibrated_value()` makes with its documented fallback.
+      ev <- calibration$events
+      sw <- cs <- rep(NA_real_, nrow(dt))
+      if (!is.null(ev) && NROW(ev)) {
+        ev <- data.table::as.data.table(ev)
+        j <- match(dt$event_id, ev$event_id)
+        if ("sigma_within" %in% names(ev)) sw <- ev$sigma_within[j]
+        if ("condition_sd" %in% names(ev)) cs <- ev$condition_sd[j]
+      }
+      k <- ifelse(is.finite(sw) & is.finite(cs) & cs > 0, (sw / cs)^2, Inf)
+      wt <- n_r / (n_r + k)
+      wt[!is.finite(wt)] <- 0
+      cr <- cr * wt
+
+      has_cr <- is.finite(cr) & wt > 0
+      cr[!is.finite(cr)] <- 0
+      dt[, perf := perf - cr]
+    }
+
     # Coasting: the athlete-specific part of running a qualifying round easy.
     #
     # The line above has already removed the POPULATION round offset, which on
@@ -849,6 +961,13 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
       wind_beta[!is.finite(wind_beta)] <- 0
       wind_val <- dt$wind
       wind_val[!is.finite(wind_val)] <- 0
+      # Suppressed where a race effect was applied above: `calibrate()` folds
+      # shared wind INTO `c_r`, so those rows have already had it removed and
+      # subtracting again would double-count. Rows with no fitted race effect --
+      # 27% of the corpus, and every row when no calibration carries `race` --
+      # still get the wind correction, which is why this stays rather than being
+      # deleted.
+      wind_beta[has_cr] <- 0
       dt[, perf := perf - wind_beta * wind_val]
     }
 
