@@ -293,10 +293,56 @@ test_that("fit_coasting_trait estimates shrunk coasting deviations for heats", {
   ct <- fit_coasting_trait(dt, min_heats = 2, shrink_k = 2)
   expect_equal(nrow(ct), 2L)
   expect_true("coasting_trait" %in% names(ct))
-  # athlete 'a' has negative heat deviation (coasting), shrunk toward 0
   a_trait <- ct[athlete_id == "a"]$coasting_trait
   b_trait <- ct[athlete_id == "b"]$coasting_trait
+
+  # Shrinkage targets the POPULATION heat deviation, not zero (fixed 2026-08-13).
+  # Here that population value is mean(-0.1, -0.1, 0, 0) = -0.05, so athlete 'b',
+  # who shows no coasting across only two heats, is pulled halfway to it:
+  # -0.05 + (2/(2+2)) * (0 - -0.05) = -0.025.
+  #
+  # This test previously asserted `b_trait == 0`, which encoded the old
+  # shrink-to-zero form -- a prior belief that nobody coasts, which is false and
+  # measurably so. Shrinking to zero drove the fitted trait mean BELOW the pooled
+  # heat offset on the real corpus (-0.0025 against -0.00649), making every
+  # athlete look like less of a coaster than the average athlete.
   expect_lt(a_trait, 0)
-  expect_equal(b_trait, 0)
+  expect_equal(b_trait, -0.025)
+  # The one that matters: real evidence of coasting must land further from the
+  # population than an athlete with none.
+  expect_lt(a_trait, b_trait)
+})
+
+test_that("fit_coasting_trait references FINALS, not the athlete's overall mean", {
+  # Two athletes with identical heat-vs-final gaps (-0.1) but different round
+  # MIXES. Referenced to the athlete's overall mean the two disagree, because a
+  # heat-heavy record drags its own reference down. Referenced to finals they
+  # agree, which is the property that lets the trait compose with the
+  # final-referenced round offset in estimate_ability(). (fixed 2026-08-13)
+  mk <- function(id, n_heat, n_final) {
+    data.table::data.table(
+      athlete_id = id, event_id = "AT-400Metres-M", tier = "OW",
+      round = c(rep("Heat 1", n_heat), rep("Final", n_final)),
+      perf = c(rep(2.0, n_heat), rep(2.1, n_final)))
+  }
+  dt <- rbind(mk("heavy", 6, 2), mk("light", 2, 6))
+  ct <- fit_coasting_trait(dt, min_heats = 2, shrink_k = 0)  # k = 0: no shrinkage
+  expect_equal(ct[athlete_id == "heavy"]$coasting_trait,
+               ct[athlete_id == "light"]$coasting_trait)
+  expect_equal(ct[athlete_id == "heavy"]$coasting_trait, -0.1)
+})
+
+test_that("an athlete with heats but no final gets no trait rather than a made-up one", {
+  dt <- data.table::data.table(
+    athlete_id = c(rep("nofinal", 3), rep("hasfinal", 4)),
+    event_id = "AT-400Metres-M", tier = "OW",
+    round = c("Heat 1", "Heat 2", "Heat 3", "Heat 1", "Heat 2", "Final", "Final"),
+    perf = c(2.0, 2.0, 2.0, 2.0, 2.0, 2.1, 2.1))
+  ct <- fit_coasting_trait(dt, min_heats = 2, shrink_k = 2)
+  # "How much easier than their final" is undefined without a final. Defaulting
+  # such an athlete to 0 would put a fabricated trait on exactly the
+  # thin-evidence athletes shrinkage exists to protect.
+  expect_false("nofinal" %in% ct$athlete_id)
+  expect_true("hasfinal" %in% ct$athlete_id)
 })
 

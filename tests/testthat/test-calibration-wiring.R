@@ -54,12 +54,6 @@ KNOWN_UNREAD <- c(
   # (gold Brier +1.83%); kept in the calibration so the measurement is not lost.
   # (2026-08-06)
   "foul_round",
-  # build_calibration_coasting.R:23, recalibrate.R:28, run_foul_screening.R:21.
-  # Fitted for 107,181 athletes and read by NOTHING. This is failure 3 above and
-  # the reason this file exists. Registered rather than deleted because the
-  # measurement is real; wire it or drop it, but do not ship it as adopted.
-  # (2026-08-06, ticket 15)
-  "coasting_trait",
   # run_athlete_foul_screening.R:13 calls `fit_athlete_foul_trait()`, which no
   # longer exists anywhere in the package - so that script cannot run at all and
   # the slot it writes is doubly dead. (2026-08-06)
@@ -109,7 +103,24 @@ DEPLOYED_OFF <- c(
   # (p = 0.00019). Marks improved while placings degraded, because 59% of the
   # shift is common to the race and cancels from every pairwise comparison.
   # Keep it off. (2026-08-12)
-  "season"
+  "season",
+
+  # --- Found 2026-08-13, when this test stopped accepting a NULL element as a
+  # carried table (see the note in the deployment check below). All five were
+  # NULL in every deployed calibration and invisible to the old name-based
+  # check. None is a defect; each is off by a documented default, and each is
+  # listed so that "off by design" stays distinguishable from "silently lost".
+  #
+  # calibrate.R:472 sets it NULL outright: fit_form_sd() needs held-out meets,
+  # so it cannot be fitted inside the same call.
+  "form_sd",
+  # context_per_family defaults FALSE (calibrate.R:326). Recorded as a
+  # deliberate non-wiring on 2026-08-03.
+  "round_family", "tier_family",
+  # context_per_event defaults FALSE (calibrate.R:326). A family is still a pool
+  # of events that behave differently, but the per-event fitter was refuted by
+  # the backtest even at k = 0.
+  "round_event", "tier_event"
 )
 
 # Slots that are diagnostics or run metadata, never model inputs. The estimator
@@ -343,7 +354,20 @@ test_that("the DEPLOYED calibration carries a table for every layer the package 
   skip_if_not(file.exists(cal_file),
               paste("deployed calibration not present:", basename(cal_file)))
 
-  have <- names(readRDS(cal_file))
+  # NON-NULL, not merely NAMED (fixed 2026-08-13, found by deploying `coast`).
+  #
+  # `names()` alone gave a FALSE PASS. `calibrate.R:498` builds the list as
+  # `indoor = if (isTRUE(context_indoor) ...) {...}`, and when that condition is
+  # FALSE the element still EXISTS, holding NULL. So `names()` reported `indoor`
+  # and `season` as carried while both were empty -- and every application site
+  # is gated on `!is.null()`, so both were doing nothing.
+  #
+  # That is this test's own failure mode reproduced inside the test: a layer
+  # present in form, absent in effect, reported as fine. The old deployed file
+  # predated that calibrate() version and had no such names at all, which is the
+  # only reason the gap stayed hidden.
+  cal_obj <- readRDS(cal_file)
+  have <- names(cal_obj)[!vapply(cal_obj, is.null, logical(1))]
   expect_gte(length(have), 10L)          # vacuity floor: an unreadable file must fail
 
   reads <- unique(wiring_reads()$element)

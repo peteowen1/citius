@@ -777,6 +777,54 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     }
     dt[, perf := perf - unname(r_adj) - unname(t_adj)]
 
+    # Coasting: the athlete-specific part of running a qualifying round easy.
+    #
+    # The line above has already removed the POPULATION round offset, which on
+    # the current corpus is -0.59% for a heat. That is an average over everyone,
+    # and it is nowhere near enough for an athlete who only needs to finish top
+    # three to advance. Audrey Werro's heats run 5.3% slower than her finals --
+    # nine times the population correction -- so 23 jogged heats outweighed 55
+    # finals (heats carry 2.9x the precision of finals) and the fastest 800m
+    # runner in the field was published ninth. See
+    # ../../docs/incidents/werro-underrated-2026-08-13.md.
+    #
+    # SUBTRACT THE EXCESS, NOT THE TRAIT. `fit_coasting_trait()` measures each
+    # athlete's mean heat deviation from their own athlete-event mean, so the
+    # population heat effect is INSIDE the trait. Subtracting the raw trait here
+    # would remove that component twice -- once via `r_adj` and once via the
+    # trait -- and over-correct every coaster.
+    #
+    # KNOWN APPROXIMATION: the trait is referenced to the athlete's mean across
+    # all rounds, while `r_adj` is referenced to finals. For an athlete who races
+    # mostly finals the two references nearly coincide; for one with an unusual
+    # round mix they do not. Left as an approximation rather than silently
+    # refitting the trait to a final-referenced definition, because that would
+    # change the fitted quantity under the same name. Measure before trusting.
+    #
+    # Gated on the calibration carrying the table, so this is inert until a
+    # calibration is rebuilt with it -- and `test-calibration-wiring.R` now fails
+    # if the deployed one lacks it, rather than letting it skip in silence.
+    if (!is.null(calibration$coasting_trait) &&
+        nrow(calibration$coasting_trait)) {
+      ct <- data.table::as.data.table(calibration$coasting_trait)
+      trait <- ct$coasting_trait[match(dt$athlete_id, ct$athlete_id)]
+      trait[!is.finite(trait)] <- 0
+      # The pooled heat offset, from the same calibration. Not a literal: the
+      # value moves with every rebaseline, and a hardcoded -0.0059 would rot
+      # silently the first time the corpus changed.
+      pooled_heat <- 0
+      rt <- calibration$round
+      if (!is.null(rt) && "round_class" %in% names(rt) && "offset" %in% names(rt)) {
+        ph <- rt$offset[match("heat", rt$round_class)]
+        if (length(ph) && is.finite(ph)) pooled_heat <- ph
+      }
+      excess <- trait - pooled_heat
+      # Only heats. A coaster's finals are raced, and the trait says nothing
+      # about their semis.
+      excess[.round_class(if ("round" %in% names(dt)) dt$round else NA_character_) != "heat"] <- 0
+      dt[, perf := perf - excess]
+    }
+
     # Wind, where the calibration carries a coefficient for the event. This is
     # the same adjustment layer as round and tier, and it belongs here rather
     # than in a pre-adjusted input file: `calibrate()` removes shared wind into

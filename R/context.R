@@ -633,16 +633,60 @@ fit_coasting_trait <- function(results, min_heats = 2L, shrink_k = 5.0) {
   dt[, athlete_id := as.character(athlete_id)]
   dt[, rc := .round_class(if ("round" %in% names(dt)) round else NA_character_)]
 
-  dt[, ath_mean := mean(perf, na.rm = TRUE), by = .(athlete_id, event_id)]
-  dt[, r := perf - ath_mean]
+  # REFERENCE TO FINALS, NOT TO THE ATHLETE'S OVERALL MEAN (fixed 2026-08-13).
+  #
+  # This measured `perf - mean(perf over ALL rounds)`, while its own
+  # documentation and DECISIONS 2026-08-01 both describe it as a "heat-vs-FINAL"
+  # trait -- and the round offset it has to compose with in `estimate_ability()`
+  # is final-referenced too. The two references are not interchangeable: an
+  # athlete's overall mean already contains their slow heats, so deviation from
+  # it is systematically SMALLER than deviation from their finals.
+  #
+  # The size of that error is not subtle. On the current corpus the old form gave
+  # a trait mean of -0.00111 against a pooled heat offset of -0.00649, so
+  # subtracting the pooled offset to get the athlete-specific excess produced
+  # +0.00537 -- POSITIVE, i.e. it would have pushed every jogged heat further
+  # DOWN, the exact opposite of the correction intended.
+  #
+  # Referencing finals makes the trait mean comparable to the pooled offset by
+  # construction, so the excess is a real athlete-specific residual.
+  ref <- dt[rc == "final", .(ref_mean = mean(perf, na.rm = TRUE)),
+            by = .(athlete_id, event_id)]
+  if (!nrow(ref)) return(empty)
+  dt <- merge(dt, ref, by = c("athlete_id", "event_id"))
+  dt[, r := perf - ref_mean]
 
+  # An athlete with heats but no finals in an event has no reference and is
+  # dropped by that join, which is correct: "how much easier than their final"
+  # is undefined without a final. Silently defaulting them to 0 would put a
+  # made-up trait on exactly the thin-evidence athletes shrinkage exists for.
   heats <- dt[rc == "heat", .(dev = mean(r, na.rm = TRUE), n_heats = .N), by = athlete_id]
   if (!nrow(heats)) return(empty)
 
   heats <- heats[n_heats >= min_heats]
   if (!nrow(heats)) return(empty)
 
-  heats[, coasting_trait := (n_heats / (n_heats + shrink_k)) * dev]
+  # SHRINK TOWARD THE POPULATION HEAT EFFECT, NOT TOWARD ZERO (fixed 2026-08-13).
+  #
+  # This was `(n/(n+k)) * dev`, which pulls a thin-evidence athlete toward
+  # "races heats exactly as hard as finals". Nobody does; the population runs
+  # heats measurably easier. Every other shrinkage in this package targets the
+  # pooled value -- see `ability.R:332`,
+  # `offset = pooled + (raw - pooled) * n/(n+k)` -- and this one did not.
+  #
+  # The consequence was not a small bias. Shrinking to zero drove the trait mean
+  # to -0.0025 against a pooled heat offset of -0.00649, so the trait looked
+  # like LESS coasting than the population average, and the athlete-specific
+  # excess came out positive for most athletes. Shrinkage strength was
+  # masquerading as a measurement.
+  #
+  # Referenced to finals (above) and shrunk to the pooled deviation (here), the
+  # trait is now on the same scale as the round offset, so `estimate_ability()`
+  # can subtract the difference and get a real athlete-specific residual.
+  pooled_dev <- mean(dt[rc == "heat", r], na.rm = TRUE)
+  if (!is.finite(pooled_dev)) pooled_dev <- 0
+  heats[, coasting_trait := pooled_dev +
+          (n_heats / (n_heats + shrink_k)) * (dev - pooled_dev)]
   heats[, .(athlete_id, coasting_trait, n_heats)]
 }
 
