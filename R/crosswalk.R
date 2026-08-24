@@ -221,10 +221,17 @@ athlete_crosswalk <- function(x, name_order = NULL, links = NULL,
       key_dob := paste0(.split_name(athlete_name, ord)$surname, "|", birthdate)]
   }
 
-  # Start every athlete in their own group, keyed by exact name so identical
-  # names begin together and later passes merge whole clusters at a time.
-  x[, person_id := key_exact]
-  x[is.na(person_id), person_id := paste0("~", source, "~", seq_len(.N))]
+  # Start every athlete as their OWN person -- not grouped by key_exact.
+  # Grouping eagerly here was the bug (citius#13): two different real
+  # athletes sharing one exact name string (e.g. two "Sam WILLIAMSON"s, one
+  # Bermudian, one Australian, both in the same Games entry list) got merged
+  # with NO ambiguity check, because .link_by_key()'s guard -- "a key
+  # covering two different athletes in one source identifies nobody" -- was
+  # only ever applied to the birthdate/loose passes below, never to this
+  # initial assignment. "exact" is now run through the SAME guarded
+  # .link_by_key() pipeline as the others (below), matching what this
+  # function's own docstring has always claimed pass 2 does.
+  x[, person_id := paste0("~", source, "~", seq_len(.N))]
   x[, match_method := NA_character_]
 
   # Verified links come first and are exempt from the ambiguity guards: they
@@ -271,14 +278,23 @@ athlete_crosswalk <- function(x, name_order = NULL, links = NULL,
     ), .frequency = "once", .frequency_id = "citius_unscoped_fuzzy")
   }
 
-  for (pass in list(c("key_dob", "birthdate"), c("key_loose", "loose"))) {
-    x <- .link_by_key(x, pass[1L], pass[2L], scope = fuzzy_scope)
+  # "exact" is unscoped (not gated by fuzzy_scope) like "birthdate" -- full-name
+  # matching is far more specific than surname+initial, so the scale problem
+  # fuzzy_scope exists to contain doesn't apply here the way it does to "loose".
+  for (pass in list(c("key_dob", "birthdate"), c("key_exact", "exact"),
+                     c("key_loose", "loose"))) {
+    x <- .link_by_key(x, pass[1L], pass[2L], scope = if (pass[1L] == "key_loose") fuzzy_scope else NULL)
   }
 
   # A pass marks only the rows whose group id moved, but the method describes
   # how the whole group was formed -- so propagate it across the group, keeping
-  # the strongest pass that contributed.
-  rank <- c(verified = 1L, birthdate = 2L, loose = 3L)
+  # the strongest pass that contributed. "exact" must be listed here now that
+  # it is a real guarded pass (not the eager pre-grouping it used to be) --
+  # omitting it would leave a merged group's canonical/anchor row (the one
+  # that did not itself move) with match_method still NA, since only the
+  # OTHER rows in an exact-formed group get "exact" set directly by
+  # .link_by_key(); this table is what lets group-wide propagation see it.
+  rank <- c(verified = 1L, birthdate = 2L, exact = 3L, loose = 4L)
   x[, .m := rank[match_method]]
   if (any(!is.na(x$.m))) {
     grp <- x[!is.na(.m), .(best = names(rank)[min(.m)]), by = person_id]
@@ -288,8 +304,16 @@ athlete_crosswalk <- function(x, name_order = NULL, links = NULL,
 
   n_src <- x[, .(n = data.table::uniqueN(source)), by = person_id]
   x[n_src, on = "person_id", n_sources := i.n]
-  x[is.na(match_method), match_method := data.table::fifelse(
-    n_sources > 1L, "exact", "unmatched")]
+  # Every row now starts fully atomized (own person_id) and every merge pass
+  # (verified/birthdate/exact/loose) sets match_method for its whole group via
+  # the rank-propagation above -- so n_sources > 1L with match_method still NA
+  # should not occur; if it does, something merged a group without going
+  # through a guarded pass, which is exactly the bug class this file fixes.
+  # Label it "unmatched" regardless of n_sources rather than guessing "exact"
+  # for a merge this code cannot actually account for.
+  stopifnot("a person_id spans multiple sources with no match_method set -- a group was merged outside the guarded passes" =
+              nrow(x[is.na(match_method) & n_sources > 1L]) == 0L)
+  x[is.na(match_method), match_method := "unmatched"]
   x[, n_sources := NULL]
   x[]
 }

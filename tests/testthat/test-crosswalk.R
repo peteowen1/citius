@@ -114,6 +114,36 @@ test_that("a hyphenated surname is still not the same as its second half", {
   expect_false(identical(athlete_key("Adam RAMSAY-PEATY"), athlete_key("Adam PEATY")))
 })
 
+test_that("an exact name match is guarded like loose and birthdate (citius#13)", {
+  # Two DIFFERENT real athletes named "Sam WILLIAMSON" (one Bermudian, one
+  # Australian) both entered in the same Games source. Grouping by key_exact
+  # with no guard merged them; the fix routes "exact" through the same
+  # ambiguity check as birthdate/loose, so an exact key ambiguous within one
+  # source refuses to link, same as ZHANG|Y does for the loose key.
+  x <- data.table::data.table(
+    source = c("games", "games", "wa"),
+    athlete_name = c("Sam WILLIAMSON", "Sam WILLIAMSON", "WILLIAMSON Samuel"),
+    country = c("BER", "AUS", NA),
+    athlete_id = c(NA, NA, "1"))
+  xw <- athlete_crosswalk(x, name_order = c(wa = "surname_first",
+                                            games = "given_first"))
+  expect_equal(data.table::uniqueN(xw$person_id), 3L)
+  expect_true(all(xw$match_method == "unmatched"))
+})
+
+test_that("an unambiguous exact name match still links across sources", {
+  # The ordinary case an exact pass exists for: one real athlete, identical
+  # name string in two sources, nothing else sharing that name anywhere.
+  x <- data.table::data.table(
+    source = c("wa", "crs"),
+    athlete_name = c("Sarah SJOESTROEM", "Sarah SJOESTROEM"),
+    athlete_id = c("1", NA))
+  xw <- athlete_crosswalk(x, name_order = c(wa = "given_first",
+                                            crs = "given_first"))
+  expect_equal(data.table::uniqueN(xw$person_id), 1L)
+  expect_true(all(xw$match_method == "exact"))
+})
+
 test_that("fuzzy_scope confines name matching to the sources named", {
   # Corpus-wide, surname+initial merged different people (Sophie Bateman with
   # BATEMAN Sarah). Scoping keeps the candidate pool small enough for it to mean
