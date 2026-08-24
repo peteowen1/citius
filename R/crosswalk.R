@@ -231,7 +231,28 @@ athlete_crosswalk <- function(x, name_order = NULL, links = NULL,
   # initial assignment. "exact" is now run through the SAME guarded
   # .link_by_key() pipeline as the others (below), matching what this
   # function's own docstring has always claimed pass 2 does.
-  x[, person_id := paste0("~", source, "~", seq_len(.N))]
+  #
+  # STABILITY MATTERS: person_id is a persistent identity other scripts key
+  # rating histories on across rebuilds, so this must be DETERMINISTIC from
+  # the row's own data, never from row position (a plain row-index fallback
+  # would silently reshuffle everyone's identity the next time an unrelated
+  # row is added/removed upstream). Prefer the source's own athlete_id
+  # (stable by construction where a source supplies one); where it does not
+  # (the Games entry list carries none), fall back to name+country, which is
+  # still deterministic and already distinguishes the Sam Williamson case
+  # (BER vs AUS) without needing row order at all. Only the residual,
+  # vanishingly rare case of two same-name-same-country entries within one
+  # source falls back to a within-that-tied-cluster row counter -- ordering
+  # only matters inside a cluster this small, not across the whole table.
+  .country_chr <- as.character(x$country)
+  x[, person_id := data.table::fifelse(
+    !is.na(athlete_id) & nzchar(athlete_id),
+    paste0(source, "|id|", athlete_id),
+    paste0(source, "|name|", data.table::fifelse(is.na(key_exact), athlete_name, key_exact),
+           "|", data.table::fifelse(is.na(.country_chr), "", .country_chr)))]
+  x[, .dup := seq_len(.N), by = person_id]
+  x[.dup > 1L, person_id := paste0(person_id, "|", .dup)]
+  x[, .dup := NULL]
   x[, match_method := NA_character_]
 
   # Verified links come first and are exempt from the ambiguity guards: they
