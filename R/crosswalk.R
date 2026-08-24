@@ -244,14 +244,22 @@ athlete_crosswalk <- function(x, name_order = NULL, links = NULL,
   # vanishingly rare case of two same-name-same-country entries within one
   # source falls back to a within-that-tied-cluster row counter -- ordering
   # only matters inside a cluster this small, not across the whole table.
+  # NEVER use "|" inside person_id: downstream engines (form_ratings*.R) build
+  # their own internal hash keys as paste0(athlete_id, "|", event_id) and treat
+  # any athlete_id that already contains "|" as a corrupt-identity sentinel to
+  # be dropped (a real, if rare, pre-existing case -- "worldaquatics|NA" --
+  # this file's own comment history already knew about). Using "|" as this
+  # construction's OWN separator made every single row look like that sentinel
+  # and dropped 100% of a corpus on first rebuild -- caught immediately by
+  # form_ratings_swimming.R's own empty-corpus guard. "::" cannot collide.
   .country_chr <- as.character(x$country)
   x[, person_id := data.table::fifelse(
     !is.na(athlete_id) & nzchar(athlete_id),
-    paste0(source, "|id|", athlete_id),
-    paste0(source, "|name|", data.table::fifelse(is.na(key_exact), athlete_name, key_exact),
-           "|", data.table::fifelse(is.na(.country_chr), "", .country_chr)))]
+    paste0(source, "::id::", athlete_id),
+    paste0(source, "::name::", data.table::fifelse(is.na(key_exact), athlete_name, key_exact),
+           "::", data.table::fifelse(is.na(.country_chr), "", .country_chr)))]
   x[, .dup := seq_len(.N), by = person_id]
-  x[.dup > 1L, person_id := paste0(person_id, "|", .dup)]
+  x[.dup > 1L, person_id := paste0(person_id, "::", .dup)]
   x[, .dup := NULL]
   x[, match_method := NA_character_]
 
