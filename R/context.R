@@ -615,6 +615,65 @@ project_tier <- function(ability, tier, calibration = NULL, shrink = 0.5) {
 }
 
 
+#' Put an ability estimate onto the round of the race being predicted
+#'
+#' [estimate_ability()] with `adjust_context = TRUE` SUBTRACTS the round offset
+#' from every historical mark, bringing history to a FINAL footing. Nothing
+#' puts the round back for the race being predicted -- `simulate.R` has no
+#' round logic at all -- so a heat is forecast exactly like a final. This is
+#' [project_tier()]'s missing counterpart: the tier half of "the correction
+#' runs one way" was fixed here; the round half never was (see
+#' `docs/reference/modelling-traps.md`, "The correction runs one way").
+#'
+#' **Unlike [project_tier()], no shrink factor has been measured for round.**
+#' `project_tier()`'s `shrink = 0.5` default came from a lambda sweep on
+#' backtest finals split before/after 2023 (see its own docs) -- fitted
+#' offsets overshoot because they are measured on all history while the races
+#' actually predicted are a faster, selected subset. No equivalent sweep has
+#' been run for round, so `shrink = 1` here is the honest, unshrunk default
+#' (the raw measured offset applied in full), not a validated choice. Run the
+#' same before/after backtest split before trusting this in a forecast that
+#' matters, and update the default once that number exists.
+#'
+#' **Not applied by default.** Changes every non-final prediction, so it
+#' belongs in its own backtest arm rather than riding along with another
+#' change -- same reasoning as `project_tier()`.
+#'
+#' @param ability Ability rows, as returned by [estimate_ability()].
+#' @param round Round label for the race being predicted (raw feed labels
+#'   accepted -- classified by the same internal rule the calibration was
+#'   fitted under), recycled to `ability`.
+#' @param calibration A `citius_calibration` carrying a `$round` table. `NULL`
+#'   returns `ability` unchanged, which is the honest fallback: without
+#'   measured offsets there is nothing to add back.
+#' @param shrink Fraction of the measured offset to apply. Unmeasured for
+#'   round (see above) -- defaults to 1, the full raw offset.
+#' @return `ability` with `ability` shifted and `round_adj` recording the
+#'   shift.
+#' @seealso [project_tier()], [project_championship()], [estimate_ability()]
+#' @export
+project_round <- function(ability, round, calibration = NULL, shrink = 1) {
+  ab <- data.table::copy(data.table::as.data.table(ability))
+  rt <- if (is.null(calibration)) NULL
+        else if (inherits(calibration, "citius_calibration") ||
+                 (is.list(calibration) && !is.data.frame(calibration))) calibration$round
+        else calibration
+  if (is.null(rt) || !nrow(rt) || !"offset" %in% names(rt) || !nrow(ab)) {
+    ab[, round_adj := 0]
+    return(ab[])
+  }
+  rc <- .round_class(rep_len(as.character(round), nrow(ab)))
+  adj <- rt$offset[match(rc, rt$round_class)] * shrink
+  adj[!is.finite(adj)] <- 0
+  # estimate_ability() SUBTRACTED this offset to reach the reference (final)
+  # footing, so returning to the target round means adding it back with the
+  # same sign.
+  ab[, round_adj := adj]
+  ab[, ability := ability + round_adj]
+  ab[]
+}
+
+
 #' Estimate athlete-specific heat coasting traits
 #'
 #' Measures how much an athlete systematically eases off in qualification

@@ -282,6 +282,40 @@ test_that("project_tier puts ability back onto the tier being predicted", {
                ab$ability + 2 * -0.01689)
 })
 
+test_that("project_round puts ability back onto the round being predicted", {
+  # estimate_ability(adjust_context = TRUE) SUBTRACTS the round offset to reach
+  # a final footing. Nothing added it back -- project_round() is the missing
+  # counterpart to project_tier(), unshrunk by default since no lambda sweep
+  # has been run for round the way one was for tier.
+  cal <- structure(list(round = data.table::data.table(
+    round_class = c("final", "semi", "quarter", "heat", "other"),
+    offset = c(0, -0.0009314472, 0.0024956698, -0.0064857345, -0.0099218657),
+    n = c(2428372L, 91754L, 2136L, 822019L, 263765L))), class = "citius_calibration")
+  ab <- data.table::data.table(athlete_id = c("a", "b"),
+                               event_id = "AT-100Metres-M",
+                               ability = c(-2.3, -2.35))
+
+  # Final is the reference: nothing moves.
+  expect_equal(project_round(ab, "Final", cal)$ability, ab$ability)
+
+  # A heat is genuinely slower, so the prediction must come down -- by the
+  # full measured offset at the default (unmeasured) shrink of 1.
+  heat <- project_round(ab, "Round 1 - Heat", cal)
+  expect_true(all(heat$ability < ab$ability))
+  expect_equal(unique(round(heat$ability - ab$ability, 8)), -0.00648573)
+
+  # Half-shrunk, for parity with how project_tier() is used once a sweep exists.
+  expect_equal(unique(round(project_round(ab, "Round 1 - Heat", cal, shrink = 0.5)$ability -
+                             ab$ability, 8)), round(-0.0064857345 / 2, 8))
+
+  # Without measured offsets there is nothing to add back.
+  expect_equal(project_round(ab, "Round 1 - Heat", NULL)$ability, ab$ability)
+
+  # It is the exact inverse of what estimate_ability() removed.
+  expect_equal(round(project_round(project_round(ab, "Round 1 - Heat", cal), "Round 1 - Heat", cal)$ability, 8),
+               round(ab$ability + 2 * -0.0064857345, 8))
+})
+
 test_that("fit_coasting_trait estimates shrunk coasting deviations for heats", {
   dt <- data.table::data.table(
     athlete_id = rep(c("a", "b"), each = 4),
