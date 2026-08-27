@@ -622,8 +622,9 @@ project_tier <- function(ability, tier, calibration = NULL, shrink = 0.5) {
 #' puts the round back for the race being predicted -- `simulate.R` has no
 #' round logic at all -- so a heat is forecast exactly like a final. This is
 #' [project_tier()]'s missing counterpart: the tier half of "the correction
-#' runs one way" was fixed here; the round half never was (see
-#' `docs/reference/modelling-traps.md`, "The correction runs one way").
+#' runs one way" was fixed by [project_tier()]; the round half never was,
+#' until now (see `docs/reference/modelling-traps.md`, "The correction runs
+#' one way").
 #'
 #' **Unlike [project_tier()], no shrink factor has been measured for round.**
 #' `project_tier()`'s `shrink = 0.5` default came from a lambda sweep on

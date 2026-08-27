@@ -30,8 +30,9 @@ from every historical mark, bringing history to a FINAL footing. Nothing
 puts the round back for the race being predicted -- \code{simulate.R} has no
 round logic at all -- so a heat is forecast exactly like a final. This is
 \code{\link[=project_tier]{project_tier()}}'s missing counterpart: the tier half of "the correction
-runs one way" was fixed here; the round half never was (see
-\code{docs/reference/modelling-traps.md}, "The correction runs one way").
+runs one way" was fixed by \code{\link[=project_tier]{project_tier()}}; the round half never was,
+until now (see \code{docs/reference/modelling-traps.md}, "The correction runs
+one way").
 }
 \details{
 \strong{Unlike \code{\link[=project_tier]{project_tier()}}, no shrink factor has been measured for round.}
