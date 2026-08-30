@@ -9,7 +9,7 @@ with_citius_db_connection(fn, path = NULL, read_only = FALSE)
 \arguments{
 \item{fn}{Function of one argument, the connection.}
 
-\item{path, read_only}{See \code{\link[=get_citius_db_connection]{get_citius_db_connection()}}.}
+\item{path, read_only}{See \code{get_citius_db_connection()}.}
 }
 \value{
 Whatever \code{fn} returns.

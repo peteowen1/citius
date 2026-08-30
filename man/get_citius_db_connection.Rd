@@ -7,7 +7,7 @@
 get_citius_db_connection(path = NULL, read_only = FALSE)
 }
 \arguments{
-\item{path}{Explicit database path. \code{NULL} resolves via \code{\link[=get_citius_db_path]{get_citius_db_path()}}.}
+\item{path}{Explicit database path. \code{NULL} resolves via \code{get_citius_db_path()}.}
 
 \item{read_only}{Open read-only.}
 }

@@ -4,13 +4,21 @@
 \alias{get_citius_db_path}
 \title{Resolve the citius DuckDB database path}
 \usage{
-get_citius_db_path(path = NULL)
+get_citius_db_path(path = NULL, subpath = file.path("data", "citius.duckdb"))
 }
 \arguments{
 \item{path}{Explicit path; returned as-is (normalised) if given.}
+
+\item{subpath}{Path to the database file, relative to the resolved
+\verb{citiusdata/} directory. Defaults to today's flat-layout location
+(\code{data/citius.duckdb}). A future data-directory reorg only needs this
+default updated here, not every caller -- the whole point of naming it
+as a parameter rather than hardcoding it inline (found worth doing
+2026-08-30, alongside \verb{citiusdata/scripts/_paths.R}, the equivalent
+indirection layer for the R-script side of this same problem).}
 }
 \value{
-Character path to \code{citius.duckdb}.
+Character path to the database file.
 }
 \description{
 Walks up from the working directory looking for a \verb{citiusdata/} sibling or

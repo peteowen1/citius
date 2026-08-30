@@ -36,6 +36,11 @@ summary_games_economic_dominance <- function(games = NULL, top_n = 20L, min_gold
     # The packaged copy under inst/extdata is the normal path and is now
     # committed, so this should only fire in a working tree that has not run
     # the harvest yet.
+    # Already overridable via options(), so lower priority than
+    # duckdb_store.R's get_citius_db_path() -- but the same fragility: if
+    # data/'s internal layout is ever restructured, this default (and the
+    # matching one below for multisport_medal_tables.rds) needs the same
+    # subpath-as-parameter treatment. Noted, not fixed, 2026-08-30.
     local_path <- getOption("citius.data_dir",
                             "C:/dev/citiusverse/citiusdata/data")
     local_path <- file.path(local_path, "country_economic_history.rds")

@@ -48,18 +48,25 @@
 #' do not depend on each other.
 #'
 #' @param path Explicit path; returned as-is (normalised) if given.
-#' @return Character path to `citius.duckdb`.
+#' @param subpath Path to the database file, relative to the resolved
+#'   `citiusdata/` directory. Defaults to today's flat-layout location
+#'   (`data/citius.duckdb`). A future data-directory reorg only needs this
+#'   default updated here, not every caller -- the whole point of naming it
+#'   as a parameter rather than hardcoding it inline (found worth doing
+#'   2026-08-30, alongside `citiusdata/scripts/_paths.R`, the equivalent
+#'   indirection layer for the R-script side of this same problem).
+#' @return Character path to the database file.
 #' @keywords internal
-get_citius_db_path <- function(path = NULL) {
+get_citius_db_path <- function(path = NULL, subpath = file.path("data", "citius.duckdb")) {
   if (!is.null(path)) return(normalizePath(path, winslash = "/", mustWork = FALSE))
   cwd <- normalizePath(getwd(), winslash = "/")
   current <- cwd
   for (i in 1:10) {
     sib <- file.path(dirname(current), "citiusdata")
-    if (dir.exists(sib)) return(normalizePath(file.path(sib, "data", "citius.duckdb"),
+    if (dir.exists(sib)) return(normalizePath(file.path(sib, subpath),
                                               winslash = "/", mustWork = FALSE))
     child <- file.path(current, "citiusdata")
-    if (dir.exists(child)) return(normalizePath(file.path(child, "data", "citius.duckdb"),
+    if (dir.exists(child)) return(normalizePath(file.path(child, subpath),
                                                 winslash = "/", mustWork = FALSE))
     parent <- dirname(current)
     if (parent == current) break
