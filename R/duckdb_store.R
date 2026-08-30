@@ -151,10 +151,27 @@ citius_table_exists <- function(conn, table_name) {
 
   exists <- citius_table_exists(conn, table_name)
 
-  # SCHEMA GUARD. Target columns come from the live table when one exists (it
-  # is the ground truth if the two have drifted); from the declared schema
-  # only for a table's first-ever write.
-  target_cols <- if (exists) {
+  # SCHEMA GUARD. Target columns come from the live table when merging into
+  # one that exists (it is the ground truth if the two have drifted) or from
+  # the declared schema for a table's first-ever write. "replace" is
+  # different: it DROPs and recreates the table from `new`'s own columns
+  # (below), so checking `new` against the OLD table's columns would forbid
+  # replace from ever changing the schema -- defeating the reason replace
+  # mode exists (build_athletics_corpus.R's full-rebuild-every-run pattern
+  # needs exactly this: a new run adding a column must not be rejected
+  # because yesterday's table didn't have it yet). Found in production use
+  # (2026-08-30, the championship_results recovery), not in review -- the
+  # test suite never exercised a replace against an already-populated table
+  # with a narrower schema. Replace checks against the DECLARED schema
+  # instead, which still catches a genuine mistake (unexpected columns on
+  # the incoming data), just not a schema that intentionally evolved.
+  target_cols <- if (mode == "replace") {
+    if (is.null(schema)) {
+      DBI::dbGetQuery(conn, sprintf(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = '%s'
+         ORDER BY ordinal_position", table_name))$column_name
+    } else schema
+  } else if (exists) {
     DBI::dbGetQuery(conn, sprintf(
       "SELECT column_name FROM information_schema.columns WHERE table_name = '%s'
        ORDER BY ordinal_position", table_name))$column_name

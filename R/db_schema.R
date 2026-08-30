@@ -9,6 +9,12 @@
 # When a column is added or removed upstream, update the relevant entry here
 # in the SAME commit as the writer change, or the schema guard in
 # duckdb_store.R will reject the next write for the wrong reason.
+#
+# `championship_results`'s comp_name/comp_start/comp_tier were briefly absent
+# from the source file on 2026-08-29 (a data-recovery mistake, since fixed)
+# and so were briefly absent here too. They are legitimate columns --
+# athletics_corpus's entry already carries comp_name -- restored once the
+# recovery was corrected on 2026-08-30.
 
 #' Expected columns per citius DuckDB store table
 #'
@@ -20,7 +26,7 @@ CITIUS_DB_SCHEMA <- list(
     "event_name", "comp_day", "sex_code", "race_key", "round", "value_raw",
     "mark_string", "is_technical", "place", "wind", "indoor", "legal", "tier",
     "venue_country", "venue_city", "venue_stadium", "mark", "age",
-    "orientation", "perf"
+    "orientation", "perf", "comp_name", "comp_start", "comp_tier"
   ),
   athletics_corpus = c(
     "source", "athlete_id", "event_id", "discipline", "date", "competition_id",

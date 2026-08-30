@@ -28,6 +28,25 @@ test_that("mode = replace round-trips a fixture byte-identically", {
   expect_equal(sort(back$mark), sort(want$mark))
 })
 
+test_that("replace mode can widen the schema of an already-populated table", {
+  # Found in production use (2026-08-30): the schema guard used to check
+  # replace-mode data against the LIVE table's columns, which are about to be
+  # dropped anyway -- so a table that started narrow could never be replaced
+  # with wider data, exactly the build_athletics_corpus.R full-rebuild
+  # pattern this mode exists for.
+  conn <- .fixture_conn()
+  d1 <- make_fixture()
+  .citius_store_merge(conn, "t_widen", d1, dedup_key = "competition_id",
+                      schema = names(d1), mode = "replace")
+  d2 <- data.table::copy(make_fixture(10))
+  d2[, new_col := "x"]
+  .citius_store_merge(conn, "t_widen", d2, dedup_key = "competition_id",
+                      schema = names(d2), mode = "replace")
+  back <- DBI::dbGetQuery(conn, "SELECT * FROM t_widen")
+  expect_equal(nrow(back), nrow(d2))
+  expect_true("new_col" %in% names(back))
+})
+
 test_that("merge dedup drops whole competitions already present, not rows", {
   conn <- .fixture_conn()
   d1 <- make_fixture(20, competition_id = 1:2)
