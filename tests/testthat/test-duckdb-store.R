@@ -111,6 +111,43 @@ test_that("a forced error mid-merge leaves the table unchanged (real rollback)",
   expect_equal(after_rows, before_rows)
 })
 
+test_that("merge mode aborts when the dedup key column is missing entirely", {
+  # Found in review (2026-08-30): with the column absent, the old code let the
+  # 0-sentinel guard no-op, the dedup step match nothing, and the INSERT's
+  # column list silently exclude the key -- every row landing with a NULL
+  # key, row count still balancing, no error. Same failure shape as the
+  # 2026-08-29 incident, through a different door.
+  conn <- .fixture_conn()
+  d <- make_fixture()
+  .citius_store_merge(conn, "t_nokey", d, dedup_key = "competition_id",
+                      schema = names(d), mode = "replace")
+  before_n <- DBI::dbGetQuery(conn, "SELECT COUNT(*) n FROM t_nokey")$n
+
+  d2 <- make_fixture(5, competition_id = 99)
+  d2[, competition_id := NULL]
+  expect_error(
+    .citius_store_merge(conn, "t_nokey", d2, dedup_key = "competition_id",
+                        schema = names(d), mode = "merge"),
+    "missing from the new data"
+  )
+  after_n <- DBI::dbGetQuery(conn, "SELECT COUNT(*) n FROM t_nokey")$n
+  expect_equal(after_n, before_n)
+})
+
+test_that("the 0-sentinel guard also rejects NA in the dedup key", {
+  conn <- .fixture_conn()
+  d <- make_fixture()
+  .citius_store_merge(conn, "t_sentinel_na", d, dedup_key = "competition_id",
+                      schema = names(d), mode = "replace")
+  d2 <- make_fixture(5, competition_id = 1)
+  d2[1, competition_id := NA_integer_]
+  expect_error(
+    .citius_store_merge(conn, "t_sentinel_na", d2, dedup_key = "competition_id",
+                        schema = names(d), mode = "merge"),
+    "NA"
+  )
+})
+
 test_that("a second write connection from another PROCESS errors rather than corrupting", {
   # Same-process connections to one dbdir share an in-process DuckDB instance
   # (no lock conflict), so this constraint only surfaces cross-process -- the

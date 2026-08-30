@@ -173,15 +173,41 @@ citius_table_exists <- function(conn, table_name) {
     ))
   }
   missing <- setdiff(target_cols, names(new))
+  # The dedup key is not an ordinary column: if it's absent in "merge" mode,
+  # the 0-sentinel guard below silently no-ops (its own `if` is gated on the
+  # column existing), the dedup step matches nothing so no competition is
+  # dropped, and the INSERT's column list excludes it -- every new row lands
+  # with a NULL key. Row count still balances, so the assertion below passes
+  # and this reproduces the exact "clean exit, wrong data" shape of the
+  # 2026-08-29 incident from a different door. Found in review (2026-08-30) of
+  # this very module. A missing ORDINARY column stays a warning; the dedup key
+  # does not get to share that severity.
+  if (mode == "merge" && dedup_key %in% missing) {
+    cli::cli_abort(c(
+      "Dedup key {.field {dedup_key}} is missing from the new data.",
+      i = "Merging without it would insert every row with a NULL key and skip
+           duplicate-competition detection entirely, silently. Add the column
+           or pass {.code mode = \"replace\"} if that is genuinely intended."
+    ))
+  }
+  missing <- setdiff(missing, dedup_key)
   if (length(missing)) {
     cli::cli_warn("Columns in {table_name}'s schema absent from new data (left NULL): {.field {missing}}")
   }
 
   # 0-SENTINEL GUARD, carried verbatim from merge_referenced.R: a phantom
   # competition_id 0 once collected 2.5M rows and made every meet-level
-  # statistic meaningless. Cheap to assert, expensive to miss.
+  # statistic meaningless. Cheap to assert, expensive to miss. NA is the same
+  # class of failure (an unmatched join, not a real id) and gets the same
+  # treatment -- `na.rm = TRUE` on the OLD version of this check meant an
+  # NA-valued key sailed straight through and was later treated as "new" by
+  # the dedup intersect() (NA never equals a real existing key), inserting
+  # permanently with a NULL key. Found in the same review pass as above.
   if (dedup_key %in% names(new)) {
     key_vals <- new[[dedup_key]]
+    if (anyNA(key_vals)) {
+      cli::cli_abort("{.field {dedup_key}} contains NA in the new data -- refusing to store (a NULL key would never be recognised as a duplicate on a later run).")
+    }
     if (any(key_vals == 0, na.rm = TRUE)) {
       cli::cli_abort("{.field {dedup_key}} contains 0 in the new data -- refusing to store (see merge_referenced.R history).")
     }
@@ -194,7 +220,10 @@ citius_table_exists <- function(conn, table_name) {
 
     if (mode == "replace" || !exists) {
       duckdb::duckdb_register(conn, "citius_staging_tmp", new)
-      on.exit(tryCatch(duckdb::duckdb_unregister(conn, "citius_staging_tmp"), error = function(e) NULL), add = TRUE)
+      on.exit(tryCatch(duckdb::duckdb_unregister(conn, "citius_staging_tmp"),
+                       error = function(e) cli::cli_warn(
+                         "Failed to unregister citius_staging_tmp: {conditionMessage(e)}")),
+              add = TRUE)
       if (exists) DBI::dbExecute(conn, sprintf("DROP TABLE %s", table_name))
       DBI::dbExecute(conn, sprintf("CREATE TABLE %s AS SELECT * FROM citius_staging_tmp", table_name))
       after <- DBI::dbGetQuery(conn, sprintf("SELECT COUNT(*) AS n FROM %s", table_name))$n
@@ -218,7 +247,10 @@ citius_table_exists <- function(conn, table_name) {
         return(invisible(0L))
       }
       duckdb::duckdb_register(conn, "citius_staging_tmp", new)
-      on.exit(tryCatch(duckdb::duckdb_unregister(conn, "citius_staging_tmp"), error = function(e) NULL), add = TRUE)
+      on.exit(tryCatch(duckdb::duckdb_unregister(conn, "citius_staging_tmp"),
+                       error = function(e) cli::cli_warn(
+                         "Failed to unregister citius_staging_tmp: {conditionMessage(e)}")),
+              add = TRUE)
       col_list <- paste(intersect(target_cols, names(new)), collapse = ", ")
       DBI::dbExecute(conn, sprintf("INSERT INTO %s (%s) SELECT %s FROM citius_staging_tmp",
                                    table_name, col_list, col_list))
@@ -229,7 +261,13 @@ citius_table_exists <- function(conn, table_name) {
       list(before = before, after = after)
     }
   }, error = function(e) {
-    DBI::dbRollback(conn)
+    # If rollback ITSELF throws (e.g. the connection is already broken by
+    # whatever caused `e`), a bare `DBI::dbRollback(conn)` here would replace
+    # the real error with the rollback failure, and `stop(e)` below would
+    # never run -- hiding the actual root cause on the one path where
+    # diagnosability matters most. Found in review (2026-08-30).
+    tryCatch(DBI::dbRollback(conn), error = function(e2) cli::cli_warn(
+      "Rollback also failed after the original error: {conditionMessage(e2)}"))
     stop(e)
   })
   DBI::dbCommit(conn)
