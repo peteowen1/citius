@@ -221,15 +221,26 @@ citius_table_exists <- function(conn, table_name) {
 
   # 0-SENTINEL GUARD, carried verbatim from merge_referenced.R: a phantom
   # competition_id 0 once collected 2.5M rows and made every meet-level
-  # statistic meaningless. Cheap to assert, expensive to miss. NA is the same
-  # class of failure (an unmatched join, not a real id) and gets the same
-  # treatment -- `na.rm = TRUE` on the OLD version of this check meant an
-  # NA-valued key sailed straight through and was later treated as "new" by
-  # the dedup intersect() (NA never equals a real existing key), inserting
-  # permanently with a NULL key. Found in the same review pass as above.
+  # statistic meaningless. Cheap to assert, expensive to miss, and real
+  # regardless of mode -- a literal 0 is never a legitimate id, so this part
+  # of the guard applies to both "merge" and "replace".
+  #
+  # The NA half is NOT the same in both modes, and treating it as if it were
+  # broke store_athletics_corpus(mode = "replace") against real data --
+  # found live in review 2026-08-30: ~35% of athletics_corpus's rows
+  # legitimately carry NA competition_id BY DESIGN (career-route rows with
+  # no competition context, see build_athletics_corpus.R's own header). The
+  # original rationale ("a NULL key would never be recognised as a
+  # duplicate on a later run") is a MERGE-mode-only concern -- there is no
+  # dedup, and therefore no "later run" to fail to recognise a duplicate on,
+  # when "replace" drops and recreates the whole table from scratch every
+  # time. Gating this half to merge mode is not a relaxation of the original
+  # incident's fix (a phantom competition_id 0/NA silently corrupting an
+  # INCREMENTAL merge) -- it is scoping it to the mode where that incident
+  # could actually happen again.
   if (dedup_key %in% names(new)) {
     key_vals <- new[[dedup_key]]
-    if (anyNA(key_vals)) {
+    if (mode == "merge" && anyNA(key_vals)) {
       cli::cli_abort("{.field {dedup_key}} contains NA in the new data -- refusing to store (a NULL key would never be recognised as a duplicate on a later run).")
     }
     if (any(key_vals == 0, na.rm = TRUE)) {

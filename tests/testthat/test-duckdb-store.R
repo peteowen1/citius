@@ -153,6 +153,38 @@ test_that("merge mode aborts when the dedup key column is missing entirely", {
   expect_equal(after_n, before_n)
 })
 
+test_that("mode = replace succeeds with NA in the dedup key column (legitimate for athletics_corpus)", {
+  # Found live in review 2026-08-30: ~35% of real athletics_corpus rows have
+  # NA competition_id by design (career-route rows with no competition
+  # context). The NA-sentinel guard used to apply unconditionally, so
+  # store_athletics_corpus(mode = "replace") failed on every real call --
+  # confirmed reproducible against the actual corpus file, not hypothetical.
+  # There is no dedup in replace mode, so NA here is not the incident this
+  # guard exists to prevent.
+  conn <- .fixture_conn()
+  d <- make_fixture(10, competition_id = 1:2)
+  d[c(1, 5), competition_id := NA_integer_]
+  n <- .citius_store_merge(conn, "t_replace_na", d, dedup_key = "competition_id",
+                           schema = names(d), mode = "replace")
+  expect_equal(as.integer(n), nrow(d))
+  back_n <- DBI::dbGetQuery(conn, "SELECT COUNT(*) n FROM t_replace_na")$n
+  expect_equal(back_n, nrow(d))
+})
+
+test_that("mode = merge still rejects NA in the dedup key column (the original incident is merge-only)", {
+  conn <- .fixture_conn()
+  d <- make_fixture()
+  .citius_store_merge(conn, "t_merge_na", d, dedup_key = "competition_id",
+                      schema = names(d), mode = "replace")
+  d2 <- make_fixture(5, competition_id = 1)
+  d2[1, competition_id := NA_integer_]
+  expect_error(
+    .citius_store_merge(conn, "t_merge_na", d2, dedup_key = "competition_id",
+                        schema = names(d), mode = "merge"),
+    "NA"
+  )
+})
+
 test_that("the 0-sentinel guard also rejects NA in the dedup key", {
   conn <- .fixture_conn()
   d <- make_fixture()
