@@ -47,7 +47,8 @@ test_that("every sport-specific adapter is prefixed by its federation", {
   # clean_results() works on any sport's results, and the store functions are
   # storage, not sources.
   not_adapters <- c("clean_results", "score_predictions",
-                    "read_results_store", "write_results_store")
+                    "read_results_store", "write_results_store",
+                    "load_championship_results", "store_championship_results")
 
   leftovers <- setdiff(
     grep("_results$|^find_|_profile$|^harvest_", exported, value = TRUE),
