@@ -172,6 +172,36 @@ athletics_athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) 
         .cid <- suppressWarnings(as.integer(r$competitionId %||% NA_integer_))
         if (!length(.cid) || is.na(.cid) || .cid <= 0L) NA_integer_ else .cid
       },
+      # CAPTURE EVERYTHING THE ENDPOINT RETURNS. Deciding a field is useless at
+      # parse time is a decision that cannot be revisited without re-harvesting
+      # ~50k athletes, so the default is to keep it and judge later. These three
+      # were dropped and are now kept:
+      #   disciplineCode  canonical event code ("1500", "HTJ"). We match events
+      #                   by parsing the `discipline` STRING through
+      #                   match_event(), which is strict and returns NA rather
+      #                   than guessing -- a code is a more robust key if the
+      #                   name wording ever shifts.
+      #   event_id_wa     WA's numeric event id. NOT a race identifier: id
+      #                   10229558 appears under competitionId 7173256 AND
+      #                   7136586, and one athlete's 216 results carry only 17
+      #                   distinct values, i.e. one per discipline. Named
+      #                   `event_id_wa` so it cannot be confused with citius's
+      #                   own `event_id`, and it is NOT a fix for the merged-
+      #                   heats race_key problem.
+      #   records         record flags (WR/AR/NR). Empty on all 225 rows
+      #                   sampled, so the contents are unconfirmed -- kept as a
+      #                   collapsed string precisely because we cannot yet say
+      #                   what it holds.
+      discipline_code = r$disciplineCode %||% NA_character_,
+      event_id_wa   = {
+        .eid <- suppressWarnings(as.integer(r$eventId %||% NA_integer_))
+        if (!length(.eid) || is.na(.eid) || .eid <= 0L) NA_integer_ else .eid
+      },
+      records       = {
+        .rec <- r$records
+        if (is.null(.rec) || !length(.rec)) NA_character_
+        else paste(unlist(.rec), collapse = "|")
+      },
       # performanceValue is milliseconds for track, centimetres for field
       value_raw     = as.numeric(r$performanceValue %||% NA_real_),
       mark_string   = r$mark %||% NA_character_,
@@ -203,7 +233,11 @@ athletics_athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) 
     discipline = character(), event_id = character(), mark = numeric(),
     perf = numeric(), place = integer(), round = character(), wind = numeric(),
     indoor = logical(), legal = logical(), tier = character(), age = numeric(),
-    venue_country = character(), result_score = numeric(), sex = character()
+    venue_country = character(), result_score = numeric(), sex = character(),
+    # Kept in step with the parser above -- a zero-result athlete must return
+    # the same shape as one with results, or rbindlist(fill=TRUE) quietly
+    # produces different columns depending on who was harvested first.
+    discipline_code = character(), event_id_wa = integer(), records = character()
   )
 }
 
