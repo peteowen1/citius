@@ -350,46 +350,68 @@ store_athletics_history <- function(conn, new, mode = c("merge", "replace")) {
                       mode = match.arg(mode))
 }
 
+# ALL THREE LOADERS TAKE THE SAME FILTERS, deliberately (2026-09-03). They
+# used to differ: only the corpus supported `columns`, and history supported
+# only `athlete_ids` with no date/event/column filtering at all. That
+# asymmetry is a migration blocker rather than a style problem -- a caller
+# moving off readRDS() has to narrow columns to avoid materialising the
+# whole table (backtest_athletics.R documents an OOM kill from exactly that),
+# and it could only do so for one of the three tables. All three schemas
+# carry event_id, date and athlete_id (see db_schema.R), so there is no
+# table-specific reason for the filters to differ.
+
 #' Load championship results from the citius DuckDB store
 #' @param conn Connection.
 #' @param events,from,to Optional filters: event_id vector, date range.
+#' @param athlete_ids Optional athlete_id filter.
+#' @param columns Optional column subset.
 #' @return A data.table.
 #' @export
-load_championship_results <- function(conn, events = NULL, from = NULL, to = NULL) {
-  .citius_load(conn, "championship_results", events, from, to)
+load_championship_results <- function(conn, events = NULL, from = NULL, to = NULL,
+                                      athlete_ids = NULL, columns = NULL) {
+  .citius_load(conn, "championship_results", events, from, to, columns, athlete_ids)
 }
 
 #' Load the athletics corpus from the citius DuckDB store
 #' @param conn Connection.
 #' @param events,from,to Optional filters: event_id vector, date range.
+#' @param athlete_ids Optional athlete_id filter.
 #' @param columns Optional column subset.
 #' @return A data.table.
 #' @export
-load_athletics_corpus <- function(conn, events = NULL, from = NULL, to = NULL, columns = NULL) {
-  .citius_load(conn, "athletics_corpus", events, from, to, columns)
+load_athletics_corpus <- function(conn, events = NULL, from = NULL, to = NULL,
+                                  columns = NULL, athlete_ids = NULL) {
+  .citius_load(conn, "athletics_corpus", events, from, to, columns, athlete_ids)
 }
 
 #' Load athlete history rows from the citius DuckDB store
 #' @param conn Connection.
 #' @param athlete_ids Optional athlete_id filter.
+#' @param events,from,to Optional filters: event_id vector, date range.
+#' @param columns Optional column subset.
 #' @return A data.table.
 #' @export
-load_athletics_history <- function(conn, athlete_ids = NULL) {
-  where <- character(0)
-  params <- list()
-  if (!is.null(athlete_ids)) {
-    where <- c(where, sprintf("athlete_id IN (%s)", paste(rep("?", length(athlete_ids)), collapse = ",")))
-    params <- c(params, as.list(athlete_ids))
-  }
-  sql <- "SELECT * FROM athletics_history"
-  if (length(where)) sql <- paste(sql, "WHERE", paste(where, collapse = " AND "))
-  data.table::setDT(DBI::dbGetQuery(conn, sql, params = params))
+load_athletics_history <- function(conn, athlete_ids = NULL, events = NULL,
+                                   from = NULL, to = NULL, columns = NULL) {
+  .citius_load(conn, "athletics_history", events, from, to, columns, athlete_ids)
 }
 
 #' @keywords internal
-.citius_load <- function(conn, table_name, events, from, to, columns = NULL) {
+.citius_load <- function(conn, table_name, events = NULL, from = NULL, to = NULL,
+                         columns = NULL, athlete_ids = NULL) {
   if (!citius_table_exists(conn, table_name)) {
     cli::cli_abort("No {.field {table_name}} table in the citius DB yet.")
+  }
+  # A caller asking for a column this table does not have should hear about
+  # it here, not get a bare DuckDB parse error naming no table.
+  if (!is.null(columns)) {
+    known <- CITIUS_DB_SCHEMA[[table_name]]
+    unknown <- setdiff(columns, known)
+    if (length(unknown)) {
+      cli::cli_abort(c(
+        "x" = "{.field {table_name}} has no column{?s} {.val {unknown}}.",
+        "i" = "Known columns: {.val {known}}"))
+    }
   }
   cols <- if (is.null(columns)) "*" else paste(columns, collapse = ", ")
   where <- character(0)
@@ -397,6 +419,10 @@ load_athletics_history <- function(conn, athlete_ids = NULL) {
   if (!is.null(events)) {
     where <- c(where, sprintf("event_id IN (%s)", paste(rep("?", length(events)), collapse = ",")))
     params <- c(params, as.list(events))
+  }
+  if (!is.null(athlete_ids)) {
+    where <- c(where, sprintf("athlete_id IN (%s)", paste(rep("?", length(athlete_ids)), collapse = ",")))
+    params <- c(params, as.list(as.character(athlete_ids)))
   }
   if (!is.null(from)) { where <- c(where, "date >= ?"); params <- c(params, list(as.character(from))) }
   if (!is.null(to))   { where <- c(where, "date <= ?"); params <- c(params, list(as.character(to))) }
