@@ -4,12 +4,23 @@
 \alias{load_championship_results}
 \title{Load championship results from the citius DuckDB store}
 \usage{
-load_championship_results(conn, events = NULL, from = NULL, to = NULL)
+load_championship_results(
+  conn,
+  events = NULL,
+  from = NULL,
+  to = NULL,
+  athlete_ids = NULL,
+  columns = NULL
+)
 }
 \arguments{
 \item{conn}{Connection.}
 
 \item{events, from, to}{Optional filters: event_id vector, date range.}
+
+\item{athlete_ids}{Optional athlete_id filter.}
+
+\item{columns}{Optional column subset.}
 }
 \value{
 A data.table.

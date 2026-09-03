@@ -221,7 +221,18 @@ map_calendar_results_to_championship_schema <- function(results) {
 #' @keywords internal
 #' @noRd
 .drop_contradictory_track_rows <- function(dt) {
-  track <- dt[is_technical %in% FALSE]
+  # NA athlete_id EXCLUDED from this check, not just from the grouping key.
+  # `athlete_id` is NA whenever a competitor's urlSlug fails to parse -- not
+  # rare -- and data.table groups every NA together, so two DIFFERENT real
+  # athletes with unparseable slugs in the same race land in one
+  # (race_key, NA) group. Their marks genuinely differ (different people), the
+  # group reads as "disagreeing mark/place," and both athletes' real results
+  # were dropped as if they were one contradictory athlete. Found by review
+  # 2026-09-04 -- same bug class already fixed for competition_id elsewhere in
+  # this file, reintroduced here. Rows with NA athlete_id pass through
+  # untouched: their data isn't wrong, it just can't be compared against a
+  # stranger's.
+  track <- dt[is_technical %in% FALSE & !is.na(athlete_id)]
   if (!nrow(track)) return(dt)
   bad_keys <- track[, .(n_marks = data.table::uniqueN(mark_string),
                         n_places = data.table::uniqueN(place)),

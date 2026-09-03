@@ -4,12 +4,23 @@
 \alias{load_athletics_history}
 \title{Load athlete history rows from the citius DuckDB store}
 \usage{
-load_athletics_history(conn, athlete_ids = NULL)
+load_athletics_history(
+  conn,
+  athlete_ids = NULL,
+  events = NULL,
+  from = NULL,
+  to = NULL,
+  columns = NULL
+)
 }
 \arguments{
 \item{conn}{Connection.}
 
 \item{athlete_ids}{Optional athlete_id filter.}
+
+\item{events, from, to}{Optional filters: event_id vector, date range.}
+
+\item{columns}{Optional column subset.}
 }
 \value{
 A data.table.

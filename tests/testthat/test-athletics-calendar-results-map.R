@@ -84,6 +84,33 @@ test_that("field-event multi-attempt rows for one athlete are kept, not treated 
   expect_equal(data.table::uniqueN(mapped$race_key), 1L)  # same race
 })
 
+test_that(".drop_contradictory_track_rows() does not collapse two different athletes who both have NA athlete_id", {
+  # Regression for the 2026-09-04 review finding: the contradiction check
+  # grouped by (race_key, athlete_id), and athlete_id is NA whenever a
+  # competitor's urlSlug fails to parse -- not rare. Two DIFFERENT real
+  # athletes with unparseable slugs in the same race used to land in one
+  # (race_key, NA) group; their marks genuinely differ (different people), so
+  # the group read as "disagreeing mark/place" and BOTH athletes' real
+  # results were silently dropped.
+  fake <- .fake_track_result(999L, athlete_id = c(NA_integer_, NA_integer_),
+                             athlete_name = c("Unparseable One", "Unparseable Two"),
+                             race_id = 10L, race_number = 1L, round = "Heat 1",
+                             mark = c("10.20", "10.55"), place = c("1.", "2."))
+  mapped <- map_calendar_results_to_championship_schema(fake)
+  expect_equal(nrow(mapped), 2L)  # neither real athlete's result was dropped
+  expect_true(all(is.na(mapped$athlete_id)))
+
+  # Control: the ORIGINAL bug this function exists to catch must still work --
+  # a single real athlete_id with genuinely disagreeing mark/place in the same
+  # race is still dropped.
+  fake_real <- .fake_track_result(999L, athlete_id = c(7L, 7L),
+                                  athlete_name = c("Real Athlete", "Real Athlete"),
+                                  race_id = 11L, race_number = 1L, round = "Heat 1",
+                                  mark = c("10.23", "10.99"), place = c("1.", "3."))
+  mapped_real <- map_calendar_results_to_championship_schema(fake_real)
+  expect_equal(nrow(mapped_real), 0L)  # the genuine contradiction is still caught
+})
+
 test_that("map_calendar_results_to_championship_schema() works on real, current data", {
   skip_if_offline("worldathletics.org")
   r <- athletics_calendar_results(7214476)

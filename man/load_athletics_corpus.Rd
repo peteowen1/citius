@@ -9,7 +9,8 @@ load_athletics_corpus(
   events = NULL,
   from = NULL,
   to = NULL,
-  columns = NULL
+  columns = NULL,
+  athlete_ids = NULL
 )
 }
 \arguments{
@@ -18,6 +19,8 @@ load_athletics_corpus(
 \item{events, from, to}{Optional filters: event_id vector, date range.}
 
 \item{columns}{Optional column subset.}
+
+\item{athlete_ids}{Optional athlete_id filter.}
 }
 \value{
 A data.table.
