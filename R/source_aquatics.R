@@ -152,6 +152,15 @@ aquatics_results <- function(discipline_id) {
   dt[, indoor := NA]
   dt[, wind := NA_real_]
   dt[, legal := TRUE]
+  # `age` is the cross-sport contract -- athletics_athlete_results() computes it
+  # from birthdate, .empty_result_dt() declares it, and validate_data.R checks
+  # it. This parser only ever set `age_at_result`, so every swimming row carried
+  # an empty `age` beside a populated `age_at_result` (97%, range 10-53, median
+  # 21) and the zero-result path returned a different shape from the populated
+  # one. The two mean the same thing: the athlete's age at that result. Keep
+  # both -- age_at_result is what the source called it, age is what the rest of
+  # the codebase reads.
+  dt[, age := age_at_result]
 
   sex <- ifelse(grepl("^W|female", gender, ignore.case = TRUE), "W", "M")
   .finalise_results(dt, sex = sex)
