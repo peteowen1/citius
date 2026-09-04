@@ -89,6 +89,22 @@ add_race_key <- function(results) {
       i = "Harvest with a source that carries competition ids before calibrating."
     ))
   }
+  # THIS KEY CANNOT SEPARATE SECTIONS, so it must never overwrite one that can.
+  # Every heat of a championship round shares competition, event, round and date,
+  # so deriving over the top of a real key merges them into one pseudo-race. That
+  # is what happened to the athletics corpus until 2026-08-14: 27.6% of its races
+  # had more than one winner, one "final" had 45, and every variance estimate
+  # downstream was fitted on those merged fields. See
+  # ../../docs/incidents/ for the write-up, and build_athletics_corpus.R for the
+  # caller-side rule that preserves authoritative keys.
+  if ("race_key" %in% names(dt) && any(!is.na(dt$race_key))) {
+    cli::cli_warn(c(
+      "{sum(!is.na(dt$race_key))} row{?s} already carry a {.field race_key}; overwriting it with a derived one.",
+      i = "The derived key is competition|event|round|date and cannot tell one
+           heat of a round from another. Preserve the existing key and derive
+           only for rows that lack one."
+    ), .frequency = "once", .frequency_id = "citius_race_key_overwrite")
+  }
   comp <- if ("competition_id" %in% names(dt)) dt$competition_id else NA
   rnd <- if ("round" %in% names(dt)) dt$round else NA
   dt[, race_key := paste(comp, event_id, rnd, as.character(date), sep = "|")]
