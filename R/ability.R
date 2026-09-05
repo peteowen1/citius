@@ -1490,10 +1490,27 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
 
   if (!is.null(only)) ab <- ab[as.character(athlete_id) %in% as.character(only)]
 
+  # `sigma_raw` and `sigma_rob` are returned alongside the emitted `sigma`
+  # because without them the spread pipeline cannot be audited from outside.
+  #
+  # 2026-09-05: per-athlete sigma predicts an athlete's FUTURE scatter at
+  # pearson 0.057 where a plain SD of their own past marks manages 0.097, and
+  # it runs at about half the true level. Six hypotheses were tested from
+  # outside the function and eliminated -- the robust estimator, the decay
+  # window, `k` varying with sample size, the constant blend, precision
+  # weighting, and the context-adjustment chain. Every input reconstructable
+  # externally lands at ~0.0148 against an internal 0.0090, so the remaining
+  # gap is between these two quantities and the emitted one, and NONE of it was
+  # observable because neither was returned. That is six diagnostics' worth of
+  # work a two-column addition would have saved.
+  #
+  # Additive only: existing callers select by name and are unaffected.
   cols <- c("athlete_id", "event_id", "ability", "ability_raw", "sigma",
+            "sigma_raw", "sigma_rob",
             "ability_se", "n", "n_eff", "w_total", "shrinkage", "prior_mu",
             "age_ref", "last_date")
   if ("ability_peak" %in% names(ab)) cols <- c(cols, "ability_peak")
+  cols <- intersect(cols, names(ab))
   ab[, cols, with = FALSE][]
 }
 
@@ -1575,7 +1592,11 @@ condition_prior <- function(ability, field = NULL, weight = 1) {
 .empty_ability <- function() {
   data.table::data.table(
     athlete_id = character(), event_id = character(), ability = numeric(),
-    ability_raw = numeric(), sigma = numeric(), ability_se = numeric(),
+    ability_raw = numeric(), sigma = numeric(),
+    # Kept in step with the populated return above. An empty table whose
+    # columns differ from a populated one is how a caller that binds the two
+    # ends up with silent NAs.
+    sigma_raw = numeric(), sigma_rob = numeric(), ability_se = numeric(),
     n = integer(), n_eff = numeric(), w_total = numeric(),
     shrinkage = numeric(), prior_mu = numeric(), age_ref = numeric(),
     last_date = as.Date(character())
