@@ -10,7 +10,8 @@ result_weight(
   round = NA_character_,
   as_of = Sys.Date(),
   half_life = 540,
-  calibration = NULL
+  calibration = NULL,
+  tier_class = NULL
 )
 }
 \arguments{
@@ -29,6 +30,13 @@ World Aquatics \code{"Final"}/\code{"Heats"}).}
 \item{calibration}{Optional \code{citius_calibration} from \code{\link[=calibrate]{calibrate()}}. Supplies
 measured precisions for each round and tier. Without one, context weights
 are flat and only recency applies.}
+
+\item{tier_class}{Optional pre-resolved tier class (\code{"top"}, \code{"mid"},
+\code{"low"}, ...). Supply this when the caller can resolve the class better
+than the feed code allows — \code{estimate_ability()} passes the catalogue-aware
+class so that the weights and the offsets share one vocabulary. Pass the
+\emph{class}, never a class routed back through \code{tier}: unrecognised codes map
+to \code{"mid"}, so double-mapping is silent.}
 }
 \value{
 Numeric vector of non-negative weights.

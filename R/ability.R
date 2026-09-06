@@ -45,12 +45,18 @@
 #' @param calibration Optional `citius_calibration` from [calibrate()]. Supplies
 #'   measured precisions for each round and tier. Without one, context weights
 #'   are flat and only recency applies.
+#' @param tier_class Optional pre-resolved tier class (`"top"`, `"mid"`,
+#'   `"low"`, ...). Supply this when the caller can resolve the class better
+#'   than the feed code allows — `estimate_ability()` passes the catalogue-aware
+#'   class so that the weights and the offsets share one vocabulary. Pass the
+#'   *class*, never a class routed back through `tier`: unrecognised codes map
+#'   to `"mid"`, so double-mapping is silent.
 #' @return Numeric vector of non-negative weights.
 #' @seealso [calibrate()]
 #' @export
 result_weight <- function(date, tier = NA_character_, round = NA_character_,
                           as_of = Sys.Date(), half_life = 540,
-                          calibration = NULL) {
+                          calibration = NULL, tier_class = NULL) {
   n <- length(date)
   age_days <- as.numeric(as_of - as.Date(date))
   # KNOWN CHOICE, not an oversight: an NA or future date gets age 0, i.e. FULL
@@ -64,8 +70,24 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
   tier <- rep_len(as.character(tier), n)
   round <- rep_len(as.character(round), n)
 
+  # `tier_class` lets the caller pass a class that is already resolved -- in
+  # practice .tier_class_of(), which prefers the catalogue's meet_tier. Without
+  # it this function can only see the feed code, and the WAC promotion
+  # (31aff53) made that a real divergence rather than a cosmetic one: the
+  # OFFSETS moved to a three-class WAC vocabulary (top/mid/low) while the
+  # WEIGHTS kept looking up the four-class feed one, which also emits "high".
+  # "high" then matched nothing and silently took the median precision --
+  # weighting ~469k of the least reliable rows in the corpus 29% too heavily
+  # (fitted 0.7132 -> median 0.9211). Passing the class in is what keeps both
+  # sides of a calibration speaking the same language.
+  #
+  # Do NOT route a resolved class back through `tier`: .tier_class() maps any
+  # unrecognised code to "mid", so .tier_class("top") is "mid", and the
+  # double-mapping would be silent.
+  tc <- if (is.null(tier_class)) .tier_class(tier) else rep_len(as.character(tier_class), n)
+
   recency * .context_precision(calibration, "round", .round_class(round)) *
-    .context_precision(calibration, "tier", .tier_class(tier))
+    .context_precision(calibration, "tier", tc)
 }
 
 #' Measured precision of a context, or a flat weight when uncalibrated
@@ -87,7 +109,40 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
   }
   tbl <- calibration[[which]]
   col <- if (which == "round") "round_class" else "tier_class"
-  out <- tbl$precision[match(classes, tbl[[col]])]
+  hit <- match(classes, tbl[[col]])
+
+  # A label the table does not have is a VOCABULARY MISMATCH, not a novelty,
+  # and it must be loud. The median substitution below is good defensive code
+  # and it is exactly what hid the WAC promotion's worst side effect for two
+  # days: moving the calibration to a three-class tier vocabulary deleted the
+  # "high" bucket that result_weight() still asked for, so ~469k of the least
+  # precise rows in the corpus silently weighted 29% too heavily (0.7132 ->
+  # median 0.9211) with nothing failing and no NA anywhere.
+  #
+  # A fallback keyed on "did the lookup match" cannot tell an unknown label
+  # from one the calibration USED TO HAVE. Naming the two vocabularies is what
+  # makes the difference visible, so that is what this does.
+  # WARN, not abort. Aborting is the instinct and it is wrong here: the known
+  # remaining mismatch ("high" from the feed fallback, see .tier_class_of) is
+  # real, is documented, and affects rows that must still be weighted somehow.
+  # Killing the run would force a modelling change to be made under time
+  # pressure, which is how the original defect shipped. Naming both
+  # vocabularies is enough to stop it hiding for two days again.
+  miss <- unique(classes[is.na(hit) & !is.na(classes)])
+  if (length(miss)) {
+    cli::cli_warn(c(
+      "!" = "{.field {which}} class{?es} {.val {miss}} {?is/are} not in the calibration;
+             taking the median precision.",
+      "i" = "The calibration offers: {.val {unique(tbl[[col]])}}.",
+      "i" = "A vocabulary mismatch, not a novelty: the substitution is silent in
+             the numbers, so it is said out loud here. This is how the WAC
+             promotion mis-weighted ~10% of the corpus for two days.",
+      .frequency = "once", .frequency_id = paste0("citius_ctx_prec_", which)))
+  }
+
+  out <- tbl$precision[hit]
+  # NA classes still take the median: those are genuinely unknown context, not
+  # a mismatch, and refusing to weight them at all would drop the result.
   out[!is.finite(out)] <- stats::median(tbl$precision, na.rm = TRUE)
   out[!is.finite(out)] <- 1
   out
@@ -597,6 +652,22 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @keywords internal
 #' @noRd
 .tier_class_of <- function(dt) {
+  # KNOWN VOCABULARY SPLIT, deliberately left in place (2026-09-06). This
+  # fallback is the legacy FOUR-class feed mapping (top/high/mid/low) while the
+  # catalogue branch below is the THREE-class WAC one (top/mid/low), so a row
+  # without `meet_tier` and a feed code of A or B still yields "high" -- a class
+  # the WAC-fitted calibration does not contain, which then takes the median
+  # precision in .context_precision().
+  #
+  # Collapsing the fallback onto the WAC table (A/B/C/D -> "mid", DF -> "top")
+  # would remove the split and is probably right -- WAC calls the Diamond League
+  # Final elite and it plainly is. But it MOVES ~7.5% of the corpus between
+  # buckets and changes which offsets are fitted, which makes it a modelling
+  # change, not a bugfix. It ships through a measured arm or not at all.
+  #
+  # What IS fixed: estimate_ability() now passes this resolved class to
+  # result_weight(), so the 84.6% of rows the catalogue covers weight and offset
+  # on the same label. Only the uncovered remainder can still reach "high".
   fb <- .tier_class(if ("tier" %in% names(dt)) dt$tier else NA_character_)
   if (!"meet_tier" %in% names(dt)) return(fb)
   mapped <- unname(c(T1_elite = "top", T2_strong = "mid",
@@ -1090,10 +1161,15 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   hl_spec <- if (!is.null(calibration) && !is.null(calibration$half_life) &&
                  missing(half_life)) calibration$half_life else half_life
   dt[, hl := .event_half_life(event_id, hl_spec)]
+  # tier_class comes from .tier_class_of(), the SAME resolver the offsets use
+  # (line 286), so the weighting and the offsets cannot drift onto different
+  # tier vocabularies. Passing only `tier` here is what let the WAC promotion
+  # reach the offsets and miss the weights.
   dt[, w := result_weight(date, tier = if ("tier" %in% names(dt)) tier else NA_character_,
                           round = if ("round" %in% names(dt)) round else NA_character_,
                           as_of = as_of, half_life = hl,
-                          calibration = calibration)]
+                          calibration = calibration,
+                          tier_class = .tier_class_of(dt))]
 
   if (is.numeric(peak_gamma) && peak_gamma > 0) {
     dt[, .q := data.table::frank(perf, ties.method = "first") / .N, by = .(athlete_id, event_id)]
