@@ -18,6 +18,38 @@
 # estimate_ability()), fitting k is the natural first arm.
 .CITIUS_SIGMA_PSEUDO_N <- 2
 
+# Env override for the pseudo-count, so an arm can test it without a code edit
+# (2026-09-06: the shoot-out put pseudo-n 20-40 well ahead of 2 on hold-out
+# allocation skill; the arm that decides is run through this). Unset = 2, the
+# validated bundle above. Anything unparseable or negative falls back to 2 and
+# says so, rather than silently running the default under a different label.
+.sigma_pseudo_n <- function() {
+  raw <- Sys.getenv("CITIUS_SIGMA_PSEUDO_N", "")
+  if (!nzchar(raw)) return(.CITIUS_SIGMA_PSEUDO_N)
+  v <- suppressWarnings(as.numeric(raw))
+  if (!is.finite(v) || v < 0) {
+    cli::cli_warn("CITIUS_SIGMA_PSEUDO_N={.val {raw}} is not a non-negative number; using {(.CITIUS_SIGMA_PSEUDO_N)}.")
+    return(.CITIUS_SIGMA_PSEUDO_N)
+  }
+  v
+}
+
+# Env override for a global multiplier on the per-athlete sigma AFTER shrinkage
+# and the per-family context ratio. Unset = 1. This exists so the PIT coverage
+# check can find the scale at which the simulated spread is calibrated; the
+# fitted value belongs in the calibration object, not in an env var, before it
+# ships (the "no hand-tuned constants" rule).
+.sigma_scale_env <- function() {
+  raw <- Sys.getenv("CITIUS_SIGMA_SCALE", "")
+  if (!nzchar(raw)) return(1)
+  v <- suppressWarnings(as.numeric(raw))
+  if (!is.finite(v) || v <= 0) {
+    cli::cli_warn("CITIUS_SIGMA_SCALE={.val {raw}} is not a positive number; using 1.")
+    return(1)
+  }
+  v
+}
+
 #' Weight a historical result by recency, competition tier and round
 #'
 #' Controls how much each past performance counts toward an athlete's current
@@ -1485,14 +1517,15 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # A two-race athlete's sample spread is close to meaningless on its own, so
   # blend toward the event value by absolute evidence.
   shrink_w <- if (use_weight) ab$w_total else ab$n_eff
+  k_pn <- .sigma_pseudo_n()
   # Mirror the blend with the measured target BEFORE `sigma` is overwritten, so
   # the two paths differ in exactly one input and nothing else.
   if (!is.null(sigma_shr_target)) {
-    ab[, sigma_shr := (shrink_w * sigma + .CITIUS_SIGMA_PSEUDO_N * sigma_shr_target) /
-                      (shrink_w + .CITIUS_SIGMA_PSEUDO_N)]
+    ab[, sigma_shr := (shrink_w * sigma + k_pn * sigma_shr_target) /
+                      (shrink_w + k_pn)]
   }
-  ab[, sigma := (shrink_w * sigma + .CITIUS_SIGMA_PSEUDO_N * sigma_target) /
-                (shrink_w + .CITIUS_SIGMA_PSEUDO_N)]
+  ab[, sigma := (shrink_w * sigma + k_pn * sigma_target) /
+                (shrink_w + k_pn)]
 
   # Rescale to the context being FORECAST. sigma is fitted across the pooled
   # history, but the target is a top-tier final, and that is a narrower slice of
@@ -1512,6 +1545,11 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     ratio[!is.finite(ratio) | ratio <= 0] <- 1
     ab[, sigma := sigma * ratio]
     if ("sigma_shr" %in% names(ab)) ab[, sigma_shr := sigma_shr * ratio]
+  }
+  sc_env <- .sigma_scale_env()
+  if (sc_env != 1) {
+    ab[, sigma := sigma * sc_env]
+    if ("sigma_shr" %in% names(ab)) ab[, sigma_shr := sigma_shr * sc_env]
   }
 
   # `sigma_mode = "event"` gives every athlete their event's measured spread.
