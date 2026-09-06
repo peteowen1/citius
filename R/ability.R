@@ -928,6 +928,15 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
         b_t <- bt$beta[match(rr$.tcl, bt$tier_class)]
         beta_r[is.finite(b_t)] <- b_t[is.finite(b_t)]
       }
+      # Per-race beta, when the fitter stored one: persistence as a function of
+      # what the race looked like (tier, share of the field that PB'd, wind,
+      # size of the excess). A race where the whole field PB'd carries less
+      # forward than its tier average says.
+      if (!is.null(rs$by_race) && NROW(rs$by_race)) {
+        br <- data.table::as.data.table(rs$by_race)
+        b_r <- br$beta[match(as.character(rr$race_key), as.character(br$race_key))]
+        beta_r[is.finite(b_r)] <- b_r[is.finite(b_r)]
+      }
       beta_r <- pmin(pmax(beta_r, 0), 1)
       cr <- ((1 - beta_r) * (rr$c_r - e_cell))[i]
     } else {
