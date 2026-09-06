@@ -938,6 +938,15 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
         beta_r[is.finite(b_r)] <- b_r[is.finite(b_r)]
       }
       beta_r <- pmin(pmax(beta_r, 0), 1)
+      # FAMILY GATE. Two marks arms (2026-09-07, tier beta and per-race beta)
+      # both improved sprint, hurdles, jump and throw and worsened middle,
+      # distance and road: in the endurance events a shared effect is pacing
+      # and course, which persist, and stripping them removes real form.
+      # `rs$families` names where the strip applies; absent means everywhere.
+      if (!is.null(rs$families) && length(rs$families)) {
+        fam_rr <- .citius_event_registry$family[match(rr$event_id, .citius_event_registry$event_id)]
+        beta_r[is.na(fam_rr) | !fam_rr %in% rs$families] <- 1
+      }
       cr <- ((1 - beta_r) * (rr$c_r - e_cell))[i]
     } else {
       cr <- rr$c_r[i] - rr$ref_c_r[i]
