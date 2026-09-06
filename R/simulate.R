@@ -18,18 +18,56 @@
 #'
 #' @param event_id Character vector of canonical event ids.
 #' @param calibration Optional `citius_calibration` from [calibrate()].
+#' @param context Optional `list(meet_tier = , round_class = )`; see [simulate_event()].
 #' @return Numeric vector of shared-shock standard deviations.
 #' @seealso [calibrate()]
 #' @export
-race_conditions <- function(event_id, calibration = NULL) {
+race_conditions <- function(event_id, calibration = NULL, context = NULL) {
   reg <- .citius_event_registry
   idx <- match(event_id, reg$event_id)
   fallback <- reg$cv_prior[idx] * 0.25
   fallback[is.na(fallback)] <- 0.003
 
   vapply(seq_along(event_id), function(i) {
+    ctx <- .condition_sd_context(calibration, event_id[i], context)
+    if (is.finite(ctx)) return(ctx)
     .calibrated_value(calibration, event_id[i], "condition_sd", fallback[i])
   }, numeric(1))
+}
+
+# The shared-shock sd for ONE race context, or NA when the calibration carries
+# no context table, no context was given, or nothing matches.
+#
+# WHY THIS EXISTS (2026-09-06). `condition_sd` is fitted on every race in the
+# corpus. Measured on T1 finals (PIT coverage + variance decomposition, see
+# docs/reviews/spread-and-level-in-t1-finals-2026-09-06.md), the race-to-race
+# variance a championship final actually shows is 16-71% of that value squared
+# by family -- a final shares far less than a heat or a low-tier meet. The
+# table is built by citiusdata/scripts/build_calibration_condsd_context.R from
+# the same fitted race effects, keyed by event x catalogue meet_tier x round
+# class, shrunk toward the family cell. Lookup: event cell, else family cell,
+# else NA (caller falls back to the global value). A shared shock cannot move
+# placings, so this changes marks distributions and mark-threshold
+# probabilities, not medal probabilities -- except through athlete-specific
+# sensitivity, which scales with it.
+.condition_sd_context <- function(calibration, ev, context) {
+  if (is.null(context) || is.null(calibration)) return(NA_real_)
+  tbl <- calibration$condition_sd_context
+  if (is.null(tbl) || !nrow(tbl)) return(NA_real_)
+  mt <- context$meet_tier
+  rc <- context$round_class
+  if (is.null(mt) || is.null(rc) || is.na(mt) || is.na(rc)) return(NA_real_)
+  mt <- as.character(mt)[1]; rc <- as.character(rc)[1]
+  lvl <- tbl$level; te <- tbl$event_id; tm <- tbl$meet_tier; tr <- tbl$round_class
+  k <- which(lvl == "event" & !is.na(te) & te == ev & tm == mt & tr == rc)
+  if (!length(k)) {
+    fam <- .citius_event_registry$family[match(ev, .citius_event_registry$event_id)]
+    if (is.na(fam)) return(NA_real_)
+    k <- which(lvl == "family" & tbl$family == fam & tm == mt & tr == rc)
+  }
+  if (!length(k)) return(NA_real_)
+  v <- tbl$cond_sd[k[1]]
+  if (!is.finite(v) || v < 0) NA_real_ else v
 }
 
 
@@ -115,6 +153,12 @@ condition_sensitivity <- function(ability, event_id, calibration = NULL) {
 #'   entrant toward this field's own mean via [condition_prior()] before
 #'   simulating. `0` (the default) leaves the ability table as supplied; only
 #'   applied when the table carries `ability_raw`, `shrinkage` and `prior_mu`.
+#' @param context Optional `list(meet_tier = , round_class = )` naming the race
+#'   being simulated (catalogue tier `T1_elite`/`T2_strong`/`T3_development`,
+#'   round class `final`/`semi`/`heat`/`other`). When the calibration carries
+#'   a `condition_sd_context` table the shared-shock sd is taken from the
+#'   matching event or family cell instead of the event-wide value; otherwise
+#'   ignored. `NULL` (the default) reproduces the event-wide behaviour exactly.
 #' @param seed Optional integer seed for reproducibility. The RNG state is
 #'   restored on exit, so a seeded simulation does not change the draws of
 #'   whatever runs after it.
@@ -141,7 +185,8 @@ condition_sensitivity <- function(ability, event_id, calibration = NULL) {
 simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
                            df = NULL, foul_prob = NULL, taper = 0,
                            form_sd = NULL, calibration = NULL,
-                           condition_prior_weight = 0.0, seed = NULL) {
+                           condition_prior_weight = 0.0, seed = NULL,
+                           context = NULL) {
   ab <- data.table::as.data.table(ability)
   req <- c("athlete_id", "event_id", "ability", "sigma")
   missing <- setdiff(req, names(ab))
@@ -161,7 +206,7 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
     cli::cli_warn("Multiple events supplied; using {.val {event_id}} for condition and foul settings.")
   }
 
-  if (is.null(condition_sd)) condition_sd <- race_conditions(event_id, calibration)
+  if (is.null(condition_sd)) condition_sd <- race_conditions(event_id, calibration, context)
   if (is.null(df)) {
     # Measured tail weight where available. The previous hard-coded 6 put about
     # three times too much mass beyond two standard deviations, manufacturing
@@ -312,7 +357,8 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
       perf = perf, perf_std = perf_std, rank = rank, ability = ab, event_id = event_id,
       orientation = orientation, n_sims = n_sims,
       settings = list(condition_sd = condition_sd, df = df,
-                      foul_prob = foul_prob, taper = taper, form_sd = form_sd)
+                      foul_prob = foul_prob, taper = taper, form_sd = form_sd,
+                      context = context)
     ),
     class = "citius_sim"
   )

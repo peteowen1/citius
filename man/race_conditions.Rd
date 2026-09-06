@@ -4,12 +4,14 @@
 \alias{race_conditions}
 \title{Magnitude of shared race-condition effects}
 \usage{
-race_conditions(event_id, calibration = NULL)
+race_conditions(event_id, calibration = NULL, context = NULL)
 }
 \arguments{
 \item{event_id}{Character vector of canonical event ids.}
 
 \item{calibration}{Optional \code{citius_calibration} from \code{\link[=calibrate]{calibrate()}}.}
+
+\item{context}{Optional \code{list(meet_tier = , round_class = )}; see \code{\link[=simulate_event]{simulate_event()}}.}
 }
 \value{
 Numeric vector of shared-shock standard deviations.
