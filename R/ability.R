@@ -39,6 +39,17 @@
 # check can find the scale at which the simulated spread is calibrated; the
 # fitted value belongs in the calibration object, not in an env var, before it
 # ships (the "no hand-tuned constants" rule).
+.sigma_marks_pseudo_n <- function() {
+  raw <- Sys.getenv("CITIUS_SIGMA_MARKS_PSEUDO_N", "")
+  if (!nzchar(raw)) return(40)
+  v <- suppressWarnings(as.numeric(raw))
+  if (!is.finite(v) || v < 0) {
+    cli::cli_warn("CITIUS_SIGMA_MARKS_PSEUDO_N={.val {raw}} is not a non-negative number; using 40.")
+    return(40)
+  }
+  v
+}
+
 .sigma_scale_env <- function() {
   raw <- Sys.getenv("CITIUS_SIGMA_SCALE", "")
   if (!nzchar(raw)) return(1)
@@ -877,7 +888,51 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
       rr[!is.finite(ref_c_r), ref_c_r := 0]
     }
     i <- match(as.character(dt$race_key), as.character(rr$race_key))
-    cr <- rr$c_r[i] - rr$ref_c_r[i]
+    rs <- calibration$race_shock
+    if (!is.null(rs) && !is.null(rs$expected) && is.finite(rs$beta)) {
+      # EXCESS STRIP WITH FITTED PERSISTENCE (2026-09-06, Pete's design).
+      #
+      # The whole-effect strip above (c_r minus a top-final reference) put
+      # history on "top final conditions" and needed an add-back for the
+      # forecast race; the two halves never balanced and every final came
+      # out ~2% pessimistic (docs/reviews/race-shock-arm-rejected-2026-09-06.md).
+      #
+      # This strips only the EXCESS: c_r minus what a race of that event x
+      # tier class x round class normally shows (`rs$expected`, fitted by
+      # fit_race_shock_persistence.R), and only the share of it that does NOT
+      # predict the athlete's next result: (1 - beta) * excess, beta fitted by
+      # regressing the next performance on the excess. A race that ran as its
+      # kind usually does is untouched. Nothing is added back: the tier and
+      # round context above already moves an athlete from the conditions
+      # they raced in to the ones they are entering.
+      if (!".rcl" %in% names(rr)) {
+        rr[, .rcl := .round_class(if ("round" %in% names(rr)) round else NA_character_)]
+        rr[, .tcl := .tier_class(if ("tier" %in% names(rr)) tier else NA_character_)]
+      }
+      ex <- data.table::as.data.table(rs$expected)
+      e_cell <- ex$e_cell[match(paste(rr$event_id, rr$.tcl, rr$.rcl, sep = "|"),
+                                paste(ex$event_id, ex$tier_class, ex$round_class, sep = "|"))]
+      if (any(!is.finite(e_cell))) {
+        evm <- rr[, .(m = mean(c_r, na.rm = TRUE)), by = event_id]
+        fb <- evm$m[match(rr$event_id, evm$event_id)]
+        e_cell[!is.finite(e_cell)] <- fb[!is.finite(e_cell)]
+        e_cell[!is.finite(e_cell)] <- 0
+      }
+      # beta by the TIER CLASS of the shocked race -- the dominant structure
+      # (first fit: top 0.53, high 0.72, mid 0.86, low 1.02): a big day at a
+      # top meet is half the day, at a local meet it is the season. Falls back
+      # to the overall beta. Clamped to [0, 1]: nothing is amplified.
+      beta_r <- rep(rs$beta, nrow(rr))
+      if (!is.null(rs$by_tier) && NROW(rs$by_tier)) {
+        bt <- data.table::as.data.table(rs$by_tier)
+        b_t <- bt$beta[match(rr$.tcl, bt$tier_class)]
+        beta_r[is.finite(b_t)] <- b_t[is.finite(b_t)]
+      }
+      beta_r <- pmin(pmax(beta_r, 0), 1)
+      cr <- ((1 - beta_r) * (rr$c_r - e_cell))[i]
+    } else {
+      cr <- rr$c_r[i] - rr$ref_c_r[i]
+    }
 
     # SHRINK BY FIELD SIZE. A race effect fitted on a two-athlete race is not
     # a race effect: with two runners, "the race was slow" and "both athletes
@@ -1545,12 +1600,32 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     ratio[!is.finite(ratio) | ratio <= 0] <- 1
     ab[, sigma := sigma * ratio]
     if ("sigma_shr" %in% names(ab)) ab[, sigma_shr := sigma_shr * ratio]
+    ctx_ratio <- ratio
+  } else {
+    ctx_ratio <- rep(1, nrow(ab))
   }
   sc_env <- .sigma_scale_env()
   if (sc_env != 1) {
     ab[, sigma := sigma * sc_env]
     if ("sigma_shr" %in% names(ab)) ab[, sigma_shr := sigma_shr * sc_env]
   }
+
+  # sigma_marks (2026-09-06): the spread used for the MARK DISTRIBUTION only.
+  #
+  # The emitted `sigma` above drives placings, and three attempts to replace it
+  # (event constant twice, two-sided + pseudo-n 40) all lost medal logloss --
+  # its one-sided upper-tail estimator carries an upside signal that wins
+  # races. But that same sigma ranks athletes by hold-out consistency at
+  # Spearman 0.07 and gave Noah Lyles a 5% chance of beating the world record.
+  # The two jobs need two numbers. This one is the two-sided sigma_raw, shrunk
+  # hard toward the event target (pseudo-n 40, the setting that tied the event
+  # constant on hold-out log score), scaled by the same per-family context
+  # ratio. simulate_event() uses it for `perf_std` -- the mark distribution
+  # and median_mark -- and leaves `perf`, the ranking, on `sigma`.
+  k_m <- .sigma_marks_pseudo_n()
+  sm <- data.table::fifelse(is.finite(ab$sigma_raw) & ab$sigma_raw > 0, ab$sigma_raw, ab$sigma_target)
+  sm <- (shrink_w * sm + k_m * ab$sigma_target) / (shrink_w + k_m)
+  ab[, sigma_marks := sm * ctx_ratio * sc_env]
 
   # `sigma_mode = "event"` gives every athlete their event's measured spread.
   #
@@ -1620,7 +1695,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   #
   # Additive only: existing callers select by name and are unaffected.
   cols <- c("athlete_id", "event_id", "ability", "ability_raw", "sigma",
-            "sigma_raw", "sigma_rob",
+            "sigma_raw", "sigma_rob", "sigma_marks",
             "ability_se", "n", "n_eff", "w_total", "shrinkage", "prior_mu",
             "age_ref", "last_date")
   if ("ability_peak" %in% names(ab)) cols <- c(cols, "ability_peak")

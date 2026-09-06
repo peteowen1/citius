@@ -207,6 +207,20 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
   }
 
   if (is.null(condition_sd)) condition_sd <- race_conditions(event_id, calibration, context)
+  # Per-family spread scales fitted from hold-out forecast residuals
+  # (citiusdata fit_spread_scales.R), applied only when the race context is
+  # given -- they were fitted with the context cell in place.
+  k_shared <- 1; k_indiv <- 1
+  if (!is.null(context) && !is.null(calibration$spread_scales)) {
+    ss <- data.table::as.data.table(calibration$spread_scales)
+    fam <- .citius_event_registry$family[match(event_id, .citius_event_registry$event_id)]
+    j <- match(fam, ss$family)
+    if (!is.na(j)) {
+      if (is.finite(ss$k_shared[j]) && ss$k_shared[j] > 0) k_shared <- ss$k_shared[j]
+      if (is.finite(ss$k_indiv[j])  && ss$k_indiv[j]  > 0) k_indiv  <- ss$k_indiv[j]
+    }
+    condition_sd <- condition_sd * k_shared
+  }
   if (is.null(df)) {
     # Measured tail weight where available. The previous hard-coded 6 put about
     # three times too much mass beyond two standard deviations, manufacturing
@@ -339,10 +353,14 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
     perf[fouled] <- -Inf   # no valid mark: ranks last, does not read as a slow mark
   }
 
-  perf_std <- if ("ability_peak" %in% names(ab)) {
+  # The MARK distribution: `ability` (not the peak) and `sigma_marks` (the
+  # two-sided, hard-shrunk spread, scaled by k_indiv) when the ability table
+  # carries them. Same draws as `perf`, so the ranking above is untouched.
+  sigma_std <- if ("sigma_marks" %in% names(ab) && all(is.finite(ab$sigma_marks))) ab$sigma_marks * k_indiv else ab$sigma
+  perf_std <- if ("ability_peak" %in% names(ab) || "sigma_marks" %in% names(ab)) {
     p_std <- matrix(ab$ability, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
       est_error + form_error +
-      noise * matrix(ab$sigma, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
+      noise * matrix(sigma_std, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
       outer(cond, sens) + taper
     if (!is.null(fouled)) p_std[fouled] <- -Inf
     colnames(p_std) <- ab$athlete_id
@@ -358,7 +376,8 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
       orientation = orientation, n_sims = n_sims,
       settings = list(condition_sd = condition_sd, df = df,
                       foul_prob = foul_prob, taper = taper, form_sd = form_sd,
-                      context = context)
+                      context = context, k_shared = k_shared, k_indiv = k_indiv,
+                      sigma_marks_used = "sigma_marks" %in% names(ab))
     ),
     class = "citius_sim"
   )
