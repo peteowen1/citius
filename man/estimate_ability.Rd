@@ -8,6 +8,7 @@ estimate_ability(
   results,
   as_of = Sys.Date(),
   half_life = 540,
+  races_half_life = Inf,
   trim_tactical = 0.25,
   min_results = 1L,
   adjust_context = TRUE,
@@ -33,6 +34,17 @@ by \code{\link[=athletics_athlete_results]{athletics_athlete_results()}} or \cod
 how fast form decays is measurable, and the measured values (sprint ~135
 days, distance and field ~180) are far shorter than the 540-day scalar
 default, which keeps stale form alive.}
+
+\item{races_half_life}{Number of the athlete's OWN subsequent races after
+which a result carries half weight, applied on top of \code{half_life}. A
+calendar half-life cannot tell apart an athlete who has raced 30 times
+since a performance from one who has raced twice; this can. \code{Inf}, the
+default, disables it and reproduces the previous behaviour exactly.
+Measured best around \strong{5}, and it is not independent of \code{half_life}: with
+race-count decay on, the calendar half-life wants to be roughly twice as
+long, because 365 days had been standing in for a cap on how many results
+accumulate. Set both together or neither. See
+\verb{docs/reviews/marks-blend-2026-09-07.md}.}
 
 \item{trim_tactical}{Fraction of worst performances to drop in tactical
 events. Set to \code{0} to disable.}

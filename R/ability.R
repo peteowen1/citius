@@ -1252,6 +1252,16 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #'   how fast form decays is measurable, and the measured values (sprint ~135
 #'   days, distance and field ~180) are far shorter than the 540-day scalar
 #'   default, which keeps stale form alive.
+#' @param races_half_life Number of the athlete's OWN subsequent races after
+#'   which a result carries half weight, applied on top of `half_life`. A
+#'   calendar half-life cannot tell apart an athlete who has raced 30 times
+#'   since a performance from one who has raced twice; this can. `Inf`, the
+#'   default, disables it and reproduces the previous behaviour exactly.
+#'   Measured best around **5**, and it is not independent of `half_life`: with
+#'   race-count decay on, the calendar half-life wants to be roughly twice as
+#'   long, because 365 days had been standing in for a cap on how many results
+#'   accumulate. Set both together or neither. See
+#'   `docs/reviews/marks-blend-2026-09-07.md`.
 #' @param trim_tactical Fraction of worst performances to drop in tactical
 #'   events. Set to `0` to disable.
 #' @param min_results Minimum results required to report an athlete.
@@ -1284,6 +1294,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @seealso [simulate_event()] which consumes this.
 #' @export
 estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
+                             races_half_life = Inf,
                              trim_tactical = 0.25, min_results = 1L,
                              adjust_context = TRUE, calibration = NULL,
                              robust_sigma = TRUE,
@@ -1341,6 +1352,48 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                           as_of = as_of, half_life = hl,
                           calibration = calibration,
                           tier_class = .tier_class_of(dt))]
+
+  # RACES-SINCE DECAY, on top of the calendar decay above.
+  #
+  # Named for what it is. `races_half_life = 5` means: a result carries half
+  # weight once the athlete has run five more races in that event, a quarter
+  # after ten, and so on -- exactly the shape `half_life` has, counted in the
+  # athlete's own races instead of in days.
+  #
+  # `half_life` discounts a result by how long ago it happened. That is not the
+  # only thing that makes a result stale: an athlete who has raced 30 times
+  # since is further from that performance than one who has raced twice, and a
+  # purely calendar decay treats them identically. This discounts a result by
+  # how many of the athlete's own races have happened since -- k = 0 for their
+  # most recent, 1 for the one before, and so on.
+  #
+  # WHY IT MATTERS, measured on 2024+ held out against a like-for-like last-5
+  # baseline (diagnostics/marks_why_last5.R, 44 events):
+  #
+  #   calendar 365, no race decay   28 of 44   MAE 2.1487   the deployed config
+  #   calendar 730, no race decay   17 of 44   MAE 2.2420   much worse alone
+  #   calendar 365, race hl 5       36 of 44   MAE 2.0939
+  #   calendar 730, race hl 5       37 of 44   MAE 2.0791
+  #
+  # The two are NOT separable, and that is the finding rather than a caveat:
+  # a calendar half-life of 365 was doing two jobs, genuinely discounting stale
+  # form AND crudely capping how many results pile up. Once race count handles
+  # the second, the calendar decay relaxes to its real value and both improve.
+  # Promote them together or not at all.
+  #
+  # This also replaces a cruder version of the same idea -- a hard cap on the N
+  # most recent results, which peaked at 35 of 44. A cap is a cliff: result 20
+  # counts fully and result 21 counts zero. The smooth form is better on every
+  # measure, and adding a cap on top of it changes MAE by 0.01%, so the cap is
+  # redundant rather than merely uglier.
+  #
+  # Inf is OFF and is the default, so existing callers are bit-identical.
+  if (is.finite(races_half_life) && races_half_life > 0) {
+    data.table::setorder(dt, athlete_id, event_id, -date)
+    dt[, .k := seq_len(.N) - 1L, by = .(athlete_id, event_id)]
+    dt[, w := w * 0.5^(.k / races_half_life)]
+    dt[, .k := NULL]
+  }
 
   if (is.numeric(peak_gamma) && peak_gamma > 0) {
     dt[, .q := data.table::frank(perf, ties.method = "first") / .N, by = .(athlete_id, event_id)]
