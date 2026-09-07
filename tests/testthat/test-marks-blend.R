@@ -2,11 +2,12 @@
 #
 # `estimate_ability()` emits `recent_mean`, the mean of an athlete's last five
 # RAW marks. `simulate_event()` blends the centre of the MARK distribution
-# toward it by `CITIUS_MARKS_BLEND`, and leaves the ranking on plain `ability`.
-# It is a large change to predicted marks -- on the 2024+ held-out set it takes
-# events beating a last-5 baseline from 10 of 35 to 30 of 35 -- and it shipped
-# ahead of two ranking-side changes measured at the same time precisely BECAUSE
-# it cannot touch a probability.
+# toward it by `CITIUS_MARKS_BLEND` (0.5), and leaves the ranking on plain
+# `ability`. It is a large change to predicted marks -- on the 2024+ held-out
+# set it takes events beating a last-5 baseline from 18 of 44 to 36, and pooled
+# mark error from -0.86% to -4.08% against that baseline -- and it shipped ahead
+# of two ranking-side changes measured at the same time precisely BECAUSE it
+# cannot touch a probability.
 #
 # That claim is the thing worth testing. Everything else here is scaffolding.
 
@@ -131,14 +132,20 @@ test_that("an athlete with fewer than three marks gets NA and keeps ability", {
 test_that("an out-of-range CITIUS_MARKS_BLEND warns and falls back", {
   withr::with_envvar(c(CITIUS_MARKS_BLEND = "1.4"), {
     expect_warning(v <- citius:::.marks_blend(), "not a number in")
-    expect_equal(v, 0.6)
+    expect_equal(v, 0.5)
   })
   withr::with_envvar(c(CITIUS_MARKS_BLEND = "nonsense"), {
     expect_warning(v <- citius:::.marks_blend(), "not a number in")
-    expect_equal(v, 0.6)
+    expect_equal(v, 0.5)
   })
   withr::with_envvar(c(CITIUS_MARKS_BLEND = "0.35"), {
     expect_equal(citius:::.marks_blend(), 0.35)
+  })
+  # The DEPLOYED value. Pinned because it is the joint optimum on both metrics
+  # the launch goal names, not a round number someone liked -- a silent drift
+  # here would change every published mark.
+  withr::with_envvar(c(CITIUS_MARKS_BLEND = ""), {
+    expect_equal(citius:::.marks_blend(), 0.5)
   })
 })
 

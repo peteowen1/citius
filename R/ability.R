@@ -60,17 +60,24 @@
 # therefore cannot move a finishing order or a medal probability, and there is
 # a test that asserts exactly that.
 #
-# 0.6 is the value chosen by diagnostics/marks_fit.R on 2020-2023 and confirmed
-# on 2024+ held out, where it takes events beating a last-5 baseline from 10 of
-# 35 to 30 of 35 and pooled mark error from +1.7% to -3.1% against that
-# baseline. See docs/reviews/marks-blend-2026-09-07.md.
+# 0.5 is the JOINT OPTIMUM on both quantities the launch goal names, swept at
+# 0.05 on the 2024+ held-out set (diagnostics/marks_decompose.R, 44 events):
+#
+#   pooled out-of-sample mark MAE   2.0793, tied with 0.45 for the lowest
+#   mean per-event relative gap     -3.64%, the best of any value
+#
+# Events beaten keeps rising to 41 at 0.65, but both error metrics turn over
+# before that, so a higher value buys thin events at the cost of error
+# everywhere. 0.6 was shipped first and is worse on BOTH: 2.0837 and -3.56%.
+# Against the deployed 0 this is 18 of 44 events -> 36 and -0.86% -> -4.08%.
+# See docs/reviews/marks-blend-2026-09-07.md.
 .marks_blend <- function() {
   raw <- Sys.getenv("CITIUS_MARKS_BLEND", "")
-  if (!nzchar(raw)) return(0.6)
+  if (!nzchar(raw)) return(0.5)
   v <- suppressWarnings(as.numeric(raw))
   if (!is.finite(v) || v < 0 || v > 1) {
-    cli::cli_warn("CITIUS_MARKS_BLEND={.val {raw}} is not a number in [0, 1]; using 0.6.")
-    return(0.6)
+    cli::cli_warn("CITIUS_MARKS_BLEND={.val {raw}} is not a number in [0, 1]; using 0.5.")
+    return(0.5)
   }
   v
 }
