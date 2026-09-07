@@ -353,12 +353,30 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
     perf[fouled] <- -Inf   # no valid mark: ranks last, does not read as a slow mark
   }
 
-  # The MARK distribution: `ability` (not the peak) and `sigma_marks` (the
-  # two-sided, hard-shrunk spread, scaled by k_indiv) when the ability table
-  # carries them. Same draws as `perf`, so the ranking above is untouched.
+  # The MARK distribution: a centre blended toward the athlete's recent raw form
+  # (not the peak) and `sigma_marks` (the two-sided, hard-shrunk spread, scaled
+  # by k_indiv) when the ability table carries them. Same draws as `perf`, so
+  # the ranking above is untouched.
+  #
+  # Both halves of the distribution are now marks-only. `perf` above takes its
+  # centre from `ability_peak`/`ability` and its spread from `sigma`; neither
+  # `recent_mean` nor `sigma_marks` appears in it, which is what makes the blend
+  # provably unable to move a placing. Asserted in
+  # tests/testthat/test-marks-blend.R, not left to inspection.
   sigma_std <- if ("sigma_marks" %in% names(ab) && all(is.finite(ab$sigma_marks))) ab$sigma_marks * k_indiv else ab$sigma
-  perf_std <- if ("ability_peak" %in% names(ab) || "sigma_marks" %in% names(ab)) {
-    p_std <- matrix(ab$ability, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
+  # The blend happens HERE, not in estimate_ability(), because `ab$ability` may
+  # have been aged, momentum-adjusted or re-shrunk since it was estimated. This
+  # blends against whatever it finally is. Athletes without a `recent_mean` --
+  # fewer than three prior marks -- keep `ability` untouched.
+  mb <- .marks_blend()
+  mu_std <- ab$ability
+  if (mb > 0 && "recent_mean" %in% names(ab)) {
+    has <- is.finite(ab$recent_mean)
+    mu_std[has] <- (1 - mb) * ab$ability[has] + mb * ab$recent_mean[has]
+  }
+  perf_std <- if ("ability_peak" %in% names(ab) || "sigma_marks" %in% names(ab) ||
+                  "recent_mean" %in% names(ab)) {
+    p_std <- matrix(mu_std, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
       est_error + form_error +
       noise * matrix(sigma_std, nrow = n_sims, ncol = n_ath, byrow = TRUE) +
       outer(cond, sens) + taper

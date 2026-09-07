@@ -50,6 +50,31 @@
   v
 }
 
+# How much of a predicted MARK is the athlete's own recent form.
+#
+# 0 = the ranking ability alone, which is what the model did until 2026-09-07;
+# 1 = the plain mean of their last five marks. This is a MARKS-ONLY term.
+# `estimate_ability()` emits the ingredient, `recent_mean`; `simulate_event()`
+# does the blending, and applies it only to the centre of the MARK
+# distribution, never to `ability`, which the ranking is built from. A blend
+# therefore cannot move a finishing order or a medal probability, and there is
+# a test that asserts exactly that.
+#
+# 0.6 is the value chosen by diagnostics/marks_fit.R on 2020-2023 and confirmed
+# on 2024+ held out, where it takes events beating a last-5 baseline from 10 of
+# 35 to 30 of 35 and pooled mark error from +1.7% to -3.1% against that
+# baseline. See docs/reviews/marks-blend-2026-09-07.md.
+.marks_blend <- function() {
+  raw <- Sys.getenv("CITIUS_MARKS_BLEND", "")
+  if (!nzchar(raw)) return(0.6)
+  v <- suppressWarnings(as.numeric(raw))
+  if (!is.finite(v) || v < 0 || v > 1) {
+    cli::cli_warn("CITIUS_MARKS_BLEND={.val {raw}} is not a number in [0, 1]; using 0.6.")
+    return(0.6)
+  }
+  v
+}
+
 .sigma_scale_env <- function() {
   raw <- Sys.getenv("CITIUS_SIGMA_SCALE", "")
   if (!nzchar(raw)) return(1)
@@ -1221,9 +1246,17 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #'   average day at an average meet", which is systematically slower than a
 #'   championship final and will under-predict the event being simulated.
 #' @return A `data.table` with `athlete_id`, `event_id`, `ability`,
-#'   `ability_raw`, `sigma`, `n`, `n_eff`, `shrinkage`, `age_ref` and
-#'   `last_date`. `age_ref` is the weighted mean age behind the estimate and is
-#'   what [project_ability()] must project *from*.
+#'   `ability_raw`, `sigma`, `sigma_raw`, `sigma_rob`, `sigma_marks`,
+#'   `recent_mean`, `ability_se`, `n`, `n_eff`, `w_total`, `shrinkage`,
+#'   `prior_mu`, `age_ref` and `last_date`. `age_ref` is the weighted mean age
+#'   behind the estimate and is what [project_ability()] must project *from*.
+#'
+#'   Three of those are for MARKS rather than for the ranking, and
+#'   [simulate_event()] reads them only for the mark distribution.
+#'   `sigma_marks` is its spread; `recent_mean`, the plain mean of the athlete's
+#'   last five raw marks, is blended into its centre by `CITIUS_MARKS_BLEND`,
+#'   and is `NA` for an athlete with fewer than three. `ability` and `sigma`,
+#'   which decide placings, are untouched by both.
 #' @seealso [simulate_event()] which consumes this.
 #' @export
 estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
@@ -1304,7 +1337,36 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     dt[calibrated %in% TRUE & is.finite(tactical_index), tactical := tactical_index < -0.5]
   }
 
+  # The recency blend is built from RAW marks, so snapshot them before the
+  # adjustment stack rewrites `perf` in place. Only when the blend is on: the
+  # column is a full copy of the history and costs memory for nothing at 0.
+  .mblend <- .marks_blend()
+  if (.mblend > 0) dt[, perf_raw := perf]
+
   if (isTRUE(adjust_context)) .adjust_history_to_target(dt, calibration, adjust_race)
+
+  # Last five RAW marks per athlete-event, taken BEFORE the tactical trim.
+  #
+  # Before the trim on purpose: the blend's job is to pull the predicted mark
+  # toward what the athlete has actually been producing, and the trim exists to
+  # remove tactically slow races from the RANKING. Trimming here would reapply
+  # a ranking correction to a quantity that is meant to be raw, and would make
+  # the deployed term differ from the one measured in the marks lab, where the
+  # baseline is a plain mean of the last five stored marks.
+  #
+  # Minimum three, matching the lab: a mean of one or two marks is noisier than
+  # the ability it would be replacing, and those athletes keep `ability` alone.
+  .rec <- NULL
+  if (.mblend > 0) {
+    rr <- dt[, .(athlete_id, event_id, date, perf_raw)]
+    if (!is.null(only)) rr <- rr[as.character(athlete_id) %in% as.character(only)]
+    data.table::setorder(rr, athlete_id, event_id, -date)
+    rr[, .rk := seq_len(.N), by = .(athlete_id, event_id)]
+    .rec <- rr[.rk <= 5L, .(recent_mean = mean(perf_raw), n_recent = .N),
+               by = .(athlete_id, event_id)][n_recent >= 3L]
+    .rec[, athlete_id := as.character(athlete_id)]
+    rm(rr)
+  }
 
   if (trim_tactical > 0) {
     # Vectorised rank-and-filter, not `.SD[...]` per group. The `.SD` form made
@@ -1682,6 +1744,33 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # their own, rather than needing a hand-set staleness cutoff.
   ab[, shrinkage := kappa / (w_total + kappa)]
   ab[, ability := (1 - shrinkage) * ability_raw + shrinkage * prior_mu]
+
+  # recent_mean: the ingredient of the MARK centre, as distinct from `ability`,
+  # the centre of the ranking. Same split as `sigma_marks` above and for the
+  # same reason -- the two jobs want different numbers.
+  #
+  # `ability` is a decayed, context-adjusted, trimmed, shrunk estimate built to
+  # order a field. As a point forecast of the next mark it is systematically
+  # optimistic: measured on 2024+ held out, +0.24pp of a mark more optimistic
+  # than a plain last-5 mean, which is enough to lose whole events on mark
+  # error. Blending toward recent raw form removes most of that.
+  #
+  # THE BLEND IS NOT APPLIED HERE, and that is deliberate. Callers modify
+  # `ability` after this function returns -- backtest_athletics.R applies
+  # apply_momentum() and project_ability() to it, and reshrink_to_field() shifts
+  # it too. A pre-blended column would silently stop tracking those, so an aged
+  # athlete's ranking would move while their predicted mark stayed put. Emitting
+  # the raw ingredient lets simulate_event() blend against whatever `ability`
+  # finally is.
+  #
+  # Athletes with fewer than three recent marks get NA and keep `ability`.
+  ab[, recent_mean := NA_real_]
+  if (!is.null(.rec) && nrow(.rec)) {
+    ab[, athlete_id := as.character(athlete_id)]
+    ab[, recent_mean := NULL]
+    ab <- merge(ab, .rec[, .(athlete_id, event_id, recent_mean)],
+                by = c("athlete_id", "event_id"), all.x = TRUE, sort = FALSE)
+  }
   # `ability_raw_peak` comes out of the grouped aggregation on EVERY call -- a
   # `by` expression has to return the same columns for every group, so it could
   # not be omitted conditionally there. Drop it here when decoupling was not
@@ -1722,7 +1811,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   #
   # Additive only: existing callers select by name and are unaffected.
   cols <- c("athlete_id", "event_id", "ability", "ability_raw", "sigma",
-            "sigma_raw", "sigma_rob", "sigma_marks",
+            "sigma_raw", "sigma_rob", "sigma_marks", "recent_mean",
             "ability_se", "n", "n_eff", "w_total", "shrinkage", "prior_mu",
             "age_ref", "last_date")
   if ("ability_peak" %in% names(ab)) cols <- c(cols, "ability_peak")
@@ -1812,7 +1901,8 @@ condition_prior <- function(ability, field = NULL, weight = 1) {
     # Kept in step with the populated return above. An empty table whose
     # columns differ from a populated one is how a caller that binds the two
     # ends up with silent NAs.
-    sigma_raw = numeric(), sigma_rob = numeric(), ability_se = numeric(),
+    sigma_raw = numeric(), sigma_rob = numeric(),
+    sigma_marks = numeric(), recent_mean = numeric(), ability_se = numeric(),
     n = integer(), n_eff = numeric(), w_total = numeric(),
     shrinkage = numeric(), prior_mu = numeric(), age_ref = numeric(),
     last_date = as.Date(character())

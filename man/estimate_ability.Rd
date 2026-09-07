@@ -57,9 +57,17 @@ almost all of its time on athletes the caller will discard.}
 }
 \value{
 A \code{data.table} with \code{athlete_id}, \code{event_id}, \code{ability},
-\code{ability_raw}, \code{sigma}, \code{n}, \code{n_eff}, \code{shrinkage}, \code{age_ref} and
-\code{last_date}. \code{age_ref} is the weighted mean age behind the estimate and is
-what \code{\link[=project_ability]{project_ability()}} must project \emph{from}.
+\code{ability_raw}, \code{sigma}, \code{sigma_raw}, \code{sigma_rob}, \code{sigma_marks},
+\code{recent_mean}, \code{ability_se}, \code{n}, \code{n_eff}, \code{w_total}, \code{shrinkage},
+\code{prior_mu}, \code{age_ref} and \code{last_date}. \code{age_ref} is the weighted mean age
+behind the estimate and is what \code{\link[=project_ability]{project_ability()}} must project \emph{from}.
+
+Three of those are for MARKS rather than for the ranking, and
+\code{\link[=simulate_event]{simulate_event()}} reads them only for the mark distribution.
+\code{sigma_marks} is its spread; \code{recent_mean}, the plain mean of the athlete's
+last five raw marks, is blended into its centre by \code{CITIUS_MARKS_BLEND},
+and is \code{NA} for an athlete with fewer than three. \code{ability} and \code{sigma},
+which decide placings, are untouched by both.
 }
 \description{
 Produces, for every athlete-event pair present in \code{results}, a point estimate
