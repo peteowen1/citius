@@ -44,6 +44,16 @@ top-tier footing before averaging, using \code{\link[=estimate_context_effects]{
 Without this the estimate answers "how does this athlete perform on an
 average day at an average meet", which is systematically slower than a
 championship final and will under-predict the event being simulated.}
+
+\item{only}{Optional vector of \code{athlete_id}s to return. This is the FAST
+PATH, not just a filter: the population quantities every athlete needs
+(\code{prior_mu}, \code{sigma_between}, and the robust-sigma scale \code{k}) are computed
+cheaply over the whole input, and the expensive per-athlete body then runs
+only for the ids named. The result for those athletes is identical to a
+full run, which a package test asserts rather than assumes. Use it whenever
+you know which athletes you are about to score -- a backtest or a
+diagnostic over a fixed set of races -- because without it the refit spends
+almost all of its time on athletes the caller will discard.}
 }
 \value{
 A \code{data.table} with \code{athlete_id}, \code{event_id}, \code{ability},

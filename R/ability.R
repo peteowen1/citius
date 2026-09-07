@@ -1206,6 +1206,15 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @param trim_tactical Fraction of worst performances to drop in tactical
 #'   events. Set to `0` to disable.
 #' @param min_results Minimum results required to report an athlete.
+#' @param only Optional vector of `athlete_id`s to return. This is the FAST
+#'   PATH, not just a filter: the population quantities every athlete needs
+#'   (`prior_mu`, `sigma_between`, and the robust-sigma scale `k`) are computed
+#'   cheaply over the whole input, and the expensive per-athlete body then runs
+#'   only for the ids named. The result for those athletes is identical to a
+#'   full run, which a package test asserts rather than assumes. Use it whenever
+#'   you know which athletes you are about to score -- a backtest or a
+#'   diagnostic over a fixed set of races -- because without it the refit spends
+#'   almost all of its time on athletes the caller will discard.
 #' @param adjust_context Whether to put every performance on a final-equivalent,
 #'   top-tier footing before averaging, using [estimate_context_effects()].
 #'   Without this the estimate answers "how does this athlete perform on an
