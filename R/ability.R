@@ -48,6 +48,14 @@
 # Sprints, hurdles, jumps and throws are excluded: a slow 100m or a short shot
 # put is weather or a bad day, never tactics, and the context adjustment already
 # handles the former.
+#
+# SWIMMING IS EXCLUDED TOO, and that is a decision rather than an oversight.
+# The registry carries swim_sprint, swim_distance, swim_middle and swim_im, and
+# none is listed here, so the override can never fire for them. Distance
+# swimming plausibly IS tactical -- a 1500m freestyle final is paced much like a
+# 1500m on the track -- but no swimming event has been through the marks lab, so
+# there is no measurement to justify including it. Add the swim families when
+# there is one, not before.
 .CITIUS_TACTICAL_FAMILIES <- c("middle", "distance", "road", "walk", "combined")
 
 .sigma_marks_pseudo_n <- function() {
