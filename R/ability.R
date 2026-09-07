@@ -147,8 +147,20 @@
 #' }
 #'
 #' @param date Date vector of performance dates.
-#' @param tier Character vector of World Athletics category codes (`"OW"`,
-#'   `"GL"`, `"A"`..`"F"`), or `NA`.
+#' @param tier World Athletics category of the RACE: `"OW"`, `"GL"`, `"GW"`,
+#'   `"DF"`, `"A"`..`"F"`, or `NA`.
+#'
+#'   **Not `meet_tier`**, which is the catalogue's rating of a MEETING
+#'   (`"T1_elite"`, `"T2_strong"`, `"T3_development"`). The two classifications
+#'   cross rather than nest: one T1_elite meeting contains races of several WAC
+#'   categories, because a Diamond League meeting's headline disciplines and its
+#'   supporting programme are categorised separately. Weltklasse Zürich runs
+#'   `"GW"` disciplines beside `"F"` support races inside a single T1_elite
+#'   meeting, and 90 of the 849 races in the lab's "elite" test set are `"F"`
+#'   for exactly that reason.
+#'
+#'   Diagnostics name it `race_tier` where both appear; the stored column keeps
+#'   `tier`, since renaming it would invalidate a 7.5M-row parquet store.
 #' @param round Character vector of round codes (`"F"`, `"SF1"`, `"H4"`, or
 #'   World Aquatics `"Final"`/`"Heats"`).
 #' @param as_of Reference date from which recency is measured.
