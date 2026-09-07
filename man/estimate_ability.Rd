@@ -9,6 +9,7 @@ estimate_ability(
   as_of = Sys.Date(),
   half_life = 540,
   races_half_life = Inf,
+  context_scale = 1,
   trim_tactical = 0.25,
   min_results = 1L,
   adjust_context = TRUE,
@@ -35,7 +36,12 @@ how fast form decays is measurable, and the measured values (sprint ~135
 days, distance and field ~180) are far shorter than the 540-day scalar
 default, which keeps stale form alive.}
 
-\item{races_half_life}{Number of the athlete's OWN subsequent races after
+\item{races_half_life}{Either a single number, or a table with a
+\code{races_half_life} column plus \code{event_id} and/or \code{family}, in the same shape
+\code{half_life} accepts. An event the table does not name gets \code{Inf}, the term
+OFF, rather than a median of other events' values.
+
+The number of the athlete's OWN subsequent races after
 which a result carries half weight, applied on top of \code{half_life}. A
 calendar half-life cannot tell apart an athlete who has raced 30 times
 since a performance from one who has raced twice; this can. \code{Inf}, the
@@ -46,8 +52,17 @@ long, because 365 days had been standing in for a cap on how many results
 accumulate. Set both together or neither. See
 \verb{docs/reviews/marks-blend-2026-09-07.md}.}
 
+\item{context_scale}{How much of the context adjustment to keep: \code{1} (the
+default) the whole correction, \code{0} none of it. Scalar, or a table with a
+\code{context_scale} column plus \code{event_id} and/or \code{family}. Only has an effect
+when \code{adjust_context = TRUE}. Fitted per family, distance wants 1.25 and
+road 1.00 while throw wants 0.25 and walk 0.00.}
+
 \item{trim_tactical}{Fraction of worst performances to drop in tactical
-events. Set to \code{0} to disable.}
+events. Set to \code{0} to disable. Scalar, or a table with a \code{trim_tactical}
+column plus \code{event_id} and/or \code{family} -- fitted that way it recovers what
+"tactical" means without registry input: middle, distance and combined
+0.40, jump and throw 0.00.}
 
 \item{min_results}{Minimum results required to report an athlete.}
 

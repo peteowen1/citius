@@ -368,6 +368,50 @@ fit_half_life <- function(results,
 }
 
 
+#' Resolve a per-event parameter to one value per row
+#'
+#' Three parameters now accept either a scalar or a table: `races_half_life`,
+#' `trim_tactical` and `context_scale`. They resolve identically -- match on
+#' `event_id`, fall back to `family`, and fall back again to an explicit
+#' default -- so they share one resolver rather than three copies that drift.
+#'
+#' THE FALLBACK IS THE CALLER'S DEFAULT, NOT A MEDIAN of the table. A median
+#' would quietly apply a value fitted on other events to one the table knows
+#' nothing about; the documented default is the honest answer. ([.event_half_life()]
+#' does use a median, and is left alone rather than changed underneath its
+#' callers, but new parameters do not copy it.)
+#'
+#' @param event_id Character vector of event ids, one per row.
+#' @param spec `NULL`, a scalar, or a table with `column` plus `event_id`
+#'   and/or `family`.
+#' @param column Name of the value column expected in `spec`.
+#' @param default Value for rows the table does not cover.
+#' @keywords internal
+#' @noRd
+.event_param <- function(event_id, spec, column, default) {
+  if (is.null(spec)) return(rep(default, length(event_id)))
+  if (is.numeric(spec)) return(rep_len(spec, length(event_id)))
+
+  tb <- data.table::as.data.table(spec)
+  if (!column %in% names(tb)) {
+    cli::cli_abort("Table for {.arg {column}} needs a {.field {column}} column.")
+  }
+  reg <- .citius_event_registry
+  fam <- reg$family[match(event_id, reg$event_id)]
+  out <- if ("event_id" %in% names(tb)) {
+    tb[[column]][match(event_id, tb$event_id)]
+  } else {
+    tb[[column]][match(fam, tb$family)]
+  }
+  if ("event_id" %in% names(tb) && "family" %in% names(tb)) {
+    na_idx <- which(is.na(out))
+    if (length(na_idx)) out[na_idx] <- tb[[column]][match(fam[na_idx], tb$family)]
+  }
+  out[is.na(out)] <- default
+  out
+}
+
+
 #' Estimate systematic round and tier offsets from the data
 #'
 #' Athletes do not perform uniformly across contexts. Heats are coasted, minor
@@ -1252,7 +1296,12 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #'   how fast form decays is measurable, and the measured values (sprint ~135
 #'   days, distance and field ~180) are far shorter than the 540-day scalar
 #'   default, which keeps stale form alive.
-#' @param races_half_life Number of the athlete's OWN subsequent races after
+#' @param races_half_life Either a single number, or a table with a
+#'   `races_half_life` column plus `event_id` and/or `family`, in the same shape
+#'   `half_life` accepts. An event the table does not name gets `Inf`, the term
+#'   OFF, rather than a median of other events' values.
+#'
+#'   The number of the athlete's OWN subsequent races after
 #'   which a result carries half weight, applied on top of `half_life`. A
 #'   calendar half-life cannot tell apart an athlete who has raced 30 times
 #'   since a performance from one who has raced twice; this can. `Inf`, the
@@ -1262,8 +1311,16 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #'   long, because 365 days had been standing in for a cap on how many results
 #'   accumulate. Set both together or neither. See
 #'   `docs/reviews/marks-blend-2026-09-07.md`.
+#' @param context_scale How much of the context adjustment to keep: `1` (the
+#'   default) the whole correction, `0` none of it. Scalar, or a table with a
+#'   `context_scale` column plus `event_id` and/or `family`. Only has an effect
+#'   when `adjust_context = TRUE`. Fitted per family, distance wants 1.25 and
+#'   road 1.00 while throw wants 0.25 and walk 0.00.
 #' @param trim_tactical Fraction of worst performances to drop in tactical
-#'   events. Set to `0` to disable.
+#'   events. Set to `0` to disable. Scalar, or a table with a `trim_tactical`
+#'   column plus `event_id` and/or `family` -- fitted that way it recovers what
+#'   "tactical" means without registry input: middle, distance and combined
+#'   0.40, jump and throw 0.00.
 #' @param min_results Minimum results required to report an athlete.
 #' @param only Optional vector of `athlete_id`s to return. This is the FAST
 #'   PATH, not just a filter: the population quantities every athlete needs
@@ -1294,7 +1351,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @seealso [simulate_event()] which consumes this.
 #' @export
 estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
-                             races_half_life = Inf,
+                             races_half_life = Inf, context_scale = 1,
                              trim_tactical = 0.25, min_results = 1L,
                              adjust_context = TRUE, calibration = NULL,
                              robust_sigma = TRUE,
@@ -1388,12 +1445,17 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # redundant rather than merely uglier.
   #
   # Inf is OFF and is the default, so existing callers are bit-identical.
-  if (is.finite(races_half_life) && races_half_life > 0) {
+  # Resolved to a column BEFORE the reorder, so the values travel with their
+  # rows. Computing it into a bare vector and sorting afterwards is the silent
+  # misalignment this file has been bitten by before.
+  dt[, .rhl := .event_param(event_id, races_half_life, "races_half_life", Inf)]
+  if (any(is.finite(dt$.rhl) & dt$.rhl > 0)) {
     data.table::setorder(dt, athlete_id, event_id, -date)
     dt[, .k := seq_len(.N) - 1L, by = .(athlete_id, event_id)]
-    dt[, w := w * 0.5^(.k / races_half_life)]
+    dt[is.finite(.rhl) & .rhl > 0, w := w * 0.5^(.k / .rhl)]
     dt[, .k := NULL]
   }
+  dt[, .rhl := NULL]
 
   if (is.numeric(peak_gamma) && peak_gamma > 0) {
     dt[, .q := data.table::frank(perf, ties.method = "first") / .N, by = .(athlete_id, event_id)]
@@ -1427,6 +1489,23 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
 
   if (isTRUE(adjust_context)) .adjust_history_to_target(dt, calibration, adjust_race)
 
+  # CONTEXT SCALE: how much of the adjustment above to actually keep.
+  #
+  # `.adjust_history_to_target()` rewrites every mark to a final-equivalent,
+  # neutral-conditions footing. That correction is itself estimated and carries
+  # its own error, and how much of it is worth keeping differs sharply by event:
+  # fitted per family on held-out marks, distance wants 1.25 and road 1.00 --
+  # their times swing hugely with course and weather -- while throw wants 0.25
+  # and walk 0.00.
+  #
+  # 1 keeps the full correction and is the default, so existing callers are
+  # unchanged. 0 discards it, leaving the raw mark.
+  if (isTRUE(adjust_context)) {
+    dt[, .cs := .event_param(event_id, context_scale, "context_scale", 1)]
+    if (!all(dt$.cs == 1)) dt[, perf := perf_raw + .cs * (perf - perf_raw)]
+    dt[, .cs := NULL]
+  }
+
   # Last five RAW marks per athlete-event, taken BEFORE the tactical trim.
   #
   # Before the trim on purpose: the blend's job is to pull the predicted mark
@@ -1447,23 +1526,29 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   .rec[, athlete_id := as.character(athlete_id)]
   rm(rr)
 
-  if (trim_tactical > 0) {
+  # `trim_tactical` accepts a per-event table too. Fitted per family, the values
+  # recover what "tactical" is supposed to mean with no registry input: middle,
+  # distance and combined want 0.40, while jump and throw want 0.00. A shot put
+  # has no tactics to trim away.
+  dt[, .trim := .event_param(event_id, trim_tactical, "trim_tactical", 0.25)]
+  if (any(dt$.trim > 0)) {
     # Vectorised rank-and-filter, not `.SD[...]` per group. The `.SD` form made
     # data.table materialise a sub-table for every athlete-event group and cost
     # 74% of this function's runtime; the work itself is just "drop the worst
     # k marks", which needs no sub-table at all.
     dt[, .keep := TRUE]
-    dt[tactical == TRUE, .grp_n := .N, by = .(athlete_id, event_id)]
-    dt[tactical == TRUE & .grp_n >= 4L,
+    dt[tactical == TRUE & .trim > 0, .grp_n := .N, by = .(athlete_id, event_id)]
+    dt[tactical == TRUE & .trim > 0 & .grp_n >= 4L,
        .rk := data.table::frank(perf, ties.method = "first"),
        by = .(athlete_id, event_id)]
     # frank is ascending and perf is oriented so higher is better: rank 1 is the
     # worst mark, which is what the tactical trim removes.
-    dt[tactical == TRUE & .grp_n >= 4L,
-       .keep := .rk > floor(.grp_n * trim_tactical)]
+    dt[tactical == TRUE & .trim > 0 & .grp_n >= 4L,
+       .keep := .rk > floor(.grp_n * .trim)]
     dt <- dt[.keep == TRUE]
     dt[, c(".keep", ".grp_n", ".rk") := NULL]
   }
+  dt[, .trim := NULL]
 
   # ONLY: estimate abilities for a named set of athletes, without changing them.
   #
