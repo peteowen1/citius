@@ -39,6 +39,17 @@
 # check can find the scale at which the simulated spread is calibrated; the
 # fitted value belongs in the calibration object, not in an env var, before it
 # ships (the "no hand-tuned constants" rule).
+# Families where a slow race can plausibly reflect RACING rather than conditions,
+# and so where the calibration's tactical override is allowed to fire. Middle
+# and distance are the textbook case; road and walk races are decided tactically
+# over the closing kilometres; a combined event's individual marks are paced
+# against the points table rather than contested flat out.
+#
+# Sprints, hurdles, jumps and throws are excluded: a slow 100m or a short shot
+# put is weather or a bad day, never tactics, and the context adjustment already
+# handles the former.
+.CITIUS_TACTICAL_FAMILIES <- c("middle", "distance", "road", "walk", "combined")
+
 .sigma_marks_pseudo_n <- function() {
   raw <- Sys.getenv("CITIUS_SIGMA_MARKS_PSEUDO_N", "")
   if (!nzchar(raw)) return(40)
@@ -1463,7 +1474,12 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     dt[, .q := NULL]
   }
 
-  reg <- .citius_event_registry[, c("event_id", "tactical", "cv_prior")]
+  # `.fam` comes from the REGISTRY under a reserved name, not from whatever the
+  # caller's results happen to carry. A bare `family` here would silently pick up
+  # a caller column of the same name -- and if none existed, the gate below
+  # would match nothing and quietly disable the override entirely.
+  reg <- .citius_event_registry[, c("event_id", "tactical", "cv_prior", "family")]
+  data.table::setnames(reg, "family", ".fam")
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
   dt[is.na(tactical), tactical := FALSE]
 
@@ -1473,7 +1489,29 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   if (!is.null(calibration) && !is.null(calibration$events)) {
     ti <- calibration$events[, c("event_id", "tactical_index", "calibrated")]
     dt <- merge(dt, ti, by = "event_id", all.x = TRUE, sort = FALSE)
-    dt[calibrated %in% TRUE & is.finite(tactical_index), tactical := tactical_index < -0.5]
+    # GATED BY FAMILY, because `tactical_index` measures something broader than
+    # tactics. It is `.skewness(c_r)`, the skew of an event's fitted race
+    # effects, so it fires whenever some races come out much slower than typical.
+    #
+    # For a 1500m that IS tactics: championship finals are sit-and-kick and far
+    # slower than paced races, a slow time there says nothing about ability, and
+    # dropping the worst marks is right. For a shot put or a 100m the same skew
+    # is WEATHER -- headwind, cold, a wet ring -- and the two want opposite
+    # treatment. A tactically slow race should be dropped because it does not
+    # measure the athlete; a weather-slowed race should be ADJUSTED, which
+    # `.adjust_history_to_target()` already does. Trimming it as well deletes an
+    # athlete's genuine bad days and biases the estimate upward.
+    #
+    # Ungated, the override flagged 52 of 74 events -- every throw and every
+    # sprint. Measured on the marks lab with per-event parameters, held out on
+    # 44 events: ungated 39 beaten and 23 separated wins, family-gated 41 and
+    # 26. Registry-only reaches 42 beaten but only 25 separated, so the gate is
+    # the better of the two narrowings and keeps the override's real work in the
+    # families where it means something.
+    stopifnot("registry family did not join" = ".fam" %in% names(dt))
+    dt[calibrated %in% TRUE & is.finite(tactical_index) &
+         .fam %in% .CITIUS_TACTICAL_FAMILIES,
+       tactical := tactical_index < -0.5]
   }
 
   # `recent_mean` is built from RAW marks, so snapshot them before the

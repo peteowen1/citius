@@ -116,3 +116,47 @@ test_that("trim_tactical accepts a table and 0 disables it per event", {
   expect_equal(none$ability, none_tb$ability)
   expect_gt(trimmed$ability, none$ability)   # oriented: dropping the worst raises it
 })
+
+test_that("the tactical override only fires in families where tactics exist", {
+  # `tactical_index` is the skew of an event's fitted race effects, so it fires
+  # whenever some races come out much slower than typical. In a 1500m that is
+  # sit-and-kick; in a shot put it is weather. Only the first should trim.
+  expect_true(all(c("middle", "distance") %in% citius:::.CITIUS_TACTICAL_FAMILIES))
+  expect_false(any(c("sprint", "throw", "jump", "hurdles") %in%
+                     citius:::.CITIUS_TACTICAL_FAMILIES))
+
+  reg <- data.table::as.data.table(citius_events())
+  mk <- function(ev, marks) {
+    ori <- reg$orientation[match(ev, reg$event_id)]
+    h <- data.table::data.table(
+      athlete_id = "a", event_id = ev,
+      date = as.Date("2024-01-01") + seq(0, by = 20, length.out = length(marks)),
+      mark = marks, orientation = ori)
+    h[, perf := orientation * log(mark)][]
+  }
+  # The pair has to be chosen carefully. The 1500m is ALREADY tactical in the
+  # registry, so the override adds nothing there and the test would pass
+  # vacuously. The marathon is NOT registry-tactical and IS in a tactical
+  # family, so it is one of the events the override genuinely adds; the shot put
+  # is one it should stop adding.
+  expect_false(reg$tactical[match("AT-Marathon-M", reg$event_id)])
+  expect_false(reg$tactical[match("AT-ShotPut-M", reg$event_id)])
+
+  # a calibration claiming BOTH events are strongly negatively skewed
+  cal <- list(events = data.frame(
+    event_id = c("AT-Marathon-M", "AT-ShotPut-M"),
+    tactical_index = c(-2, -2), calibrated = c(TRUE, TRUE)))
+
+  # each has one clearly worst mark, so trimming it must raise the estimate
+  h1 <- mk("AT-Marathon-M", c(9000, 7810, 7800, 7790, 7780))
+  h2 <- mk("AT-ShotPut-M",  c(17.0, 20.4, 20.5, 20.6, 20.7))
+  f <- function(h, calib) estimate_ability(h, adjust_context = FALSE,
+                                           as_of = as.Date("2024-09-01"),
+                                           calibration = calib,
+                                           trim_tactical = 0.25)$ability
+
+  # the marathon is in a tactical family, so the override fires and lifts it
+  expect_gt(f(h1, cal), f(h1, NULL))
+  # the shot put is not, so the override is ignored and nothing moves
+  expect_equal(f(h2, cal), f(h2, NULL))
+})
