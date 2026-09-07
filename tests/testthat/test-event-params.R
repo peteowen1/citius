@@ -160,3 +160,65 @@ test_that("the tactical override only fires in families where tactics exist", {
   # the shot put is not, so the override is ignored and nothing moves
   expect_equal(f(h2, cal), f(h2, NULL))
 })
+
+test_that("precision_scale exponentiates the context weights and leaves recency alone", {
+  cal <- list(round = data.frame(round_class = c("final", "heat"),
+                                 precision = c(0.8, 1.6)),
+              tier  = data.frame(tier_class = c("low", "top"),
+                                 precision = c(1.1, 0.9)))
+  d <- as.Date("2025-01-01")
+  w1 <- result_weight(d, tier = "F", round = "heat", as_of = d,
+                      half_life = Inf, calibration = cal)
+  w0 <- result_weight(d, tier = "F", round = "heat", as_of = d,
+                      half_life = Inf, calibration = cal, precision_scale = 0)
+  wh <- result_weight(d, tier = "F", round = "heat", as_of = d,
+                      half_life = Inf, calibration = cal, precision_scale = 0.5)
+  # scale 0 flattens the context weight to exactly 1
+  expect_equal(w0, 1)
+  # and 0.5 is the square root of the full weight
+  expect_equal(wh, sqrt(w1))
+
+  # RECENCY MUST BE UNTOUCHED. Exponentiating the whole weight instead of only
+  # the precision would silently rescale the half-life, which is a different
+  # parameter with its own fitted value.
+  old <- as.Date("2024-01-01")
+  r1 <- result_weight(old, tier = "F", round = "heat", as_of = d,
+                      half_life = 365, calibration = cal)
+  r0 <- result_weight(old, tier = "F", round = "heat", as_of = d,
+                      half_life = 365, calibration = cal, precision_scale = 0)
+  expect_equal(r0, 0.5^(as.numeric(d - old) / 365))
+  expect_equal(r1 / r0, w1)          # the ratio is the context weight alone
+})
+
+test_that("precision_scale reaches estimate_ability and takes a per-event table", {
+  h <- data.table::rbindlist(lapply(c("AT-100Metres-M", "AT-ShotPut-M"), function(ev) {
+    ori <- if (ev == "AT-ShotPut-M") 1 else -1
+    data.table::data.table(
+      athlete_id = paste0("a_", ev), event_id = ev,
+      date = as.Date("2024-01-01") + c(0, 40, 80, 120),
+      mark = if (ori < 0) c(10.4, 10.3, 10.2, 10.1) else c(20.2, 20.3, 20.4, 20.5),
+      orientation = ori,
+      round = c("heat", "final", "heat", "final"),
+      tier = c("F", "OW", "F", "OW"))
+  }))
+  h[, perf := orientation * log(mark)]
+  cal <- list(round = data.frame(round_class = c("final", "heat"),
+                                 precision = c(0.8, 1.6)),
+              tier  = data.frame(tier_class = c("low", "top"),
+                                 precision = c(1.1, 0.9)))
+  a1 <- estimate_ability(h, adjust_context = FALSE, as_of = as.Date("2024-09-01"),
+                         calibration = cal)
+  a0 <- estimate_ability(h, adjust_context = FALSE, as_of = as.Date("2024-09-01"),
+                         calibration = cal, precision_scale = 0)
+  expect_false(isTRUE(all.equal(a1$ability, a0$ability)))
+
+  # per-event: only the 100m is flattened, so the shot put must match a1
+  tb <- data.frame(event_id = "AT-100Metres-M", precision_scale = 0)
+  am <- estimate_ability(h, adjust_context = FALSE, as_of = as.Date("2024-09-01"),
+                         calibration = cal, precision_scale = tb)
+  m <- merge(a1[, .(event_id, full = ability)],
+             merge(a0[, .(event_id, flat = ability)],
+                   am[, .(event_id, mixed = ability)], by = "event_id"), by = "event_id")
+  expect_equal(m[event_id == "AT-ShotPut-M"]$mixed, m[event_id == "AT-ShotPut-M"]$full)
+  expect_equal(m[event_id == "AT-100Metres-M"]$mixed, m[event_id == "AT-100Metres-M"]$flat)
+})

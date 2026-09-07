@@ -174,12 +174,19 @@
 #'   class so that the weights and the offsets share one vocabulary. Pass the
 #'   *class*, never a class routed back through `tier`: unrecognised codes map
 #'   to `"mid"`, so double-mapping is silent.
+#' @param precision_scale Exponent applied to the context precision (tier and
+#'   round), leaving recency untouched. `1`, the default, is the calibration as
+#'   fitted; `0` makes every mark count the same whatever meet it was set at.
+#'   Measured best at **0** for mark prediction: the fitted weights measure which
+#'   race most precisely pins down current ability, which is not the same as
+#'   which race best predicts a championship final.
 #' @return Numeric vector of non-negative weights.
 #' @seealso [calibrate()]
 #' @export
 result_weight <- function(date, tier = NA_character_, round = NA_character_,
                           as_of = Sys.Date(), half_life = 540,
-                          calibration = NULL, tier_class = NULL) {
+                          calibration = NULL, tier_class = NULL,
+                          precision_scale = 1) {
   n <- length(date)
   age_days <- as.numeric(as_of - as.Date(date))
   # KNOWN CHOICE, not an oversight: an NA or future date gets age 0, i.e. FULL
@@ -209,8 +216,31 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
   # double-mapping would be silent.
   tc <- if (is.null(tier_class)) .tier_class(tier) else rep_len(as.character(tier_class), n)
 
-  recency * .context_precision(calibration, "round", .round_class(round)) *
+  prec <- .context_precision(calibration, "round", .round_class(round)) *
     .context_precision(calibration, "tier", tc)
+  # PRECISION_SCALE: an exponent on the context precision, recency untouched.
+  #
+  # An exponent rather than a multiplier because these are precisions, which
+  # compose multiplicatively: halving it halves the log-ratio between trusting a
+  # final and trusting a heat, which is the natural way to shrink a weight that
+  # is itself a ratio. 1 is the calibration as fitted; 0 makes every mark count
+  # the same whatever meet it was set at.
+  #
+  # Measured on the marks lab, held out on 44 events: the fitted weights (1)
+  # beat 24 events separated, and switching them off (0) beats 28, with pooled
+  # error 2.0624 -> 2.0368. All nine families fit 0 independently.
+  #
+  # The weights are not wrong, they answer a different question. They measure
+  # which race most precisely pins down CURRENT ABILITY, and routine races at
+  # weak meets genuinely scatter least -- a category F semi-final carries 3.7x a
+  # Diamond League final. A forecast needs which race best predicts a
+  # CHAMPIONSHIP FINAL, and up-weighting routine runs to predict a peak effort
+  # is backwards.
+  #
+  # Default 1, so every existing caller is unchanged. See
+  # docs/reviews/marks-optimisation-2026-09-07.md.
+  if (!isTRUE(all.equal(precision_scale, 1))) prec <- prec^precision_scale
+  recency * prec
 }
 
 #' Measured precision of a context, or a flat weight when uncalibrated
@@ -1342,6 +1372,11 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #'   long, because 365 days had been standing in for a cap on how many results
 #'   accumulate. Set both together or neither. See
 #'   `docs/reviews/marks-blend-2026-09-07.md`.
+#' @param precision_scale Exponent on the tier and round precision weights,
+#'   scalar or a table with a `precision_scale` column plus `event_id` and/or
+#'   `family`. `1` is the calibration as fitted; `0` weights every mark equally
+#'   whatever meet it was set at, which measured better for marks on all nine
+#'   families. Recency is untouched either way.
 #' @param context_scale How much of the context adjustment to keep: `1` (the
 #'   default) the whole correction, `0` none of it. Scalar, or a table with a
 #'   `context_scale` column plus `event_id` and/or `family`. Only has an effect
@@ -1383,6 +1418,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @export
 estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                              races_half_life = Inf, context_scale = 1,
+                             precision_scale = 1,
                              trim_tactical = 0.25, min_results = 1L,
                              adjust_context = TRUE, calibration = NULL,
                              robust_sigma = TRUE,
@@ -1439,7 +1475,9 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                           round = if ("round" %in% names(dt)) round else NA_character_,
                           as_of = as_of, half_life = hl,
                           calibration = calibration,
-                          tier_class = .tier_class_of(dt))]
+                          tier_class = .tier_class_of(dt),
+                          precision_scale = .event_param(event_id, precision_scale,
+                                                         "precision_scale", 1))]
 
   # RACES-SINCE DECAY, on top of the calendar decay above.
   #
