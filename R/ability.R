@@ -60,24 +60,41 @@
 # therefore cannot move a finishing order or a medal probability, and there is
 # a test that asserts exactly that.
 #
-# 0.5 is the JOINT OPTIMUM on both quantities the launch goal names, swept at
-# 0.05 on the 2024+ held-out set (diagnostics/marks_decompose.R, 44 events):
+# DEFAULT 0: OFF. This is a DIAGNOSTIC LEVER, not a model component.
 #
-#   pooled out-of-sample mark MAE   2.0793, tied with 0.45 for the lowest
-#   mean per-event relative gap     -3.64%, the best of any value
+# It was briefly deployed at 0.5 on 2026-09-07 and turned off the same day, on
+# Pete's objection, which is correct and worth keeping written down:
 #
-# Events beaten keeps rising to 41 at 0.65, but both error metrics turn over
-# before that, so a higher value buys thin events at the cost of error
-# everywhere. 0.6 was shipped first and is worse on BOTH: 2.0837 and -3.56%.
-# Against the deployed 0 this is 18 of 44 events -> 36 and -0.86% -> -4.08%.
+#   "You can't blend with a baseline to beat a baseline cause then you're
+#    stealing the baseline's info."
+#
+# Three reasons it had to go, in increasing order of how much they matter:
+#
+#   1. A model containing the baseline cannot be honestly SCORED against that
+#      baseline. Part of any measured win is shrinkage toward it, so the metric
+#      stops measuring the thing it exists to measure.
+#   2. It does nothing for an athlete with no recent history -- a debutant, a
+#      comeback -- which is exactly where prediction is hardest and where the
+#      underlying defect is fully exposed.
+#   3. It could only ever be applied to MARKS, never to the ranking. That was
+#      presented as a safety property. It is really the tell: a term that has to
+#      be kept away from the quantity that decides medals is a patch on a
+#      metric, not a model of anything. If recent form carries signal, it should
+#      change who wins.
+#
+# What it DID establish, and what makes it worth keeping as a lever: mixing in a
+# plain unweighted mean of five raw marks improves held-out mark error by ~4%,
+# which means `ability` is systematically wrong as a point forecast in a way a
+# dumb average is not. That gap is a measurement of a real defect. Set this
+# above 0 only to re-measure that gap, never to ship.
 # See docs/reviews/marks-blend-2026-09-07.md.
 .marks_blend <- function() {
   raw <- Sys.getenv("CITIUS_MARKS_BLEND", "")
-  if (!nzchar(raw)) return(0.5)
+  if (!nzchar(raw)) return(0)
   v <- suppressWarnings(as.numeric(raw))
   if (!is.finite(v) || v < 0 || v > 1) {
-    cli::cli_warn("CITIUS_MARKS_BLEND={.val {raw}} is not a number in [0, 1]; using 0.5.")
-    return(0.5)
+    cli::cli_warn("CITIUS_MARKS_BLEND={.val {raw}} is not a number in [0, 1]; using 0.")
+    return(0)
   }
   v
 }
@@ -1344,11 +1361,16 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     dt[calibrated %in% TRUE & is.finite(tactical_index), tactical := tactical_index < -0.5]
   }
 
-  # The recency blend is built from RAW marks, so snapshot them before the
-  # adjustment stack rewrites `perf` in place. Only when the blend is on: the
-  # column is a full copy of the history and costs memory for nothing at 0.
-  .mblend <- .marks_blend()
-  if (.mblend > 0) dt[, perf_raw := perf]
+  # `recent_mean` is built from RAW marks, so snapshot them before the
+  # adjustment stack rewrites `perf` in place.
+  #
+  # UNCONDITIONAL, even though the blend defaults to off. The column is what the
+  # marks diagnostics compare against, and gating it on the blend meant turning
+  # the blend off silently stopped emitting the ingredient -- caught by test,
+  # after `_deployed.R` had already been written claiming it was still emitted.
+  # The cost is one numeric column on the history, which is nothing beside the
+  # adjustment stack that runs on the next line.
+  dt[, perf_raw := perf]
 
   if (isTRUE(adjust_context)) .adjust_history_to_target(dt, calibration, adjust_race)
 
@@ -1363,17 +1385,14 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   #
   # Minimum three, matching the lab: a mean of one or two marks is noisier than
   # the ability it would be replacing, and those athletes keep `ability` alone.
-  .rec <- NULL
-  if (.mblend > 0) {
-    rr <- dt[, .(athlete_id, event_id, date, perf_raw)]
-    if (!is.null(only)) rr <- rr[as.character(athlete_id) %in% as.character(only)]
-    data.table::setorder(rr, athlete_id, event_id, -date)
-    rr[, .rk := seq_len(.N), by = .(athlete_id, event_id)]
-    .rec <- rr[.rk <= 5L, .(recent_mean = mean(perf_raw), n_recent = .N),
-               by = .(athlete_id, event_id)][n_recent >= 3L]
-    .rec[, athlete_id := as.character(athlete_id)]
-    rm(rr)
-  }
+  rr <- dt[, .(athlete_id, event_id, date, perf_raw)]
+  if (!is.null(only)) rr <- rr[as.character(athlete_id) %in% as.character(only)]
+  data.table::setorder(rr, athlete_id, event_id, -date)
+  rr[, .rk := seq_len(.N), by = .(athlete_id, event_id)]
+  .rec <- rr[.rk <= 5L, .(recent_mean = mean(perf_raw), n_recent = .N),
+             by = .(athlete_id, event_id)][n_recent >= 3L]
+  .rec[, athlete_id := as.character(athlete_id)]
+  rm(rr)
 
   if (trim_tactical > 0) {
     # Vectorised rank-and-filter, not `.SD[...]` per group. The `.SD` form made
