@@ -11,14 +11,27 @@ result_weight(
   as_of = Sys.Date(),
   half_life = 540,
   calibration = NULL,
-  tier_class = NULL
+  tier_class = NULL,
+  precision_scale = 1
 )
 }
 \arguments{
 \item{date}{Date vector of performance dates.}
 
-\item{tier}{Character vector of World Athletics category codes (\code{"OW"},
-\code{"GL"}, \code{"A"}..\code{"F"}), or \code{NA}.}
+\item{tier}{World Athletics category of the RACE: \code{"OW"}, \code{"GL"}, \code{"GW"},
+\code{"DF"}, \code{"A"}..\code{"F"}, or \code{NA}.
+
+\strong{Not \code{meet_tier}}, which is the catalogue's rating of a MEETING
+(\code{"T1_elite"}, \code{"T2_strong"}, \code{"T3_development"}). The two classifications
+cross rather than nest: one T1_elite meeting contains races of several WAC
+categories, because a Diamond League meeting's headline disciplines and its
+supporting programme are categorised separately. Weltklasse Zürich runs
+\code{"GW"} disciplines beside \code{"F"} support races inside a single T1_elite
+meeting, and 90 of the 849 races in the lab's "elite" test set are \code{"F"}
+for exactly that reason.
+
+Diagnostics name it \code{race_tier} where both appear; the stored column keeps
+\code{tier}, since renaming it would invalidate a 7.5M-row parquet store.}
 
 \item{round}{Character vector of round codes (\code{"F"}, \code{"SF1"}, \code{"H4"}, or
 World Aquatics \code{"Final"}/\code{"Heats"}).}
@@ -37,6 +50,13 @@ than the feed code allows — \code{estimate_ability()} passes the catalogue-awa
 class so that the weights and the offsets share one vocabulary. Pass the
 \emph{class}, never a class routed back through \code{tier}: unrecognised codes map
 to \code{"mid"}, so double-mapping is silent.}
+
+\item{precision_scale}{Exponent applied to the context precision (tier and
+round), leaving recency untouched. \code{1}, the default, is the calibration as
+fitted; \code{0} makes every mark count the same whatever meet it was set at.
+Measured best at \strong{0} for mark prediction: the fitted weights measure which
+race most precisely pins down current ability, which is not the same as
+which race best predicts a championship final.}
 }
 \value{
 Numeric vector of non-negative weights.

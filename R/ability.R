@@ -1397,6 +1397,13 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #'   you know which athletes you are about to score -- a backtest or a
 #'   diagnostic over a fixed set of races -- because without it the refit spends
 #'   almost all of its time on athletes the caller will discard.
+#' @param peak_gamma Exponent upweighting an athlete's own better marks over
+#'   worse ones, ranked within (athlete, event). `0`, the default, weights
+#'   every result equally on this axis. Scalar, or a table with a
+#'   `peak_gamma` column plus `event_id` and/or `family`, same shape as
+#'   `precision_scale`. Swept both sides of zero on the marks lab and `0` is a
+#'   genuine interior optimum globally -- not an edge artefact -- but never
+#'   tested per event. See `docs/plans/marks-parameter-optimisation-backlog-2026-09-08.md`.
 #' @param adjust_context Whether to put every performance on a final-equivalent,
 #'   top-tier footing before averaging, using [estimate_context_effects()].
 #'   Without this the estimate answers "how does this athlete perform on an
@@ -1526,11 +1533,20 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   }
   dt[, .rhl := NULL]
 
-  if (is.numeric(peak_gamma) && peak_gamma > 0) {
+  dt[, .pg := .event_param(event_id, peak_gamma, "peak_gamma", 0)]
+  # != 0, NOT > 0. A negative peak_gamma is a real, fitted, intentional value
+  # (event_params.rds carries distance at -0.5, e.g.) that upweights an
+  # athlete's WORSE marks over their better ones -- `> 0` silently zeroed
+  # every negative-gamma event's effect here while fit_event_params.R and
+  # marks_hier_params.R's own replicas of this same block both correctly used
+  # `!= 0`, so the fitted number and the applied number silently diverged.
+  # Found by silent-failure-hunter review, 2026-09-08.
+  if (any(dt$.pg != 0, na.rm = TRUE)) {
     dt[, .q := data.table::frank(perf, ties.method = "first") / .N, by = .(athlete_id, event_id)]
-    dt[, w := w * (.q^peak_gamma)]
+    dt[.pg != 0, w := w * (.q^.pg)]
     dt[, .q := NULL]
   }
+  dt[, .pg := NULL]
 
   # `.fam` comes from the REGISTRY under a reserved name, not from whatever the
   # caller's results happen to carry. A bare `family` here would silently pick up

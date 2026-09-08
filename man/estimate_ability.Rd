@@ -10,6 +10,7 @@ estimate_ability(
   half_life = 540,
   races_half_life = Inf,
   context_scale = 1,
+  precision_scale = 1,
   trim_tactical = 0.25,
   min_results = 1L,
   adjust_context = TRUE,
@@ -58,6 +59,12 @@ default) the whole correction, \code{0} none of it. Scalar, or a table with a
 when \code{adjust_context = TRUE}. Fitted per family, distance wants 1.25 and
 road 1.00 while throw wants 0.25 and walk 0.00.}
 
+\item{precision_scale}{Exponent on the tier and round precision weights,
+scalar or a table with a \code{precision_scale} column plus \code{event_id} and/or
+\code{family}. \code{1} is the calibration as fitted; \code{0} weights every mark equally
+whatever meet it was set at, which measured better for marks on all nine
+families. Recency is untouched either way.}
+
 \item{trim_tactical}{Fraction of worst performances to drop in tactical
 events. Set to \code{0} to disable. Scalar, or a table with a \code{trim_tactical}
 column plus \code{event_id} and/or \code{family} -- fitted that way it recovers what
@@ -81,6 +88,14 @@ full run, which a package test asserts rather than assumes. Use it whenever
 you know which athletes you are about to score -- a backtest or a
 diagnostic over a fixed set of races -- because without it the refit spends
 almost all of its time on athletes the caller will discard.}
+
+\item{peak_gamma}{Exponent upweighting an athlete's own better marks over
+worse ones, ranked within (athlete, event). \code{0}, the default, weights
+every result equally on this axis. Scalar, or a table with a
+\code{peak_gamma} column plus \code{event_id} and/or \code{family}, same shape as
+\code{precision_scale}. Swept both sides of zero on the marks lab and \code{0} is a
+genuine interior optimum globally -- not an edge artefact -- but never
+tested per event. See \verb{docs/plans/marks-parameter-optimisation-backlog-2026-09-08.md}.}
 }
 \value{
 A \code{data.table} with \code{athlete_id}, \code{event_id}, \code{ability},
