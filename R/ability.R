@@ -1544,6 +1544,28 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   if (any(dt$.pg != 0, na.rm = TRUE)) {
     dt[, .q := data.table::frank(perf, ties.method = "first") / .N, by = .(athlete_id, event_id)]
     dt[.pg != 0, w := w * (.q^.pg)]
+    # WEIGHT CONCENTRATION CHECK. `.q` is a rank quantile in (0, 1], so it can
+    # never be 0 and `.q^.pg` can never be Inf -- but for NEGATIVE gamma the
+    # worst mark's weight grows as (1/N)^gamma, which is unbounded in the
+    # athlete's own race count. Sized 2026-09-09 against the corpus: the longest
+    # per-athlete-event history is 586 marks, where gamma -0.5 gives the worst
+    # mark 17x the median weight, -1.0 gives 293x and -1.5 (the edge of
+    # fit_event_params.R's own sweep grid) gives ~5,000x. Deployed values are
+    # mild today (only two events negative, worst ratio ~4.85x), so this is
+    # insurance against a future refit landing a steep negative gamma on a
+    # high-count event, where one injury race or bad data point would quietly
+    # dominate an athlete's whole estimate. Warn rather than clip: silently
+    # capping would hide the fit that produced it.
+    .conc <- dt[.pg != 0 & is.finite(w), if (.N > 2L) max(w) / stats::median(w) else NA_real_,
+                by = .(athlete_id, event_id)]
+    .bad <- .conc[is.finite(V1) & V1 > 50]
+    if (nrow(.bad)) {
+      cli::cli_warn(c(
+        "!" = "peak_gamma: {nrow(.bad)} athlete-event group{?s} have one mark carrying
+               over 50x the median weight (max {round(max(.bad$V1))}x).",
+        "i" = "A single result may be dominating those ability estimates. Check the
+               fitted peak_gamma for {.val {utils::head(unique(.bad$event_id), 3)}}."))
+    }
     dt[, .q := NULL]
   }
   dt[, .pg := NULL]
