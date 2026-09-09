@@ -1556,7 +1556,15 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     # high-count event, where one injury race or bad data point would quietly
     # dominate an athlete's whole estimate. Warn rather than clip: silently
     # capping would hide the fit that produced it.
-    .conc <- dt[.pg != 0 & is.finite(w), if (.N > 2L) max(w) / stats::median(w) else NA_real_,
+    # MEASURE peak_gamma'S OWN CONTRIBUTION, not the total weight. `w` already
+    # carries recency and precision, and at a 341-day half-life a twelve-year-old
+    # mark is ~7,000x lighter than a recent one before peak_gamma touches it --
+    # so a total-weight ratio fires on ordinary decay and cries wolf. The factor
+    # applied here is .q^.pg, and that is what needs bounding.
+    # Corrected 2026-09-09, same day the guard was added: it fired at 115,742x
+    # on a promotion run where the real peak_gamma spread was benign.
+    .conc <- dt[.pg != 0 & is.finite(w), if (.N > 2L)
+                  max(.q^.pg) / stats::median(.q^.pg) else NA_real_,
                 by = .(athlete_id, event_id)]
     .bad <- .conc[is.finite(V1) & V1 > 50]
     if (nrow(.bad)) {
