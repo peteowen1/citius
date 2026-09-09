@@ -732,6 +732,42 @@ test_that("peak_gamma > 0 upweights peak marks over routine marks", {
   expect_gt(ab_peak$ability, ab_flat$ability)
 })
 
+test_that("peak_gamma concentration guard is decay-independent (regression, f22eff4)", {
+  # The guard fired at 115,742x on a real promotion run where the actual
+  # peak_gamma spread was benign -- it was measuring TOTAL weight, which
+  # already carries recency decay, not peak_gamma's own factor (.q^.pg).
+  # Long calendar spread + mild gamma must NOT warn: decay alone cannot
+  # drive .conc, because .q is a rank quantile computed purely from `perf`
+  # ordering, with no date/decay term in it at all.
+  set.seed(1)
+  n <- 50L
+  h <- data.table::data.table(
+    athlete_id = "grinder",
+    event_id = "AT-10000Metres-M",  # distance family: fitted gamma is negative
+    date = Sys.Date() - seq(1, by = 30, length.out = n),  # ~4 years of spread
+    perf = to_perf(stats::rnorm(n, 1800, 20), -1L),
+    tier = "OW", round = "F"
+  )
+  expect_no_warning(
+    estimate_ability(h, adjust_context = FALSE, peak_gamma = -0.5))
+})
+
+test_that("peak_gamma concentration guard fires on a steep negative gamma", {
+  set.seed(2)
+  n <- 50L
+  h <- data.table::data.table(
+    athlete_id = "grinder",
+    event_id = "AT-10000Metres-M",
+    date = Sys.Date() - 1:n,
+    perf = to_perf(stats::rnorm(n, 1800, 20), -1L),
+    tier = "OW", round = "F"
+  )
+  # (N/2)^|gamma| ~= 125x at N=50, gamma=-1.5 -- well past the 50x threshold.
+  expect_warning(
+    estimate_ability(h, adjust_context = FALSE, peak_gamma = -1.5),
+    "peak_gamma")
+})
+
 test_that("robust_location = TRUE protects ability against extreme bad-side mark outliers", {
   set.seed(42)
   times <- c(rep(10.00, 5), 12.50)
