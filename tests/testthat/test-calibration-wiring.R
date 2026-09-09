@@ -57,7 +57,28 @@ KNOWN_UNREAD <- c(
   # run_athlete_foul_screening.R:13 calls `fit_athlete_foul_trait()`, which no
   # longer exists anywhere in the package - so that script cannot run at all and
   # the slot it writes is doubly dead. (2026-08-06)
-  "athlete_foul"
+  "athlete_foul",
+  # --- 2026-09-06: provenance stamped by the race-shock / sigma experiment arms.
+  # None of these calibrations is deployed. Each field records HOW its arm was
+  # built, so the value is descriptive of a transformation ALREADY applied to
+  # the stored `race` table rather than an instruction to apply one -- which is
+  # why nothing reads them and why that is currently correct.
+  #
+  # They are registered here rather than in CALIBRATION_METADATA on purpose: if
+  # one of these arms is ever promoted, "nothing reads it" stops being correct
+  # and this register forces the question. CALIBRATION_METADATA would mute it
+  # permanently, which is the failure mode that hid `race` until 2026-08-13.
+  # DELETE the matching line when an arm is promoted or abandoned.
+  "condition_sd_source",  # build_calibration_condsd.R:63 - names the solve that
+                          # produced condition_sd. Arm built, NOT promoted.
+  "race_eb",              # build_calibration_race_eb.R:133 - per-event EB
+                          # shrinkage reliabilities used to shrink `race`.
+  "race_filter_min",      # build_calibration_racefilt.R:47 - min field size the
+                          # race table was filtered to.
+  "race_scale",           # build_calibration_racescaled.R:69 - scalar the race
+                          # effects were multiplied by.
+  "race_scale_minfield"   # build_calibration_racescaled.R:70 - min field size
+                          # that scalar was fitted on.
 )
 
 # Layers the package reads that the DEPLOYED calibration deliberately omits.

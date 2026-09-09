@@ -8,6 +8,9 @@ estimate_ability(
   results,
   as_of = Sys.Date(),
   half_life = 540,
+  races_half_life = Inf,
+  context_scale = 1,
+  precision_scale = 1,
   trim_tactical = 0.25,
   min_results = 1L,
   adjust_context = TRUE,
@@ -34,8 +37,39 @@ how fast form decays is measurable, and the measured values (sprint ~135
 days, distance and field ~180) are far shorter than the 540-day scalar
 default, which keeps stale form alive.}
 
+\item{races_half_life}{Either a single number, or a table with a
+\code{races_half_life} column plus \code{event_id} and/or \code{family}, in the same shape
+\code{half_life} accepts. An event the table does not name gets \code{Inf}, the term
+OFF, rather than a median of other events' values.
+
+The number of the athlete's OWN subsequent races after
+which a result carries half weight, applied on top of \code{half_life}. A
+calendar half-life cannot tell apart an athlete who has raced 30 times
+since a performance from one who has raced twice; this can. \code{Inf}, the
+default, disables it and reproduces the previous behaviour exactly.
+Measured best around \strong{5}, and it is not independent of \code{half_life}: with
+race-count decay on, the calendar half-life wants to be roughly twice as
+long, because 365 days had been standing in for a cap on how many results
+accumulate. Set both together or neither. See
+\verb{docs/reviews/marks-blend-2026-09-07.md}.}
+
+\item{context_scale}{How much of the context adjustment to keep: \code{1} (the
+default) the whole correction, \code{0} none of it. Scalar, or a table with a
+\code{context_scale} column plus \code{event_id} and/or \code{family}. Only has an effect
+when \code{adjust_context = TRUE}. Fitted per family, distance wants 1.25 and
+road 1.00 while throw wants 0.25 and walk 0.00.}
+
+\item{precision_scale}{Exponent on the tier and round precision weights,
+scalar or a table with a \code{precision_scale} column plus \code{event_id} and/or
+\code{family}. \code{1} is the calibration as fitted; \code{0} weights every mark equally
+whatever meet it was set at, which measured better for marks on all nine
+families. Recency is untouched either way.}
+
 \item{trim_tactical}{Fraction of worst performances to drop in tactical
-events. Set to \code{0} to disable.}
+events. Set to \code{0} to disable. Scalar, or a table with a \code{trim_tactical}
+column plus \code{event_id} and/or \code{family} -- fitted that way it recovers what
+"tactical" means without registry input: middle, distance and combined
+0.40, jump and throw 0.00.}
 
 \item{min_results}{Minimum results required to report an athlete.}
 
@@ -44,12 +78,38 @@ top-tier footing before averaging, using \code{\link[=estimate_context_effects]{
 Without this the estimate answers "how does this athlete perform on an
 average day at an average meet", which is systematically slower than a
 championship final and will under-predict the event being simulated.}
+
+\item{only}{Optional vector of \code{athlete_id}s to return. This is the FAST
+PATH, not just a filter: the population quantities every athlete needs
+(\code{prior_mu}, \code{sigma_between}, and the robust-sigma scale \code{k}) are computed
+cheaply over the whole input, and the expensive per-athlete body then runs
+only for the ids named. The result for those athletes is identical to a
+full run, which a package test asserts rather than assumes. Use it whenever
+you know which athletes you are about to score -- a backtest or a
+diagnostic over a fixed set of races -- because without it the refit spends
+almost all of its time on athletes the caller will discard.}
+
+\item{peak_gamma}{Exponent upweighting an athlete's own better marks over
+worse ones, ranked within (athlete, event). \code{0}, the default, weights
+every result equally on this axis. Scalar, or a table with a
+\code{peak_gamma} column plus \code{event_id} and/or \code{family}, same shape as
+\code{precision_scale}. Swept both sides of zero on the marks lab and \code{0} is a
+genuine interior optimum globally -- not an edge artefact -- but never
+tested per event. See \verb{docs/plans/marks-parameter-optimisation-backlog-2026-09-08.md}.}
 }
 \value{
 A \code{data.table} with \code{athlete_id}, \code{event_id}, \code{ability},
-\code{ability_raw}, \code{sigma}, \code{n}, \code{n_eff}, \code{shrinkage}, \code{age_ref} and
-\code{last_date}. \code{age_ref} is the weighted mean age behind the estimate and is
-what \code{\link[=project_ability]{project_ability()}} must project \emph{from}.
+\code{ability_raw}, \code{sigma}, \code{sigma_raw}, \code{sigma_rob}, \code{sigma_marks},
+\code{recent_mean}, \code{ability_se}, \code{n}, \code{n_eff}, \code{w_total}, \code{shrinkage},
+\code{prior_mu}, \code{age_ref} and \code{last_date}. \code{age_ref} is the weighted mean age
+behind the estimate and is what \code{\link[=project_ability]{project_ability()}} must project \emph{from}.
+
+Three of those are for MARKS rather than for the ranking, and
+\code{\link[=simulate_event]{simulate_event()}} reads them only for the mark distribution.
+\code{sigma_marks} is its spread; \code{recent_mean}, the plain mean of the athlete's
+last five raw marks, is blended into its centre by \code{CITIUS_MARKS_BLEND},
+and is \code{NA} for an athlete with fewer than three. \code{ability} and \code{sigma},
+which decide placings, are untouched by both.
 }
 \description{
 Produces, for every athlete-event pair present in \code{results}, a point estimate

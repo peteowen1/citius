@@ -18,6 +18,117 @@
 # estimate_ability()), fitting k is the natural first arm.
 .CITIUS_SIGMA_PSEUDO_N <- 2
 
+# Env override for the pseudo-count, so an arm can test it without a code edit
+# (2026-09-06: the shoot-out put pseudo-n 20-40 well ahead of 2 on hold-out
+# allocation skill; the arm that decides is run through this). Unset = 2, the
+# validated bundle above. Anything unparseable or negative falls back to 2 and
+# says so, rather than silently running the default under a different label.
+.sigma_pseudo_n <- function() {
+  raw <- Sys.getenv("CITIUS_SIGMA_PSEUDO_N", "")
+  if (!nzchar(raw)) return(.CITIUS_SIGMA_PSEUDO_N)
+  v <- suppressWarnings(as.numeric(raw))
+  if (!is.finite(v) || v < 0) {
+    cli::cli_warn("CITIUS_SIGMA_PSEUDO_N={.val {raw}} is not a non-negative number; using {(.CITIUS_SIGMA_PSEUDO_N)}.")
+    return(.CITIUS_SIGMA_PSEUDO_N)
+  }
+  v
+}
+
+# Env override for a global multiplier on the per-athlete sigma AFTER shrinkage
+# and the per-family context ratio. Unset = 1. This exists so the PIT coverage
+# check can find the scale at which the simulated spread is calibrated; the
+# fitted value belongs in the calibration object, not in an env var, before it
+# ships (the "no hand-tuned constants" rule).
+# Families where a slow race can plausibly reflect RACING rather than conditions,
+# and so where the calibration's tactical override is allowed to fire. Middle
+# and distance are the textbook case; road and walk races are decided tactically
+# over the closing kilometres; a combined event's individual marks are paced
+# against the points table rather than contested flat out.
+#
+# Sprints, hurdles, jumps and throws are excluded: a slow 100m or a short shot
+# put is weather or a bad day, never tactics, and the context adjustment already
+# handles the former.
+#
+# SWIMMING IS EXCLUDED TOO, and that is a decision rather than an oversight.
+# The registry carries swim_sprint, swim_distance, swim_middle and swim_im, and
+# none is listed here, so the override can never fire for them. Distance
+# swimming plausibly IS tactical -- a 1500m freestyle final is paced much like a
+# 1500m on the track -- but no swimming event has been through the marks lab, so
+# there is no measurement to justify including it. Add the swim families when
+# there is one, not before.
+.CITIUS_TACTICAL_FAMILIES <- c("middle", "distance", "road", "walk", "combined")
+
+.sigma_marks_pseudo_n <- function() {
+  raw <- Sys.getenv("CITIUS_SIGMA_MARKS_PSEUDO_N", "")
+  if (!nzchar(raw)) return(40)
+  v <- suppressWarnings(as.numeric(raw))
+  if (!is.finite(v) || v < 0) {
+    cli::cli_warn("CITIUS_SIGMA_MARKS_PSEUDO_N={.val {raw}} is not a non-negative number; using 40.")
+    return(40)
+  }
+  v
+}
+
+# How much of a predicted MARK is the athlete's own recent form.
+#
+# 0 = the ranking ability alone, which is what the model did until 2026-09-07;
+# 1 = the plain mean of their last five marks. This is a MARKS-ONLY term.
+# `estimate_ability()` emits the ingredient, `recent_mean`; `simulate_event()`
+# does the blending, and applies it only to the centre of the MARK
+# distribution, never to `ability`, which the ranking is built from. A blend
+# therefore cannot move a finishing order or a medal probability, and there is
+# a test that asserts exactly that.
+#
+# DEFAULT 0: OFF. This is a DIAGNOSTIC LEVER, not a model component.
+#
+# It was briefly deployed at 0.5 on 2026-09-07 and turned off the same day, on
+# Pete's objection, which is correct and worth keeping written down:
+#
+#   "You can't blend with a baseline to beat a baseline cause then you're
+#    stealing the baseline's info."
+#
+# Three reasons it had to go, in increasing order of how much they matter:
+#
+#   1. A model containing the baseline cannot be honestly SCORED against that
+#      baseline. Part of any measured win is shrinkage toward it, so the metric
+#      stops measuring the thing it exists to measure.
+#   2. It does nothing for an athlete with no recent history -- a debutant, a
+#      comeback -- which is exactly where prediction is hardest and where the
+#      underlying defect is fully exposed.
+#   3. It could only ever be applied to MARKS, never to the ranking. That was
+#      presented as a safety property. It is really the tell: a term that has to
+#      be kept away from the quantity that decides medals is a patch on a
+#      metric, not a model of anything. If recent form carries signal, it should
+#      change who wins.
+#
+# What it DID establish, and what makes it worth keeping as a lever: mixing in a
+# plain unweighted mean of five raw marks improves held-out mark error by ~4%,
+# which means `ability` is systematically wrong as a point forecast in a way a
+# dumb average is not. That gap is a measurement of a real defect. Set this
+# above 0 only to re-measure that gap, never to ship.
+# See docs/reviews/marks-blend-2026-09-07.md.
+.marks_blend <- function() {
+  raw <- Sys.getenv("CITIUS_MARKS_BLEND", "")
+  if (!nzchar(raw)) return(0)
+  v <- suppressWarnings(as.numeric(raw))
+  if (!is.finite(v) || v < 0 || v > 1) {
+    cli::cli_warn("CITIUS_MARKS_BLEND={.val {raw}} is not a number in [0, 1]; using 0.")
+    return(0)
+  }
+  v
+}
+
+.sigma_scale_env <- function() {
+  raw <- Sys.getenv("CITIUS_SIGMA_SCALE", "")
+  if (!nzchar(raw)) return(1)
+  v <- suppressWarnings(as.numeric(raw))
+  if (!is.finite(v) || v <= 0) {
+    cli::cli_warn("CITIUS_SIGMA_SCALE={.val {raw}} is not a positive number; using 1.")
+    return(1)
+  }
+  v
+}
+
 #' Weight a historical result by recency, competition tier and round
 #'
 #' Controls how much each past performance counts toward an athlete's current
@@ -36,8 +147,20 @@
 #' }
 #'
 #' @param date Date vector of performance dates.
-#' @param tier Character vector of World Athletics category codes (`"OW"`,
-#'   `"GL"`, `"A"`..`"F"`), or `NA`.
+#' @param tier World Athletics category of the RACE: `"OW"`, `"GL"`, `"GW"`,
+#'   `"DF"`, `"A"`..`"F"`, or `NA`.
+#'
+#'   **Not `meet_tier`**, which is the catalogue's rating of a MEETING
+#'   (`"T1_elite"`, `"T2_strong"`, `"T3_development"`). The two classifications
+#'   cross rather than nest: one T1_elite meeting contains races of several WAC
+#'   categories, because a Diamond League meeting's headline disciplines and its
+#'   supporting programme are categorised separately. Weltklasse Zürich runs
+#'   `"GW"` disciplines beside `"F"` support races inside a single T1_elite
+#'   meeting, and 90 of the 849 races in the lab's "elite" test set are `"F"`
+#'   for exactly that reason.
+#'
+#'   Diagnostics name it `race_tier` where both appear; the stored column keeps
+#'   `tier`, since renaming it would invalidate a 7.5M-row parquet store.
 #' @param round Character vector of round codes (`"F"`, `"SF1"`, `"H4"`, or
 #'   World Aquatics `"Final"`/`"Heats"`).
 #' @param as_of Reference date from which recency is measured.
@@ -45,12 +168,25 @@
 #' @param calibration Optional `citius_calibration` from [calibrate()]. Supplies
 #'   measured precisions for each round and tier. Without one, context weights
 #'   are flat and only recency applies.
+#' @param tier_class Optional pre-resolved tier class (`"top"`, `"mid"`,
+#'   `"low"`, ...). Supply this when the caller can resolve the class better
+#'   than the feed code allows — `estimate_ability()` passes the catalogue-aware
+#'   class so that the weights and the offsets share one vocabulary. Pass the
+#'   *class*, never a class routed back through `tier`: unrecognised codes map
+#'   to `"mid"`, so double-mapping is silent.
+#' @param precision_scale Exponent applied to the context precision (tier and
+#'   round), leaving recency untouched. `1`, the default, is the calibration as
+#'   fitted; `0` makes every mark count the same whatever meet it was set at.
+#'   Measured best at **0** for mark prediction: the fitted weights measure which
+#'   race most precisely pins down current ability, which is not the same as
+#'   which race best predicts a championship final.
 #' @return Numeric vector of non-negative weights.
 #' @seealso [calibrate()]
 #' @export
 result_weight <- function(date, tier = NA_character_, round = NA_character_,
                           as_of = Sys.Date(), half_life = 540,
-                          calibration = NULL) {
+                          calibration = NULL, tier_class = NULL,
+                          precision_scale = 1) {
   n <- length(date)
   age_days <- as.numeric(as_of - as.Date(date))
   # KNOWN CHOICE, not an oversight: an NA or future date gets age 0, i.e. FULL
@@ -64,8 +200,47 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
   tier <- rep_len(as.character(tier), n)
   round <- rep_len(as.character(round), n)
 
-  recency * .context_precision(calibration, "round", .round_class(round)) *
-    .context_precision(calibration, "tier", .tier_class(tier))
+  # `tier_class` lets the caller pass a class that is already resolved -- in
+  # practice .tier_class_of(), which prefers the catalogue's meet_tier. Without
+  # it this function can only see the feed code, and the WAC promotion
+  # (31aff53) made that a real divergence rather than a cosmetic one: the
+  # OFFSETS moved to a three-class WAC vocabulary (top/mid/low) while the
+  # WEIGHTS kept looking up the four-class feed one, which also emits "high".
+  # "high" then matched nothing and silently took the median precision --
+  # weighting ~469k of the least reliable rows in the corpus 29% too heavily
+  # (fitted 0.7132 -> median 0.9211). Passing the class in is what keeps both
+  # sides of a calibration speaking the same language.
+  #
+  # Do NOT route a resolved class back through `tier`: .tier_class() maps any
+  # unrecognised code to "mid", so .tier_class("top") is "mid", and the
+  # double-mapping would be silent.
+  tc <- if (is.null(tier_class)) .tier_class(tier) else rep_len(as.character(tier_class), n)
+
+  prec <- .context_precision(calibration, "round", .round_class(round)) *
+    .context_precision(calibration, "tier", tc)
+  # PRECISION_SCALE: an exponent on the context precision, recency untouched.
+  #
+  # An exponent rather than a multiplier because these are precisions, which
+  # compose multiplicatively: halving it halves the log-ratio between trusting a
+  # final and trusting a heat, which is the natural way to shrink a weight that
+  # is itself a ratio. 1 is the calibration as fitted; 0 makes every mark count
+  # the same whatever meet it was set at.
+  #
+  # Measured on the marks lab, held out on 44 events: the fitted weights (1)
+  # beat 24 events separated, and switching them off (0) beats 28, with pooled
+  # error 2.0624 -> 2.0368. All nine families fit 0 independently.
+  #
+  # The weights are not wrong, they answer a different question. They measure
+  # which race most precisely pins down CURRENT ABILITY, and routine races at
+  # weak meets genuinely scatter least -- a category F semi-final carries 3.7x a
+  # Diamond League final. A forecast needs which race best predicts a
+  # CHAMPIONSHIP FINAL, and up-weighting routine runs to predict a peak effort
+  # is backwards.
+  #
+  # Default 1, so every existing caller is unchanged. See
+  # docs/reviews/marks-optimisation-2026-09-07.md.
+  if (!isTRUE(all.equal(precision_scale, 1))) prec <- prec^precision_scale
+  recency * prec
 }
 
 #' Measured precision of a context, or a flat weight when uncalibrated
@@ -87,7 +262,40 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
   }
   tbl <- calibration[[which]]
   col <- if (which == "round") "round_class" else "tier_class"
-  out <- tbl$precision[match(classes, tbl[[col]])]
+  hit <- match(classes, tbl[[col]])
+
+  # A label the table does not have is a VOCABULARY MISMATCH, not a novelty,
+  # and it must be loud. The median substitution below is good defensive code
+  # and it is exactly what hid the WAC promotion's worst side effect for two
+  # days: moving the calibration to a three-class tier vocabulary deleted the
+  # "high" bucket that result_weight() still asked for, so ~469k of the least
+  # precise rows in the corpus silently weighted 29% too heavily (0.7132 ->
+  # median 0.9211) with nothing failing and no NA anywhere.
+  #
+  # A fallback keyed on "did the lookup match" cannot tell an unknown label
+  # from one the calibration USED TO HAVE. Naming the two vocabularies is what
+  # makes the difference visible, so that is what this does.
+  # WARN, not abort. Aborting is the instinct and it is wrong here: the known
+  # remaining mismatch ("high" from the feed fallback, see .tier_class_of) is
+  # real, is documented, and affects rows that must still be weighted somehow.
+  # Killing the run would force a modelling change to be made under time
+  # pressure, which is how the original defect shipped. Naming both
+  # vocabularies is enough to stop it hiding for two days again.
+  miss <- unique(classes[is.na(hit) & !is.na(classes)])
+  if (length(miss)) {
+    cli::cli_warn(c(
+      "!" = "{.field {which}} class{?es} {.val {miss}} {?is/are} not in the calibration;
+             taking the median precision.",
+      "i" = "The calibration offers: {.val {unique(tbl[[col]])}}.",
+      "i" = "A vocabulary mismatch, not a novelty: the substitution is silent in
+             the numbers, so it is said out loud here. This is how the WAC
+             promotion mis-weighted ~10% of the corpus for two days.",
+      .frequency = "once", .frequency_id = paste0("citius_ctx_prec_", which)))
+  }
+
+  out <- tbl$precision[hit]
+  # NA classes still take the median: those are genuinely unknown context, not
+  # a mismatch, and refusing to weight them at all would drop the result.
   out[!is.finite(out)] <- stats::median(tbl$precision, na.rm = TRUE)
   out[!is.finite(out)] <- 1
   out
@@ -217,6 +425,50 @@ fit_half_life <- function(results,
     }
   }
   out[!is.finite(out)] <- if (nrow(hl)) stats::median(hl$half_life) else default
+  out
+}
+
+
+#' Resolve a per-event parameter to one value per row
+#'
+#' Three parameters now accept either a scalar or a table: `races_half_life`,
+#' `trim_tactical` and `context_scale`. They resolve identically -- match on
+#' `event_id`, fall back to `family`, and fall back again to an explicit
+#' default -- so they share one resolver rather than three copies that drift.
+#'
+#' THE FALLBACK IS THE CALLER'S DEFAULT, NOT A MEDIAN of the table. A median
+#' would quietly apply a value fitted on other events to one the table knows
+#' nothing about; the documented default is the honest answer. ([.event_half_life()]
+#' does use a median, and is left alone rather than changed underneath its
+#' callers, but new parameters do not copy it.)
+#'
+#' @param event_id Character vector of event ids, one per row.
+#' @param spec `NULL`, a scalar, or a table with `column` plus `event_id`
+#'   and/or `family`.
+#' @param column Name of the value column expected in `spec`.
+#' @param default Value for rows the table does not cover.
+#' @keywords internal
+#' @noRd
+.event_param <- function(event_id, spec, column, default) {
+  if (is.null(spec)) return(rep(default, length(event_id)))
+  if (is.numeric(spec)) return(rep_len(spec, length(event_id)))
+
+  tb <- data.table::as.data.table(spec)
+  if (!column %in% names(tb)) {
+    cli::cli_abort("Table for {.arg {column}} needs a {.field {column}} column.")
+  }
+  reg <- .citius_event_registry
+  fam <- reg$family[match(event_id, reg$event_id)]
+  out <- if ("event_id" %in% names(tb)) {
+    tb[[column]][match(event_id, tb$event_id)]
+  } else {
+    tb[[column]][match(fam, tb$family)]
+  }
+  if ("event_id" %in% names(tb) && "family" %in% names(tb)) {
+    na_idx <- which(is.na(out))
+    if (length(na_idx)) out[na_idx] <- tb[[column]][match(fam[na_idx], tb$family)]
+  }
+  out[is.na(out)] <- default
   out
 }
 
@@ -597,6 +849,22 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @keywords internal
 #' @noRd
 .tier_class_of <- function(dt) {
+  # KNOWN VOCABULARY SPLIT, deliberately left in place (2026-09-06). This
+  # fallback is the legacy FOUR-class feed mapping (top/high/mid/low) while the
+  # catalogue branch below is the THREE-class WAC one (top/mid/low), so a row
+  # without `meet_tier` and a feed code of A or B still yields "high" -- a class
+  # the WAC-fitted calibration does not contain, which then takes the median
+  # precision in .context_precision().
+  #
+  # Collapsing the fallback onto the WAC table (A/B/C/D -> "mid", DF -> "top")
+  # would remove the split and is probably right -- WAC calls the Diamond League
+  # Final elite and it plainly is. But it MOVES ~7.5% of the corpus between
+  # buckets and changes which offsets are fitted, which makes it a modelling
+  # change, not a bugfix. It ships through a measured arm or not at all.
+  #
+  # What IS fixed: estimate_ability() now passes this resolved class to
+  # result_weight(), so the 84.6% of rows the catalogue covers weight and offset
+  # on the same label. Only the uncovered remainder can still reach "high".
   fb <- .tier_class(if ("tier" %in% names(dt)) dt$tier else NA_character_)
   if (!"meet_tier" %in% names(dt)) return(fb)
   mapped <- unname(c(T1_elite = "top", T2_strong = "mid",
@@ -774,7 +1042,69 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
       rr[!is.finite(ref_c_r), ref_c_r := 0]
     }
     i <- match(as.character(dt$race_key), as.character(rr$race_key))
-    cr <- rr$c_r[i] - rr$ref_c_r[i]
+    rs <- calibration$race_shock
+    if (!is.null(rs) && !is.null(rs$expected) && is.finite(rs$beta)) {
+      # EXCESS STRIP WITH FITTED PERSISTENCE (2026-09-06, Pete's design).
+      #
+      # The whole-effect strip above (c_r minus a top-final reference) put
+      # history on "top final conditions" and needed an add-back for the
+      # forecast race; the two halves never balanced and every final came
+      # out ~2% pessimistic (docs/reviews/race-shock-arm-rejected-2026-09-06.md).
+      #
+      # This strips only the EXCESS: c_r minus what a race of that event x
+      # tier class x round class normally shows (`rs$expected`, fitted by
+      # fit_race_shock_persistence.R), and only the share of it that does NOT
+      # predict the athlete's next result: (1 - beta) * excess, beta fitted by
+      # regressing the next performance on the excess. A race that ran as its
+      # kind usually does is untouched. Nothing is added back: the tier and
+      # round context above already moves an athlete from the conditions
+      # they raced in to the ones they are entering.
+      if (!".rcl" %in% names(rr)) {
+        rr[, .rcl := .round_class(if ("round" %in% names(rr)) round else NA_character_)]
+        rr[, .tcl := .tier_class(if ("tier" %in% names(rr)) tier else NA_character_)]
+      }
+      ex <- data.table::as.data.table(rs$expected)
+      e_cell <- ex$e_cell[match(paste(rr$event_id, rr$.tcl, rr$.rcl, sep = "|"),
+                                paste(ex$event_id, ex$tier_class, ex$round_class, sep = "|"))]
+      if (any(!is.finite(e_cell))) {
+        evm <- rr[, .(m = mean(c_r, na.rm = TRUE)), by = event_id]
+        fb <- evm$m[match(rr$event_id, evm$event_id)]
+        e_cell[!is.finite(e_cell)] <- fb[!is.finite(e_cell)]
+        e_cell[!is.finite(e_cell)] <- 0
+      }
+      # beta by the TIER CLASS of the shocked race -- the dominant structure
+      # (first fit: top 0.53, high 0.72, mid 0.86, low 1.02): a big day at a
+      # top meet is half the day, at a local meet it is the season. Falls back
+      # to the overall beta. Clamped to [0, 1]: nothing is amplified.
+      beta_r <- rep(rs$beta, nrow(rr))
+      if (!is.null(rs$by_tier) && NROW(rs$by_tier)) {
+        bt <- data.table::as.data.table(rs$by_tier)
+        b_t <- bt$beta[match(rr$.tcl, bt$tier_class)]
+        beta_r[is.finite(b_t)] <- b_t[is.finite(b_t)]
+      }
+      # Per-race beta, when the fitter stored one: persistence as a function of
+      # what the race looked like (tier, share of the field that PB'd, wind,
+      # size of the excess). A race where the whole field PB'd carries less
+      # forward than its tier average says.
+      if (!is.null(rs$by_race) && NROW(rs$by_race)) {
+        br <- data.table::as.data.table(rs$by_race)
+        b_r <- br$beta[match(as.character(rr$race_key), as.character(br$race_key))]
+        beta_r[is.finite(b_r)] <- b_r[is.finite(b_r)]
+      }
+      beta_r <- pmin(pmax(beta_r, 0), 1)
+      # FAMILY GATE. Two marks arms (2026-09-07, tier beta and per-race beta)
+      # both improved sprint, hurdles, jump and throw and worsened middle,
+      # distance and road: in the endurance events a shared effect is pacing
+      # and course, which persist, and stripping them removes real form.
+      # `rs$families` names where the strip applies; absent means everywhere.
+      if (!is.null(rs$families) && length(rs$families)) {
+        fam_rr <- .citius_event_registry$family[match(rr$event_id, .citius_event_registry$event_id)]
+        beta_r[is.na(fam_rr) | !fam_rr %in% rs$families] <- 1
+      }
+      cr <- ((1 - beta_r) * (rr$c_r - e_cell))[i]
+    } else {
+      cr <- rr$c_r[i] - rr$ref_c_r[i]
+    }
 
     # SHRINK BY FIELD SIZE. A race effect fitted on a two-athlete race is not
     # a race effect: with two runners, "the race was slow" and "both athletes
@@ -1027,21 +1357,75 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #'   how fast form decays is measurable, and the measured values (sprint ~135
 #'   days, distance and field ~180) are far shorter than the 540-day scalar
 #'   default, which keeps stale form alive.
+#' @param races_half_life Either a single number, or a table with a
+#'   `races_half_life` column plus `event_id` and/or `family`, in the same shape
+#'   `half_life` accepts. An event the table does not name gets `Inf`, the term
+#'   OFF, rather than a median of other events' values.
+#'
+#'   The number of the athlete's OWN subsequent races after
+#'   which a result carries half weight, applied on top of `half_life`. A
+#'   calendar half-life cannot tell apart an athlete who has raced 30 times
+#'   since a performance from one who has raced twice; this can. `Inf`, the
+#'   default, disables it and reproduces the previous behaviour exactly.
+#'   Measured best around **5**, and it is not independent of `half_life`: with
+#'   race-count decay on, the calendar half-life wants to be roughly twice as
+#'   long, because 365 days had been standing in for a cap on how many results
+#'   accumulate. Set both together or neither. See
+#'   `docs/reviews/marks-blend-2026-09-07.md`.
+#' @param precision_scale Exponent on the tier and round precision weights,
+#'   scalar or a table with a `precision_scale` column plus `event_id` and/or
+#'   `family`. `1` is the calibration as fitted; `0` weights every mark equally
+#'   whatever meet it was set at, which measured better for marks on all nine
+#'   families. Recency is untouched either way.
+#' @param context_scale How much of the context adjustment to keep: `1` (the
+#'   default) the whole correction, `0` none of it. Scalar, or a table with a
+#'   `context_scale` column plus `event_id` and/or `family`. Only has an effect
+#'   when `adjust_context = TRUE`. Fitted per family, distance wants 1.25 and
+#'   road 1.00 while throw wants 0.25 and walk 0.00.
 #' @param trim_tactical Fraction of worst performances to drop in tactical
-#'   events. Set to `0` to disable.
+#'   events. Set to `0` to disable. Scalar, or a table with a `trim_tactical`
+#'   column plus `event_id` and/or `family` -- fitted that way it recovers what
+#'   "tactical" means without registry input: middle, distance and combined
+#'   0.40, jump and throw 0.00.
 #' @param min_results Minimum results required to report an athlete.
+#' @param only Optional vector of `athlete_id`s to return. This is the FAST
+#'   PATH, not just a filter: the population quantities every athlete needs
+#'   (`prior_mu`, `sigma_between`, and the robust-sigma scale `k`) are computed
+#'   cheaply over the whole input, and the expensive per-athlete body then runs
+#'   only for the ids named. The result for those athletes is identical to a
+#'   full run, which a package test asserts rather than assumes. Use it whenever
+#'   you know which athletes you are about to score -- a backtest or a
+#'   diagnostic over a fixed set of races -- because without it the refit spends
+#'   almost all of its time on athletes the caller will discard.
+#' @param peak_gamma Exponent upweighting an athlete's own better marks over
+#'   worse ones, ranked within (athlete, event). `0`, the default, weights
+#'   every result equally on this axis. Scalar, or a table with a
+#'   `peak_gamma` column plus `event_id` and/or `family`, same shape as
+#'   `precision_scale`. Swept both sides of zero on the marks lab and `0` is a
+#'   genuine interior optimum globally -- not an edge artefact -- but never
+#'   tested per event. See `docs/plans/marks-parameter-optimisation-backlog-2026-09-08.md`.
 #' @param adjust_context Whether to put every performance on a final-equivalent,
 #'   top-tier footing before averaging, using [estimate_context_effects()].
 #'   Without this the estimate answers "how does this athlete perform on an
 #'   average day at an average meet", which is systematically slower than a
 #'   championship final and will under-predict the event being simulated.
 #' @return A `data.table` with `athlete_id`, `event_id`, `ability`,
-#'   `ability_raw`, `sigma`, `n`, `n_eff`, `shrinkage`, `age_ref` and
-#'   `last_date`. `age_ref` is the weighted mean age behind the estimate and is
-#'   what [project_ability()] must project *from*.
+#'   `ability_raw`, `sigma`, `sigma_raw`, `sigma_rob`, `sigma_marks`,
+#'   `recent_mean`, `ability_se`, `n`, `n_eff`, `w_total`, `shrinkage`,
+#'   `prior_mu`, `age_ref` and `last_date`. `age_ref` is the weighted mean age
+#'   behind the estimate and is what [project_ability()] must project *from*.
+#'
+#'   Three of those are for MARKS rather than for the ranking, and
+#'   [simulate_event()] reads them only for the mark distribution.
+#'   `sigma_marks` is its spread; `recent_mean`, the plain mean of the athlete's
+#'   last five raw marks, is blended into its centre by `CITIUS_MARKS_BLEND`,
+#'   and is `NA` for an athlete with fewer than three. `ability` and `sigma`,
+#'   which decide placings, are untouched by both.
 #' @seealso [simulate_event()] which consumes this.
 #' @export
 estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
+                             races_half_life = Inf, context_scale = 1,
+                             precision_scale = 1,
                              trim_tactical = 0.25, min_results = 1L,
                              adjust_context = TRUE, calibration = NULL,
                              robust_sigma = TRUE,
@@ -1090,18 +1474,108 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   hl_spec <- if (!is.null(calibration) && !is.null(calibration$half_life) &&
                  missing(half_life)) calibration$half_life else half_life
   dt[, hl := .event_half_life(event_id, hl_spec)]
+  # tier_class comes from .tier_class_of(), the SAME resolver the offsets use
+  # (line 286), so the weighting and the offsets cannot drift onto different
+  # tier vocabularies. Passing only `tier` here is what let the WAC promotion
+  # reach the offsets and miss the weights.
   dt[, w := result_weight(date, tier = if ("tier" %in% names(dt)) tier else NA_character_,
                           round = if ("round" %in% names(dt)) round else NA_character_,
                           as_of = as_of, half_life = hl,
-                          calibration = calibration)]
+                          calibration = calibration,
+                          tier_class = .tier_class_of(dt),
+                          precision_scale = .event_param(event_id, precision_scale,
+                                                         "precision_scale", 1))]
 
-  if (is.numeric(peak_gamma) && peak_gamma > 0) {
+  # RACES-SINCE DECAY, on top of the calendar decay above.
+  #
+  # Named for what it is. `races_half_life = 5` means: a result carries half
+  # weight once the athlete has run five more races in that event, a quarter
+  # after ten, and so on -- exactly the shape `half_life` has, counted in the
+  # athlete's own races instead of in days.
+  #
+  # `half_life` discounts a result by how long ago it happened. That is not the
+  # only thing that makes a result stale: an athlete who has raced 30 times
+  # since is further from that performance than one who has raced twice, and a
+  # purely calendar decay treats them identically. This discounts a result by
+  # how many of the athlete's own races have happened since -- k = 0 for their
+  # most recent, 1 for the one before, and so on.
+  #
+  # WHY IT MATTERS, measured on 2024+ held out against a like-for-like last-5
+  # baseline (diagnostics/marks_why_last5.R, 44 events):
+  #
+  #   calendar 365, no race decay   28 of 44   MAE 2.1487   the deployed config
+  #   calendar 730, no race decay   17 of 44   MAE 2.2420   much worse alone
+  #   calendar 365, race hl 5       36 of 44   MAE 2.0939
+  #   calendar 730, race hl 5       37 of 44   MAE 2.0791
+  #
+  # The two are NOT separable, and that is the finding rather than a caveat:
+  # a calendar half-life of 365 was doing two jobs, genuinely discounting stale
+  # form AND crudely capping how many results pile up. Once race count handles
+  # the second, the calendar decay relaxes to its real value and both improve.
+  # Promote them together or not at all.
+  #
+  # This also replaces a cruder version of the same idea -- a hard cap on the N
+  # most recent results, which peaked at 35 of 44. A cap is a cliff: result 20
+  # counts fully and result 21 counts zero. The smooth form is better on every
+  # measure, and adding a cap on top of it changes MAE by 0.01%, so the cap is
+  # redundant rather than merely uglier.
+  #
+  # Inf is OFF and is the default, so existing callers are bit-identical.
+  # Resolved to a column BEFORE the reorder, so the values travel with their
+  # rows. Computing it into a bare vector and sorting afterwards is the silent
+  # misalignment this file has been bitten by before.
+  dt[, .rhl := .event_param(event_id, races_half_life, "races_half_life", Inf)]
+  if (any(is.finite(dt$.rhl) & dt$.rhl > 0)) {
+    data.table::setorder(dt, athlete_id, event_id, -date)
+    dt[, .k := seq_len(.N) - 1L, by = .(athlete_id, event_id)]
+    dt[is.finite(.rhl) & .rhl > 0, w := w * 0.5^(.k / .rhl)]
+    dt[, .k := NULL]
+  }
+  dt[, .rhl := NULL]
+
+  dt[, .pg := .event_param(event_id, peak_gamma, "peak_gamma", 0)]
+  # != 0, NOT > 0. A negative peak_gamma is a real, fitted, intentional value
+  # (event_params.rds carries distance at -0.5, e.g.) that upweights an
+  # athlete's WORSE marks over their better ones -- `> 0` silently zeroed
+  # every negative-gamma event's effect here while fit_event_params.R and
+  # marks_hier_params.R's own replicas of this same block both correctly used
+  # `!= 0`, so the fitted number and the applied number silently diverged.
+  # Found by silent-failure-hunter review, 2026-09-08.
+  if (any(dt$.pg != 0, na.rm = TRUE)) {
     dt[, .q := data.table::frank(perf, ties.method = "first") / .N, by = .(athlete_id, event_id)]
-    dt[, w := w * (.q^peak_gamma)]
+    dt[.pg != 0, w := w * (.q^.pg)]
+    # WEIGHT CONCENTRATION CHECK. `.q` is a rank quantile in (0, 1], so it can
+    # never be 0 and `.q^.pg` can never be Inf -- but for NEGATIVE gamma the
+    # worst mark's weight grows as (1/N)^gamma, which is unbounded in the
+    # athlete's own race count. Sized 2026-09-09 against the corpus: the longest
+    # per-athlete-event history is 586 marks, where gamma -0.5 gives the worst
+    # mark 17x the median weight, -1.0 gives 293x and -1.5 (the edge of
+    # fit_event_params.R's own sweep grid) gives ~5,000x. Deployed values are
+    # mild today (only two events negative, worst ratio ~4.85x), so this is
+    # insurance against a future refit landing a steep negative gamma on a
+    # high-count event, where one injury race or bad data point would quietly
+    # dominate an athlete's whole estimate. Warn rather than clip: silently
+    # capping would hide the fit that produced it.
+    .conc <- dt[.pg != 0 & is.finite(w), if (.N > 2L) max(w) / stats::median(w) else NA_real_,
+                by = .(athlete_id, event_id)]
+    .bad <- .conc[is.finite(V1) & V1 > 50]
+    if (nrow(.bad)) {
+      cli::cli_warn(c(
+        "!" = "peak_gamma: {nrow(.bad)} athlete-event group{?s} have one mark carrying
+               over 50x the median weight (max {round(max(.bad$V1))}x).",
+        "i" = "A single result may be dominating those ability estimates. Check the
+               fitted peak_gamma for {.val {utils::head(unique(.bad$event_id), 3)}}."))
+    }
     dt[, .q := NULL]
   }
+  dt[, .pg := NULL]
 
-  reg <- .citius_event_registry[, c("event_id", "tactical", "cv_prior")]
+  # `.fam` comes from the REGISTRY under a reserved name, not from whatever the
+  # caller's results happen to carry. A bare `family` here would silently pick up
+  # a caller column of the same name -- and if none existed, the gate below
+  # would match nothing and quietly disable the override entirely.
+  reg <- .citius_event_registry[, c("event_id", "tactical", "cv_prior", "family")]
+  data.table::setnames(reg, "family", ".fam")
   dt <- merge(dt, reg, by = "event_id", all.x = TRUE, sort = FALSE)
   dt[is.na(tactical), tactical := FALSE]
 
@@ -1111,28 +1585,104 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   if (!is.null(calibration) && !is.null(calibration$events)) {
     ti <- calibration$events[, c("event_id", "tactical_index", "calibrated")]
     dt <- merge(dt, ti, by = "event_id", all.x = TRUE, sort = FALSE)
-    dt[calibrated %in% TRUE & is.finite(tactical_index), tactical := tactical_index < -0.5]
+    # GATED BY FAMILY, because `tactical_index` measures something broader than
+    # tactics. It is `.skewness(c_r)`, the skew of an event's fitted race
+    # effects, so it fires whenever some races come out much slower than typical.
+    #
+    # For a 1500m that IS tactics: championship finals are sit-and-kick and far
+    # slower than paced races, a slow time there says nothing about ability, and
+    # dropping the worst marks is right. For a shot put or a 100m the same skew
+    # is WEATHER -- headwind, cold, a wet ring -- and the two want opposite
+    # treatment. A tactically slow race should be dropped because it does not
+    # measure the athlete; a weather-slowed race should be ADJUSTED, which
+    # `.adjust_history_to_target()` already does. Trimming it as well deletes an
+    # athlete's genuine bad days and biases the estimate upward.
+    #
+    # Ungated, the override flagged 52 of 74 events -- every throw and every
+    # sprint. Measured on the marks lab with per-event parameters, held out on
+    # 44 events: ungated 39 beaten and 23 separated wins, family-gated 41 and
+    # 26. Registry-only reaches 42 beaten but only 25 separated, so the gate is
+    # the better of the two narrowings and keeps the override's real work in the
+    # families where it means something.
+    stopifnot("registry family did not join" = ".fam" %in% names(dt))
+    dt[calibrated %in% TRUE & is.finite(tactical_index) &
+         .fam %in% .CITIUS_TACTICAL_FAMILIES,
+       tactical := tactical_index < -0.5]
   }
+
+  # `recent_mean` is built from RAW marks, so snapshot them before the
+  # adjustment stack rewrites `perf` in place.
+  #
+  # UNCONDITIONAL, even though the blend defaults to off. The column is what the
+  # marks diagnostics compare against, and gating it on the blend meant turning
+  # the blend off silently stopped emitting the ingredient -- caught by test,
+  # after `_deployed.R` had already been written claiming it was still emitted.
+  # The cost is one numeric column on the history, which is nothing beside the
+  # adjustment stack that runs on the next line.
+  dt[, perf_raw := perf]
 
   if (isTRUE(adjust_context)) .adjust_history_to_target(dt, calibration, adjust_race)
 
-  if (trim_tactical > 0) {
+  # CONTEXT SCALE: how much of the adjustment above to actually keep.
+  #
+  # `.adjust_history_to_target()` rewrites every mark to a final-equivalent,
+  # neutral-conditions footing. That correction is itself estimated and carries
+  # its own error, and how much of it is worth keeping differs sharply by event:
+  # fitted per family on held-out marks, distance wants 1.25 and road 1.00 --
+  # their times swing hugely with course and weather -- while throw wants 0.25
+  # and walk 0.00.
+  #
+  # 1 keeps the full correction and is the default, so existing callers are
+  # unchanged. 0 discards it, leaving the raw mark.
+  if (isTRUE(adjust_context)) {
+    dt[, .cs := .event_param(event_id, context_scale, "context_scale", 1)]
+    if (!all(dt$.cs == 1)) dt[, perf := perf_raw + .cs * (perf - perf_raw)]
+    dt[, .cs := NULL]
+  }
+
+  # Last five RAW marks per athlete-event, taken BEFORE the tactical trim.
+  #
+  # Before the trim on purpose: the blend's job is to pull the predicted mark
+  # toward what the athlete has actually been producing, and the trim exists to
+  # remove tactically slow races from the RANKING. Trimming here would reapply
+  # a ranking correction to a quantity that is meant to be raw, and would make
+  # the deployed term differ from the one measured in the marks lab, where the
+  # baseline is a plain mean of the last five stored marks.
+  #
+  # Minimum three, matching the lab: a mean of one or two marks is noisier than
+  # the ability it would be replacing, and those athletes keep `ability` alone.
+  rr <- dt[, .(athlete_id, event_id, date, perf_raw)]
+  if (!is.null(only)) rr <- rr[as.character(athlete_id) %in% as.character(only)]
+  data.table::setorder(rr, athlete_id, event_id, -date)
+  rr[, .rk := seq_len(.N), by = .(athlete_id, event_id)]
+  .rec <- rr[.rk <= 5L, .(recent_mean = mean(perf_raw), n_recent = .N),
+             by = .(athlete_id, event_id)][n_recent >= 3L]
+  .rec[, athlete_id := as.character(athlete_id)]
+  rm(rr)
+
+  # `trim_tactical` accepts a per-event table too. Fitted per family, the values
+  # recover what "tactical" is supposed to mean with no registry input: middle,
+  # distance and combined want 0.40, while jump and throw want 0.00. A shot put
+  # has no tactics to trim away.
+  dt[, .trim := .event_param(event_id, trim_tactical, "trim_tactical", 0.25)]
+  if (any(dt$.trim > 0)) {
     # Vectorised rank-and-filter, not `.SD[...]` per group. The `.SD` form made
     # data.table materialise a sub-table for every athlete-event group and cost
     # 74% of this function's runtime; the work itself is just "drop the worst
     # k marks", which needs no sub-table at all.
     dt[, .keep := TRUE]
-    dt[tactical == TRUE, .grp_n := .N, by = .(athlete_id, event_id)]
-    dt[tactical == TRUE & .grp_n >= 4L,
+    dt[tactical == TRUE & .trim > 0, .grp_n := .N, by = .(athlete_id, event_id)]
+    dt[tactical == TRUE & .trim > 0 & .grp_n >= 4L,
        .rk := data.table::frank(perf, ties.method = "first"),
        by = .(athlete_id, event_id)]
     # frank is ascending and perf is oriented so higher is better: rank 1 is the
     # worst mark, which is what the tactical trim removes.
-    dt[tactical == TRUE & .grp_n >= 4L,
-       .keep := .rk > floor(.grp_n * trim_tactical)]
+    dt[tactical == TRUE & .trim > 0 & .grp_n >= 4L,
+       .keep := .rk > floor(.grp_n * .trim)]
     dt <- dt[.keep == TRUE]
     dt[, c(".keep", ".grp_n", ".rk") := NULL]
   }
+  dt[, .trim := NULL]
 
   # ONLY: estimate abilities for a named set of athletes, without changing them.
   #
@@ -1409,14 +1959,15 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # A two-race athlete's sample spread is close to meaningless on its own, so
   # blend toward the event value by absolute evidence.
   shrink_w <- if (use_weight) ab$w_total else ab$n_eff
+  k_pn <- .sigma_pseudo_n()
   # Mirror the blend with the measured target BEFORE `sigma` is overwritten, so
   # the two paths differ in exactly one input and nothing else.
   if (!is.null(sigma_shr_target)) {
-    ab[, sigma_shr := (shrink_w * sigma + .CITIUS_SIGMA_PSEUDO_N * sigma_shr_target) /
-                      (shrink_w + .CITIUS_SIGMA_PSEUDO_N)]
+    ab[, sigma_shr := (shrink_w * sigma + k_pn * sigma_shr_target) /
+                      (shrink_w + k_pn)]
   }
-  ab[, sigma := (shrink_w * sigma + .CITIUS_SIGMA_PSEUDO_N * sigma_target) /
-                (shrink_w + .CITIUS_SIGMA_PSEUDO_N)]
+  ab[, sigma := (shrink_w * sigma + k_pn * sigma_target) /
+                (shrink_w + k_pn)]
 
   # Rescale to the context being FORECAST. sigma is fitted across the pooled
   # history, but the target is a top-tier final, and that is a narrower slice of
@@ -1436,7 +1987,32 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     ratio[!is.finite(ratio) | ratio <= 0] <- 1
     ab[, sigma := sigma * ratio]
     if ("sigma_shr" %in% names(ab)) ab[, sigma_shr := sigma_shr * ratio]
+    ctx_ratio <- ratio
+  } else {
+    ctx_ratio <- rep(1, nrow(ab))
   }
+  sc_env <- .sigma_scale_env()
+  if (sc_env != 1) {
+    ab[, sigma := sigma * sc_env]
+    if ("sigma_shr" %in% names(ab)) ab[, sigma_shr := sigma_shr * sc_env]
+  }
+
+  # sigma_marks (2026-09-06): the spread used for the MARK DISTRIBUTION only.
+  #
+  # The emitted `sigma` above drives placings, and three attempts to replace it
+  # (event constant twice, two-sided + pseudo-n 40) all lost medal logloss --
+  # its one-sided upper-tail estimator carries an upside signal that wins
+  # races. But that same sigma ranks athletes by hold-out consistency at
+  # Spearman 0.07 and gave Noah Lyles a 5% chance of beating the world record.
+  # The two jobs need two numbers. This one is the two-sided sigma_raw, shrunk
+  # hard toward the event target (pseudo-n 40, the setting that tied the event
+  # constant on hold-out log score), scaled by the same per-family context
+  # ratio. simulate_event() uses it for `perf_std` -- the mark distribution
+  # and median_mark -- and leaves `perf`, the ranking, on `sigma`.
+  k_m <- .sigma_marks_pseudo_n()
+  sm <- data.table::fifelse(is.finite(ab$sigma_raw) & ab$sigma_raw > 0, ab$sigma_raw, ab$sigma_target)
+  sm <- (shrink_w * sm + k_m * ab$sigma_target) / (shrink_w + k_m)
+  ab[, sigma_marks := sm * ctx_ratio * sc_env]
 
   # `sigma_mode = "event"` gives every athlete their event's measured spread.
   #
@@ -1466,6 +2042,33 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # their own, rather than needing a hand-set staleness cutoff.
   ab[, shrinkage := kappa / (w_total + kappa)]
   ab[, ability := (1 - shrinkage) * ability_raw + shrinkage * prior_mu]
+
+  # recent_mean: the ingredient of the MARK centre, as distinct from `ability`,
+  # the centre of the ranking. Same split as `sigma_marks` above and for the
+  # same reason -- the two jobs want different numbers.
+  #
+  # `ability` is a decayed, context-adjusted, trimmed, shrunk estimate built to
+  # order a field. As a point forecast of the next mark it is systematically
+  # optimistic: measured on 2024+ held out, +0.24pp of a mark more optimistic
+  # than a plain last-5 mean, which is enough to lose whole events on mark
+  # error. Blending toward recent raw form removes most of that.
+  #
+  # THE BLEND IS NOT APPLIED HERE, and that is deliberate. Callers modify
+  # `ability` after this function returns -- backtest_athletics.R applies
+  # apply_momentum() and project_ability() to it, and reshrink_to_field() shifts
+  # it too. A pre-blended column would silently stop tracking those, so an aged
+  # athlete's ranking would move while their predicted mark stayed put. Emitting
+  # the raw ingredient lets simulate_event() blend against whatever `ability`
+  # finally is.
+  #
+  # Athletes with fewer than three recent marks get NA and keep `ability`.
+  ab[, recent_mean := NA_real_]
+  if (!is.null(.rec) && nrow(.rec)) {
+    ab[, athlete_id := as.character(athlete_id)]
+    ab[, recent_mean := NULL]
+    ab <- merge(ab, .rec[, .(athlete_id, event_id, recent_mean)],
+                by = c("athlete_id", "event_id"), all.x = TRUE, sort = FALSE)
+  }
   # `ability_raw_peak` comes out of the grouped aggregation on EVERY call -- a
   # `by` expression has to return the same columns for every group, so it could
   # not be omitted conditionally there. Drop it here when decoupling was not
@@ -1490,10 +2093,27 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
 
   if (!is.null(only)) ab <- ab[as.character(athlete_id) %in% as.character(only)]
 
+  # `sigma_raw` and `sigma_rob` are returned alongside the emitted `sigma`
+  # because without them the spread pipeline cannot be audited from outside.
+  #
+  # 2026-09-05: per-athlete sigma predicts an athlete's FUTURE scatter at
+  # pearson 0.057 where a plain SD of their own past marks manages 0.097, and
+  # it runs at about half the true level. Six hypotheses were tested from
+  # outside the function and eliminated -- the robust estimator, the decay
+  # window, `k` varying with sample size, the constant blend, precision
+  # weighting, and the context-adjustment chain. Every input reconstructable
+  # externally lands at ~0.0148 against an internal 0.0090, so the remaining
+  # gap is between these two quantities and the emitted one, and NONE of it was
+  # observable because neither was returned. That is six diagnostics' worth of
+  # work a two-column addition would have saved.
+  #
+  # Additive only: existing callers select by name and are unaffected.
   cols <- c("athlete_id", "event_id", "ability", "ability_raw", "sigma",
+            "sigma_raw", "sigma_rob", "sigma_marks", "recent_mean",
             "ability_se", "n", "n_eff", "w_total", "shrinkage", "prior_mu",
             "age_ref", "last_date")
   if ("ability_peak" %in% names(ab)) cols <- c(cols, "ability_peak")
+  cols <- intersect(cols, names(ab))
   ab[, cols, with = FALSE][]
 }
 
@@ -1575,7 +2195,12 @@ condition_prior <- function(ability, field = NULL, weight = 1) {
 .empty_ability <- function() {
   data.table::data.table(
     athlete_id = character(), event_id = character(), ability = numeric(),
-    ability_raw = numeric(), sigma = numeric(), ability_se = numeric(),
+    ability_raw = numeric(), sigma = numeric(),
+    # Kept in step with the populated return above. An empty table whose
+    # columns differ from a populated one is how a caller that binds the two
+    # ends up with silent NAs.
+    sigma_raw = numeric(), sigma_rob = numeric(),
+    sigma_marks = numeric(), recent_mean = numeric(), ability_se = numeric(),
     n = integer(), n_eff = numeric(), w_total = numeric(),
     shrinkage = numeric(), prior_mu = numeric(), age_ref = numeric(),
     last_date = as.Date(character())

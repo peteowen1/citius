@@ -85,6 +85,15 @@ column comparison — loop-free over simulations but O(field²); `frankv` measur
 faster at *every* field size from 8 up (96 lanes: 2.6s → 0.14s), so there is no
 crossover worth keeping.
 
+**`estimate_ability(only = <athlete_ids>)` is the fast path, and it is easy to
+miss.** It computes the population priors over everyone and runs the expensive
+per-athlete body only for the ids given, identical for those athletes by test.
+Any caller scoring a known set of races should pass it: `backtest_athletics.R`
+always has, and a diagnostic written without it spent 96% of its time
+estimating athletes it then discarded (2026-09-07). If you are writing a new
+harness, read how the backtest calls this function before writing your own
+loop -- for speed as well as for correctness.
+
 `estimate_ability()`'s tactical trim is a vectorised rank-and-filter, not
 `.SD[...]` per athlete-event group. The `.SD` form made data.table materialise a
 sub-table per group and cost **74% of the function's runtime** for work that is

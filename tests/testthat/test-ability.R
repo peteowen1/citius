@@ -750,3 +750,31 @@ test_that("robust_location = TRUE protects ability against extreme bad-side mark
 
 
 
+
+test_that("CITIUS_SIGMA_PSEUDO_N and CITIUS_SIGMA_SCALE move sigma only when set", {
+  withr::local_envvar(CITIUS_SIGMA_PSEUDO_N = NA, CITIUS_SIGMA_SCALE = NA)
+  set.seed(3)
+  h <- data.table::rbindlist(lapply(1:6, function(a) data.table::data.table(
+    athlete_id = paste0("a", a), event_id = "AT-100Metres-M",
+    date = as.Date("2026-06-01") - sample(10:600, 12),
+    perf = -log(10 + a * 0.05 + rnorm(12, 0, 0.08)))))
+  base <- estimate_ability(h, as_of = as.Date("2026-06-01"))
+  # unset: identical to the constant path
+  withr::with_envvar(c(CITIUS_SIGMA_PSEUDO_N = ""), {
+    expect_equal(estimate_ability(h, as_of = as.Date("2026-06-01"))$sigma, base$sigma)
+  })
+  # huge pseudo-n: every athlete collapses onto the event target
+  withr::with_envvar(c(CITIUS_SIGMA_PSEUDO_N = "1e9"), {
+    big <- estimate_ability(h, as_of = as.Date("2026-06-01"))
+    expect_lt(stats::sd(big$sigma) / mean(big$sigma), 1e-3)
+  })
+  # scale doubles sigma exactly
+  withr::with_envvar(c(CITIUS_SIGMA_SCALE = "2"), {
+    expect_equal(estimate_ability(h, as_of = as.Date("2026-06-01"))$sigma, 2 * base$sigma)
+  })
+  # garbage falls back with a warning, not silently
+  withr::with_envvar(c(CITIUS_SIGMA_PSEUDO_N = "banana"), {
+    expect_warning(g <- estimate_ability(h, as_of = as.Date("2026-06-01")), "CITIUS_SIGMA_PSEUDO_N")
+    expect_equal(g$sigma, base$sigma)
+  })
+})
