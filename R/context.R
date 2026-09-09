@@ -478,9 +478,18 @@ fit_championship_effect <- function(results, min_n = 100L) {
 #' @keywords internal
 #' @noRd
 .is_championship <- function(tier) {
-  # "OW" is the World Athletics code for the global-championship category:
-  # Olympics, World Championships and the Commonwealth Games sit here, while
-  # Diamond League meets carry "GL" and everything else A..F.
+  # "OW" is the World Athletics code for the global-championship category.
+  #
+  # CORRECTED 2026-09-09: this comment used to say "Olympics, World
+  # Championships and the Commonwealth Games sit here". The Commonwealth Games
+  # do NOT -- Glasgow 2026's races carry "A". Checked against the catalogue,
+  # every OW competition in the corpus is an Olympics or a World Championships
+  # ("The XXVII Olympic Games", "World Athletics Championships, Tokyo 2025",
+  # ...). The wrong comment cost real time: it made a live-forecast gap look
+  # like it needed fixing before a Commonwealth-class meet when no meet on the
+  # calendar is OW at all.
+  #
+  # Diamond League meets carry "GW"/"GL"/"DF" and everything else A..F.
   grepl("^OW", toupper(trimws(as.character(tier))))
 }
 
