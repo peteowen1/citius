@@ -43,3 +43,13 @@ utils::globalVariables(c("venue_city", "venue_stadium", "high"))
 utils::globalVariables(c("venue", "venue_adj", "effect", "comp_name"))
 utils::globalVariables(c("level", "context_adj", "surface"))
 utils::globalVariables(c("lev_eff", "ath_eff", "le", "ven_eff", "ve"))
+utils::globalVariables(c(
+  "neighbour_event_id", "implied_raw", "implied_pctl", "w_race", "w_neighbour",
+  "ability_raw_new", "ability_new", "nb_ability_raw", "nb_pctl",
+  "tgt_ability_raw", "tgt_prior_mu", "tgt_shrinkage", "tgt_w_total", "tgt_n_eff",
+  "pctl"
+))
+utils::globalVariables(c(
+  "own_var", "own_w", "nb_raw", "nb_var", "nb_w", "nb_v", "nb_wv", "nb_sw",
+  "nb_swv", "tau2", "sigma2_target"
+))

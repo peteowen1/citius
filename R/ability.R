@@ -2116,10 +2116,13 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # work a two-column addition would have saved.
   #
   # Additive only: existing callers select by name and are unaffected.
+  # sigma_between joined the list 2026-09-13 so transfer_neighbour_ability()
+  # can standardise a neighbour event's ability onto its own z-scale without
+  # a second call into internals estimate_ability() already computed.
   cols <- c("athlete_id", "event_id", "ability", "ability_raw", "sigma",
             "sigma_raw", "sigma_rob", "sigma_marks", "recent_mean",
             "ability_se", "n", "n_eff", "w_total", "shrinkage", "prior_mu",
-            "age_ref", "last_date")
+            "sigma_between", "age_ref", "last_date")
   if ("ability_peak" %in% names(ab)) cols <- c(cols, "ability_peak")
   cols <- intersect(cols, names(ab))
   ab[, cols, with = FALSE][]
@@ -2210,7 +2213,8 @@ condition_prior <- function(ability, field = NULL, weight = 1) {
     sigma_raw = numeric(), sigma_rob = numeric(),
     sigma_marks = numeric(), recent_mean = numeric(), ability_se = numeric(),
     n = integer(), n_eff = numeric(), w_total = numeric(),
-    shrinkage = numeric(), prior_mu = numeric(), age_ref = numeric(),
+    shrinkage = numeric(), prior_mu = numeric(), sigma_between = numeric(),
+    age_ref = numeric(),
     last_date = as.Date(character())
   )
 }
