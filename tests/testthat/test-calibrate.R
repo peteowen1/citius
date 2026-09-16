@@ -15,7 +15,7 @@ simulate_races <- function(n_races = 200, n_per = 8, n_athletes = 30,
       athlete_id = as.character(who),
       event_id = "AT-100Metres-M",
       date = Sys.Date() - r,
-      round = "F", tier = "OW",
+      round = "F", race_code = "OW",
       perf = ability[who] + sensitivity[who] * c_r[r] +
         stats::rnorm(n_per, 0, sigma_e)
     )
@@ -233,7 +233,7 @@ test_that("sensitivity survives athletes with no exposure to varying conditions"
     data.table::data.table(
       race_key = paste0("flat", i), athlete_id = as.character(c(12 + i, 12 + i)),
       event_id = "AT-100Metres-M", date = Sys.Date() - c(700, 701),
-      round = "F", tier = "OW",
+      round = "F", race_code = "OW",
       perf = to_perf(10, -1L) + stats::rnorm(2, 0, 0.004))
   }))
   # Two athletes per race, so they pass min_race_size and reach the estimator.
@@ -277,7 +277,7 @@ test_that("singleton races do not inflate variance estimates", {
     race_key = paste0("solo", 1:2000),
     athlete_id = as.character(who),
     event_id = "AT-100Metres-M", date = Sys.Date() - 1,
-    round = "F", tier = "OW",
+    round = "F", race_code = "OW",
     perf = sim$ability[who] + stats::rnorm(2000, 0, 0.010))
   padded <- calibrate(rbind(sim$data, solo, fill = TRUE))
 
@@ -315,7 +315,7 @@ test_that("rows without a canonical event are dropped before decomposition", {
     race_key = paste0("junk", 1:200),
     athlete_id = as.character(rep_len(1:30, 200)),
     event_id = NA_character_, date = Sys.Date() - 1,
-    round = "F", tier = "OW",
+    round = "F", race_code = "OW",
     perf = c(rep(to_perf(10, -1L), 100), rep(to_perf(7800, -1L), 100)))
 
   clean_cal <- calibrate(good)
@@ -337,11 +337,11 @@ test_that("context offsets point the right way", {
     athlete_id = as.character(rep_len(1:40, 960)),
     event_id = "AT-100Metres-M", date = Sys.Date() - 1)
   d[, round := rep(c("F", "H1"), each = 480)]
-  d[, tier := rep(c("OW", "F"), 480)]
+  d[, race_code := rep(c("OW", "F"), 480)]
   # Heats planted 1% slower, low tier planted 3% slower
   d[, perf := base +
       ifelse(round == "H1", -0.01, 0) +
-      ifelse(tier == "F", -0.03, 0) +
+      ifelse(race_code == "F", -0.03, 0) +
       stats::rnorm(.N, 0, 0.004)]
 
   cal <- calibrate(d, min_races = 10L)

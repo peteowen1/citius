@@ -8,7 +8,7 @@ synthetic_history <- function(n_athletes = 12, n_each = 20, sigma = 0.01,
       event_id = event_id,
       date = Sys.Date() - sample(1:900, n_each, replace = TRUE),
       perf = true_ability[i] + stats::rnorm(n_each, 0, sigma),
-      tier = "OW",
+      race_code = "OW",
       round = "F"
     )
   }))
@@ -27,7 +27,7 @@ test_that("sparse histories are shrunk harder than deep ones", {
     synthetic_history(n_athletes = 10, n_each = 40),
     data.table::data.table(athlete_id = "sparse", event_id = "AT-100Metres-M",
                            date = Sys.Date() - 30, perf = to_perf(9.50, -1L),
-                           tier = "OW", round = "F")
+                           race_code = "OW", round = "F")
   )
   ab <- estimate_ability(h, adjust_context = FALSE)
   sparse <- ab[ab$athlete_id == "sparse", ]
@@ -43,7 +43,7 @@ test_that("recent results dominate stale ones", {
     athlete_id = "x", event_id = "AT-100Metres-M",
     date = c(Sys.Date() - 30, Sys.Date() - 2000),
     perf = to_perf(c(9.90, 10.50), -1L),
-    tier = "OW", round = "F"
+    race_code = "OW", round = "F"
   )
   ab <- estimate_ability(h, adjust_context = FALSE, half_life = 365)
   expect_lt(perf_to_mark(ab$ability, -1L), 10.2)
@@ -51,7 +51,7 @@ test_that("recent results dominate stale ones", {
 
 test_that("result_weight decays by exactly a half per half-life", {
   today <- as.Date("2026-07-27")
-  w <- result_weight(c(today, today - 540), tier = "OW", round = "F",
+  w <- result_weight(c(today, today - 540), race_code = "OW", round = "F",
                      as_of = today, half_life = 540)
   expect_equal(w[2] / w[1], 0.5, tolerance = 1e-8)
 })
@@ -69,8 +69,8 @@ test_that("a calibration downweights the noisier context", {
   set.seed(41)
   n <- 40
   races <- rbind(
-    data.table::data.table(race_key = paste0("F", 1:n), round = "F", tier = "OW"),
-    data.table::data.table(race_key = paste0("H", 1:n), round = "H1", tier = "OW")
+    data.table::data.table(race_key = paste0("F", 1:n), round = "F", race_code = "OW"),
+    data.table::data.table(race_key = paste0("H", 1:n), round = "H1", race_code = "OW")
   )
   d <- races[rep(seq_len(nrow(races)), each = 6)]
   d[, athlete_id := as.character(rep_len(1:6, .N))]
@@ -93,7 +93,7 @@ test_that("tactical trimming removes slow championship races, not fast ones", {
   h <- data.table::data.table(
     athlete_id = "x", event_id = "AT-1500Metres-M",
     date = Sys.Date() - 1:23, perf = c(honest, tactical),
-    tier = "OW", round = "F"
+    race_code = "OW", round = "F"
   )
   trimmed <- estimate_ability(h, trim_tactical = 0.25, adjust_context = FALSE)
   untrimmed <- estimate_ability(h, trim_tactical = 0, adjust_context = FALSE)
@@ -135,7 +135,7 @@ test_that("context effects recover a planted round offset", {
     event_id = "AT-100Metres-M",
     date = Sys.Date() - 1:100,
     round = rep(c("F", "H1"), 50),
-    tier = "OW"
+    race_code = "OW"
   )
   # Heats are planted as 1% slower
   h[, perf := base + ifelse(round == "H1", -0.01, 0) + stats::rnorm(.N, 0, 0.002)]
@@ -152,7 +152,7 @@ test_that("context adjustment raises ability toward final-equivalent", {
     event_id = "AT-100Metres-M",
     date = Sys.Date() - 1:100,
     round = rep(c("F", "H1"), 50),
-    tier = "OW"
+    race_code = "OW"
   )
   h[, perf := base + ifelse(round == "H1", -0.01, 0) + stats::rnorm(.N, 0, 0.002)]
   with_adj <- estimate_ability(h, adjust_context = TRUE)
@@ -174,14 +174,14 @@ test_that("fit_half_life recovers a planted decay rate", {
     d <- Sys.Date() - seq(0, 1400, by = 40)
     data.table::data.table(
       athlete_id = as.character(i), event_id = "AT-100Metres-M",
-      date = d, tier = "OW", round = "F",
+      date = d, race_code = "OW", round = "F",
       perf = to_perf(10, -1L) + cumsum(stats::rnorm(length(d), 0, 0.004)))
   }))
   stable <- data.table::rbindlist(lapply(1:60, function(i) {
     d <- Sys.Date() - seq(0, 1400, by = 40)
     data.table::data.table(
       athlete_id = as.character(i), event_id = "AT-100Metres-M",
-      date = d, tier = "OW", round = "F",
+      date = d, race_code = "OW", round = "F",
       perf = to_perf(10, -1L) + stats::rnorm(length(d), 0, 0.004))
   }))
 
@@ -196,7 +196,7 @@ test_that("a half-life on the grid edge is flagged and replaced", {
     dd <- Sys.Date() - seq(0, 800, by = 40)
     data.table::data.table(
       athlete_id = as.character(i), event_id = "AT-100Metres-M",
-      date = dd, tier = "OW", round = "F",
+      date = dd, race_code = "OW", round = "F",
       perf = to_perf(10, -1L) + stats::rnorm(length(dd), 0, 0.005))
   }))
   # Grid so narrow the optimum must sit on an edge
@@ -230,15 +230,15 @@ test_that("stale athletes shrink to the event mean without a cutoff", {
   today <- as.Date("2026-07-30")
   recent <- data.table::data.table(
     athlete_id = "recent", event_id = "AT-100Metres-M",
-    date = today - seq(10, 300, by = 20), tier = "OW", round = "F",
+    date = today - seq(10, 300, by = 20), race_code = "OW", round = "F",
     perf = to_perf(10.10, -1L))
   stale <- data.table::data.table(
     athlete_id = "stale", event_id = "AT-100Metres-M",
-    date = today - seq(4000, 4600, by = 40), tier = "OW", round = "F",
+    date = today - seq(4000, 4600, by = 40), race_code = "OW", round = "F",
     perf = to_perf(9.85, -1L))          # much faster, but ancient
   others <- data.table::rbindlist(lapply(1:20, function(i)
     data.table::data.table(athlete_id = paste0("o", i), event_id = "AT-100Metres-M",
-      date = today - seq(10, 300, by = 20), tier = "OW", round = "F",
+      date = today - seq(10, 300, by = 20), race_code = "OW", round = "F",
       perf = to_perf(10.20, -1L) + stats::rnorm(15, 0, 0.005))))
 
   ab <- estimate_ability(rbind(recent, stale, others), as_of = today,
@@ -264,7 +264,7 @@ test_that("wind is stripped from ability, and the local name does not shadow `w`
     data.table::data.table(
       race_key = paste0("r", r), athlete_id = as.character(who),
       event_id = "AT-100Metres-M", date = Sys.Date() - r,
-      round = "F", tier = "OW", wind = wind,
+      round = "F", race_code = "OW", wind = wind,
       perf = ability[who] + beta * wind + stats::rnorm(8, 0, 0.008))
   }))
   cal <- calibrate(rows, min_races = 5L)
@@ -356,11 +356,11 @@ two_context <- function(n_ath = 400, gap_a = 0.03, gap_b = 0.01, sigma = 0.002,
     ability <- stats::rnorm(1, 2.3, 0.05)
     data.table::rbindlist(list(
       data.table::data.table(
-        athlete_id = as.character(i), event_id = ev[[fam]], tier = "OW",
+        athlete_id = as.character(i), event_id = ev[[fam]], race_code = "OW",
         round = "F", date = as.Date("2020-01-01") + 1:6,
         perf = ability + stats::rnorm(6, 0, sigma)),
       data.table::data.table(
-        athlete_id = as.character(i), event_id = ev[[fam]], tier = "F",
+        athlete_id = as.character(i), event_id = ev[[fam]], race_code = "F",
         round = "F", date = as.Date("2021-01-01") + 1:6,
         perf = ability - gap + stats::rnorm(6, 0, sigma))))
   }))
@@ -399,7 +399,7 @@ opposite_rounds <- function(n = 500, heat_100 = -0.030, heat_400 = 0.010) {
   mk <- function(ev) data.table::data.table(
     athlete_id = rep(sprintf("a%03d", seq_len(n)), each = 6), event_id = ev,
     round = rep(c("Final", "Final", "Final", "Heat", "Heat", "Heat"), n),
-    tier = "top", date = rep(Sys.Date() - 1:6, n))
+    race_code = "top", date = rep(Sys.Date() - 1:6, n))
   d <- data.table::rbindlist(list(mk("AT-100Metres-M"), mk("AT-400Metres-M")))
   ab <- stats::setNames(stats::rnorm(n, 0, 0.03), sprintf("a%03d", seq_len(n)))
   d[, perf := ab[athlete_id] + stats::rnorm(.N, 0, 0.005)]
@@ -443,7 +443,7 @@ test_that("an event whose REFERENCE cell is thin gets no per-event offset", {
     data.table::data.table(athlete_id = sample(ath, n_heat, TRUE), event_id = ev, round = "Heat")))
   d <- data.table::rbindlist(list(mk("AT-100Metres-M", 3000, 3000),
                                   mk("AT-400Metres-M", 40, 3000)))
-  d[, `:=`(tier = "top", date = Sys.Date())]
+  d[, `:=`(race_code = "top", date = Sys.Date())]
   ab <- stats::setNames(stats::rnorm(200, 0, 0.03), ath)
   d[, perf := ab[athlete_id] + stats::rnorm(.N, 0, 0.005)]
   d[round == "Heat", perf := perf - 0.02]
@@ -466,7 +466,7 @@ test_that("the shrinkage fitter runs at the scale that actually reaches it", {
   mk <- function(ev, per) data.table::data.table(
     athlete_id = rep(ath, each = per), event_id = ev,
     round = rep(c("Final", "Heat", "Heat"), length.out = n_ath * per),
-    tier = rep(c("top", "top", "low"), length.out = n_ath * per))
+    race_code = rep(c("top", "top", "low"), length.out = n_ath * per))
   d <- data.table::rbindlist(list(mk("AT-100Metres-M", 8), mk("AT-400Metres-M", 8)))
   d[, date := Sys.Date() - seq_len(.N)]
   ab <- stats::setNames(stats::rnorm(n_ath, 0, 0.03), ath)
@@ -477,7 +477,7 @@ test_that("the shrinkage fitter runs at the scale that actually reaches it", {
   # A test that cannot tell those apart is the gap that let the bug through.
   d[event_id == "AT-100Metres-M" & round == "Heat", perf := perf - 0.030]
   d[event_id == "AT-400Metres-M" & round == "Heat", perf := perf + 0.010]
-  d[tier == "low", perf := perf - 0.01]
+  d[race_code == "low", perf := perf - 0.01]
   expect_gt(nrow(d), 10000L)
 
   ctx <- estimate_context_effects(d, min_cell = 100L, min_event_cell = 100L,
@@ -521,11 +521,11 @@ test_that("fit_sigma_context recovers a planted championship/pooled ratio", {
     data.table::rbindlist(list(
       # Everyday racing: wide spread.
       data.table::data.table(athlete_id = as.character(i), event_id = "AT-100Metres-M",
-                             tier = "C", round = "H", date = Sys.Date() - 1:10,
+                             race_code = "C", round = "H", date = Sys.Date() - 1:10,
                              perf = ab + stats::rnorm(10, 0, 0.02)),
       # Championship finals: half the spread.
       data.table::data.table(athlete_id = as.character(i), event_id = "AT-100Metres-M",
-                             tier = "OW", round = "F", date = Sys.Date() - 11:20,
+                             race_code = "OW", round = "F", date = Sys.Date() - 11:20,
                              perf = ab + stats::rnorm(10, 0, 0.01))))
   }))
   sc <- fit_sigma_context(rows, min_n = 100L)
@@ -541,7 +541,7 @@ test_that("a family with too few championship marks is left alone", {
   set.seed(4)
   rows <- data.table::data.table(
     athlete_id = rep(as.character(1:50), each = 6), event_id = "AT-100Metres-M",
-    tier = "C", round = "H", date = Sys.Date() - 1:6,
+    race_code = "C", round = "H", date = Sys.Date() - 1:6,
     perf = 2.3 + stats::rnorm(300, 0, 0.02))
   sc <- fit_sigma_context(rows, min_n = 500L)
   expect_true(all(sc$ratio == 1))     # ratio of 1 leaves sigma untouched
@@ -550,7 +550,7 @@ test_that("a family with too few championship marks is left alone", {
 test_that("sigma_context reaches the sigma estimate_ability returns", {
   h <- data.table::data.table(
     athlete_id = rep(c("a", "b"), each = 8), event_id = "AT-100Metres-M",
-    tier = "OW", round = "F", date = Sys.Date() - rep(1:8, 2),
+    race_code = "OW", round = "F", date = Sys.Date() - rep(1:8, 2),
     perf = to_perf(10, -1L) + stats::rnorm(16, 0, 0.01))
   base <- estimate_ability(h, as_of = Sys.Date(), adjust_context = FALSE)
   cal <- list(sigma_context = data.table::data.table(family = "sprint", ratio = 0.5))
@@ -579,7 +579,7 @@ test_that("one corrupt mark cannot buy an athlete a win probability", {
   ev <- "AT-100Metres-M"
   dates <- as.Date(c("2022-06-08", "2024-06-21", "2026-05-12"))
   mk <- function(id, marks) data.table::data.table(
-    athlete_id = id, event_id = ev, date = dates, round = "F", tier = "GL",
+    athlete_id = id, event_id = ev, date = dates, round = "F", race_code = "GL",
     perf = to_perf(marks, -1L))
   bad   <- mk("BAD",   c(10.70, 17.33, 10.86))
   clean <- mk("CLEAN", c(10.70, 10.78, 10.86))
@@ -608,7 +608,7 @@ test_that("tier class is derived identically wherever it is needed", {
   # APPLIED by `meet_tier`, so a value estimated for "the feed says low" landed
   # on "the catalogue says T3". One helper now serves both.
   d <- data.table::data.table(
-    tier = c("F", "F", "A", "OW"),
+    race_code = c("F", "F", "A", "OW"),
     meet_tier = c("T1_elite", "T3_development", NA, "T2_strong"))
   tc <- citius:::.tier_class_of(d)
   # catalogue wins where it has an opinion...
@@ -620,8 +620,8 @@ test_that("tier class is derived identically wherever it is needed", {
 })
 
 test_that("without meet_tier the helper reproduces the feed classification", {
-  d <- data.table::data.table(tier = c("OW", "A", "F", "DF", NA))
-  expect_equal(citius:::.tier_class_of(d), citius:::.tier_class(d$tier))
+  d <- data.table::data.table(race_code = c("OW", "A", "F", "DF", NA))
+  expect_equal(citius:::.tier_class_of(d), citius:::.tier_class(d$race_code))
 })
 
 test_that("a meet_tier column changes the FITTED offsets, not just applied ones", {
@@ -633,7 +633,7 @@ test_that("a meet_tier column changes the FITTED offsets, not just applied ones"
   base <- data.table::data.table(
     athlete_id = rep(sprintf("a%03d", seq_len(n)), each = 6),
     event_id = "AT-100Metres-M", round = "Final",
-    tier = rep(c("A", "A", "A", "F", "F", "F"), n),
+    race_code = rep(c("A", "A", "A", "F", "F", "F"), n),
     date = Sys.Date() - seq_len(n * 6))
   ab <- stats::setNames(stats::rnorm(n, 0, 0.03), sprintf("a%03d", seq_len(n)))
   base[, perf := ab[athlete_id] + stats::rnorm(.N, 0, 0.005)]
@@ -663,7 +663,7 @@ test_that("only= returns bit-identical estimates for the athletes it keeps", {
       athlete_id = ath[i], event_id = "AT-100Metres-M",
       date = Sys.Date() - sample(1:1200, m, replace = TRUE),
       perf = to_perf(stats::rnorm(1, 10.3, 0.25), -1L) + stats::rnorm(m, 0, 0.01),
-      tier = "OW", round = "F")
+      race_code = "OW", round = "F")
   }))
   ents <- sample(ath, 25)
   full <- estimate_ability(d, adjust_context = FALSE)
@@ -703,7 +703,7 @@ test_that("calibrated tactical_index correctly triggers tactical trimming on vec
     event_id = "AT-CustomTactical",
     date = Sys.Date() - rep(1:23, 2),
     perf = c(honest, tactical_marks, honest, tactical_marks),
-    tier = "OW", round = "F"
+    race_code = "OW", round = "F"
   )
   cal_events <- data.table::data.table(
     event_id = "AT-CustomTactical",
@@ -724,7 +724,7 @@ test_that("peak_gamma > 0 upweights peak marks over routine marks", {
     event_id = "AT-100Metres-M",
     date = Sys.Date() - 1:10,
     perf = to_perf(times, -1L),
-    tier = "OW", round = "F"
+    race_code = "OW", round = "F"
   )
   ab_flat <- estimate_ability(h, adjust_context = FALSE, peak_gamma = 0)
   ab_peak <- estimate_ability(h, adjust_context = FALSE, peak_gamma = 1.0)
@@ -746,7 +746,7 @@ test_that("peak_gamma concentration guard is decay-independent (regression, f22e
     event_id = "AT-10000Metres-M",  # distance family: fitted gamma is negative
     date = Sys.Date() - seq(1, by = 30, length.out = n),  # ~4 years of spread
     perf = to_perf(stats::rnorm(n, 1800, 20), -1L),
-    tier = "OW", round = "F"
+    race_code = "OW", round = "F"
   )
   expect_no_warning(
     estimate_ability(h, adjust_context = FALSE, peak_gamma = -0.5))
@@ -760,7 +760,7 @@ test_that("peak_gamma concentration guard fires on a steep negative gamma", {
     event_id = "AT-10000Metres-M",
     date = Sys.Date() - 1:n,
     perf = to_perf(stats::rnorm(n, 1800, 20), -1L),
-    tier = "OW", round = "F"
+    race_code = "OW", round = "F"
   )
   # (N/2)^|gamma| ~= 125x at N=50, gamma=-1.5 -- well past the 50x threshold.
   expect_warning(
@@ -776,7 +776,7 @@ test_that("robust_location = TRUE protects ability against extreme bad-side mark
     event_id = "AT-100Metres-M",
     date = Sys.Date() - 1:6,
     perf = to_perf(times, -1L),
-    tier = "OW", round = "F"
+    race_code = "OW", round = "F"
   )
   ab_std <- estimate_ability(h, adjust_context = FALSE, robust_location = FALSE)
   ab_rob <- estimate_ability(h, adjust_context = FALSE, robust_location = TRUE)

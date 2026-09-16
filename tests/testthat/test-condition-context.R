@@ -97,11 +97,11 @@ test_that("the excess strip removes (1 - beta) * (c_r - expected) and nothing wh
   h <- data.table::rbindlist(lapply(1:6, function(a) data.table::data.table(
     athlete_id = paste0("a", a), event_id = "AT-100Metres-M",
     date = as.Date("2026-06-01") - (1:6) * 30,
-    race_key = paste0("r", 1:6), round = "Final", tier = "A",
+    race_key = paste0("r", 1:6), round = "Final", race_code = "A",
     perf = -log(10 + a * 0.02 + rnorm(6, 0, 0.02)))))
   race <- data.table::data.table(race_key = paste0("r", 1:6), event_id = "AT-100Metres-M",
                                  c_r = c(0.03, 0.01, 0.01, 0.01, 0.01, 0.01), n_in_race = 50L,
-                                 round = "Final", tier = "A")
+                                 round = "Final", race_code = "A")
   ev <- data.table::data.table(event_id = "AT-100Metres-M", sigma_within = 0.01, condition_sd = 0.015,
                                tactical_index = 0, calibrated = TRUE, foul_rate = 0)
   expected <- data.table::data.table(event_id = "AT-100Metres-M", tier_class = "high", round_class = "final",

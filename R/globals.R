@@ -10,7 +10,7 @@ utils::globalVariables(c(
   "ability", "ability_raw", "age", "athlete_id", "athlete_name", "birthdate",
   "cv_prior", "date", "discipline", "distance", "event_id", "indoor",
   "is_technical", "legal", "mark", "mark_string", "orientation", "perf",
-  "place", "prob", "round", "sex", "sex_code", "sport", "tier", "value_raw",
+  "place", "prob", "round", "sex", "sex_code", "sport", "race_code", "value_raw",
   "wind",
   # ability estimation
   "kappa", "last_date", "n", "n_eff", "prior_mu", "shrinkage", "sigma",

@@ -24,13 +24,13 @@ CITIUS_DB_SCHEMA <- list(
     "competition_id", "event_id", "athlete_id", "athlete_name", "birthdate",
     "birthdate_year_only", "date", "sport", "discipline", "discipline_code",
     "event_name", "comp_day", "sex_code", "race_key", "round", "value_raw",
-    "mark_string", "is_technical", "place", "wind", "indoor", "legal", "tier",
+    "mark_string", "is_technical", "place", "wind", "indoor", "legal", "race_code",
     "venue_country", "venue_city", "venue_stadium", "mark", "age",
     "orientation", "perf", "comp_name", "comp_start", "comp_tier"
   ),
   athletics_corpus = c(
     "source", "athlete_id", "event_id", "discipline", "date", "competition_id",
-    "comp_name", "round", "tier", "race_key", "value_raw", "mark_string",
+    "comp_name", "round", "race_code", "race_key", "value_raw", "mark_string",
     "mark", "place", "is_technical", "wind", "indoor", "legal",
     "venue_country", "venue_city", "venue_stadium", "age", "sex",
     "orientation", "perf", "nomark_observable", "scoreable"
@@ -38,7 +38,7 @@ CITIUS_DB_SCHEMA <- list(
   athletics_history = c(
     "event_id", "athlete_id", "date", "sport", "discipline", "competition",
     "competition_id", "value_raw", "mark_string", "is_technical", "place",
-    "round", "wind", "indoor", "legal", "tier", "venue_country", "venue_city",
+    "round", "wind", "indoor", "legal", "race_code", "venue_country", "venue_city",
     "venue_stadium", "result_score", "mark", "age", "sex", "orientation",
     "perf", "race_key", "implausible"
   )

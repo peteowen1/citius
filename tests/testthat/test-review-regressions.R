@@ -136,7 +136,7 @@ test_that("calibrate() attaches the indoor and season offsets it fits", {
   d[, date := as.Date(sprintf("2021-%02d-%02d", month, 2L + ((k - 1L) %% 6L) * 4L))]
   d[, venue_country := "GBR"]
   d[, indoor := FALSE]
-  d[, round := "Final"][, tier := "OW"]
+  d[, round := "Final"][, race_code := "OW"]
   d[, race_key := paste(event_id, date)]
   # A real seasonal phase: sharp in May/June, flat in Sep/Oct.
   d[, seas := ifelse(month %in% c(5L, 6L), 0.004, -0.004)]
@@ -192,7 +192,7 @@ test_that("the season offset is a phase, not an intercept shift", {
   d[, event_id := "AT-100Metres-M"]
   d[, date := as.Date(sprintf("2021-%02d-10", month)) + k]
   d[, venue_country := "GBR"][, indoor := FALSE]
-  d[, round := "Final"][, tier := "OW"]
+  d[, round := "Final"][, race_code := "OW"]
   d[, race_key := paste(event_id, date)]
   d[, perf := -log(10) + stats::rnorm(.N, 0, 0.01) + 0.003 * sin(month)]
 
@@ -217,7 +217,7 @@ test_that("season and indoor stay OFF unless explicitly asked for", {
   d[, event_id := "AT-100Metres-M"]
   d[, date := as.Date(sprintf("2021-%02d-%02d", month, 2L + ((k - 1L) %% 6L) * 4L))]
   d[, venue_country := "GBR"][, indoor := FALSE]
-  d[, round := "Final"][, tier := "OW"]
+  d[, round := "Final"][, race_code := "OW"]
   d[, race_key := paste(event_id, date)]
   d[, perf := -log(10) + stats::rnorm(.N, 0, 0.01)]
 
@@ -294,7 +294,7 @@ test_that("decouple_peak actually gates the peak columns", {
     athlete_id = rep(c("a", "b", "c"), each = 12L),
     event_id = "AT-100Metres-M",
     date = Sys.Date() - rep(seq(30, 700, length.out = 12L), 3L),
-    round = "final", tier = "top"
+    round = "final", race_code = "top"
   )
   res$perf <- to_perf(10 + rnorm(36, 0, 0.12), -1L)
 
@@ -327,7 +327,7 @@ test_that("the season offset is skipped, not applied northern, without venue_cou
     event_id = "AT-100Metres-M",
     date = as.Date("2019-01-01") + rep(seq(0, 380, length.out = 20L), 20L),
     venue_country = rep(c("AUS", "GBR"), each = 200L),
-    round = "final", tier = "top"
+    round = "final", race_code = "top"
   )
   res$perf <- to_perf(10 + rnorm(n, 0, 0.15), -1L)
 

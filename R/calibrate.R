@@ -257,7 +257,12 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
   race <- dt[shared == TRUE, .(c_r = data.table::first(c_r), n_in_race = .N,
                  event_id = data.table::first(event_id),
                  round = if ("round" %in% names(dt)) data.table::first(round) else NA_character_,
-                 tier = if ("tier" %in% names(dt)) data.table::first(tier) else NA_character_),
+                 # READ race_code (the renamed source column) but WRITE it into
+                 # this table's own `tier` field -- calibration$race's schema
+                 # is part of the already-fitted, deployed calibration object
+                 # and is deliberately NOT renamed in this pass (same reasoning
+                 # as calibration$tier, see that field's own protection above).
+                 tier = if ("race_code" %in% names(dt)) data.table::first(race_code) else NA_character_),
              by = race_key]
   # Ability is indexed by athlete-event; sensitivity, below, is a property of
   # the athlete and is estimated separately across all their events.
@@ -817,7 +822,7 @@ fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, 
       event_id = character(), sigma_within = numeric(), condition_sd = numeric(),
       tactical_index = numeric(), cond_share = numeric(), calibrated = logical(),
       foul_rate = numeric(), n_results = integer(), n_races = integer()),
-    round = NULL, tier = NULL, athlete = NULL, race = NULL, wind = NULL,
+    round = NULL, race_code = NULL, athlete = NULL, race = NULL, wind = NULL,
     min_races = 8L, converged = TRUE
   ), class = "citius_calibration")
 }

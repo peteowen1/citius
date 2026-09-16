@@ -8,7 +8,7 @@ plant_venue <- function(effects = c(fast = 0.010, normal = 0, slow = -0.010),
     data.table::data.table(
       athlete_id = as.character(i), event_id = "AT-100Metres-M",
       comp_name = v, date = Sys.Date() - seq_len(n_each),
-      round = "F", tier = "OW",
+      round = "F", race_code = "OW",
       perf = ability[i] + unname(effects[v]) + stats::rnorm(n_each, 0, sigma))
   }))
 }
@@ -45,7 +45,7 @@ test_that("ability does not leak into venue effects", {
     v <- sample(c("fast", "slow"), 40, replace = TRUE, prob = c(p_fast, 1 - p_fast))
     data.table::data.table(
       athlete_id = as.character(i), event_id = "AT-100Metres-M",
-      comp_name = v, date = Sys.Date() - seq_len(40), round = "F", tier = "OW",
+      comp_name = v, date = Sys.Date() - seq_len(40), round = "F", race_code = "OW",
       perf = ability[i] + ifelse(v == "fast", 0.004, -0.004) +
         stats::rnorm(40, 0, 0.008))
   }))
@@ -58,7 +58,7 @@ test_that("rare venues are excluded", {
   d <- plant_venue()
   d <- rbind(d, data.table::data.table(
     athlete_id = "1", event_id = "AT-100Metres-M", comp_name = "oneoff",
-    date = Sys.Date(), round = "F", tier = "OW", perf = to_perf(9, -1L)))
+    date = Sys.Date(), round = "F", race_code = "OW", perf = to_perf(9, -1L)))
   expect_false("oneoff" %in% fit_venue_effect(d)$venue)
 })
 

@@ -167,7 +167,7 @@ test_that("a calibrated no-mark rate is picked up for any event type", {
     race_key = rep(paste0("r", 1:40), each = 6),
     athlete_id = as.character(rep_len(1:12, 240)),
     event_id = "AT-PoleVault-M", date = Sys.Date() - 1,
-    round = "F", tier = "OW",
+    round = "F", race_code = "OW",
     mark = 5.5)
   d[, perf := to_perf(mark, 1L)]
   d[sample(.N, 24), perf := NA_real_]        # 10% no-marks
@@ -185,7 +185,7 @@ test_that("pooled athlete-level rows do not dilute the no-mark rate", {
     race_key = rep(paste0("r", 1:40), each = 6),
     athlete_id = as.character(rep_len(1:12, 240)),
     event_id = "AT-PoleVault-M", date = Sys.Date() - 1,
-    round = "F", tier = "OW", mark = 5.5, nomark_observable = TRUE)
+    round = "F", race_code = "OW", mark = 5.5, nomark_observable = TRUE)
   comp[, perf := to_perf(mark, 1L)]
   comp[seq_len(24), perf := NA_real_]                  # 10% no-marks
   career <- data.table::copy(comp)[, `:=`(
@@ -245,14 +245,14 @@ test_that("zero ability_se reproduces the old behaviour", {
 test_that("estimate_ability reports a larger SE for sparser histories", {
   h <- rbind(
     data.table::data.table(athlete_id = "deep", event_id = "AT-100Metres-M",
-      date = Sys.Date() - seq(10, 400, by = 20), tier = "OW", round = "F",
+      date = Sys.Date() - seq(10, 400, by = 20), race_code = "OW", round = "F",
       perf = to_perf(10, -1L) + stats::rnorm(20, 0, 0.01)),
     data.table::data.table(athlete_id = "thin", event_id = "AT-100Metres-M",
-      date = Sys.Date() - c(20, 40), tier = "OW", round = "F",
+      date = Sys.Date() - c(20, 40), race_code = "OW", round = "F",
       perf = to_perf(10, -1L) + stats::rnorm(2, 0, 0.01)),
     data.table::rbindlist(lapply(1:8, function(i)
       data.table::data.table(athlete_id = paste0("o", i), event_id = "AT-100Metres-M",
-        date = Sys.Date() - seq(10, 300, by = 30), tier = "OW", round = "F",
+        date = Sys.Date() - seq(10, 300, by = 30), race_code = "OW", round = "F",
         perf = to_perf(10.2, -1L) + stats::rnorm(10, 0, 0.01)))))
   ab <- estimate_ability(h, adjust_context = FALSE, half_life = 365)
   expect_gt(ab[athlete_id == "thin"]$ability_se, ab[athlete_id == "deep"]$ability_se)

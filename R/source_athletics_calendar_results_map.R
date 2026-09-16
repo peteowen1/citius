@@ -187,7 +187,7 @@ map_calendar_results_to_championship_schema <- function(results) {
     wind                    = suppressWarnings(as.numeric(dt$wind)),
     indoor                  = NA,
     legal                   = NA,
-    tier                    = NA_character_,
+    race_code                    = NA_character_,
     venue_country          = venue_country,
     venue_city              = venue_city,
     venue_stadium          = venue_stadium,
@@ -255,7 +255,7 @@ map_calendar_results_to_championship_schema <- function(results) {
     event_name = character(), comp_day = integer(), sex_code = character(),
     race_key = character(), round = character(), value_raw = numeric(),
     mark_string = character(), is_technical = logical(), place = integer(),
-    wind = numeric(), indoor = logical(), legal = logical(), tier = character(),
+    wind = numeric(), indoor = logical(), legal = logical(), race_code = character(),
     venue_country = character(), venue_city = character(), venue_stadium = character(),
     mark = numeric(), age = numeric(), orientation = numeric(), perf = numeric(),
     comp_name = character(), comp_start = as.Date(character()), comp_tier = character()

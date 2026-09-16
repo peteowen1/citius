@@ -183,7 +183,7 @@
 #' @return Numeric vector of non-negative weights.
 #' @seealso [calibrate()]
 #' @export
-result_weight <- function(date, tier = NA_character_, round = NA_character_,
+result_weight <- function(date, race_code = NA_character_, round = NA_character_,
                           as_of = Sys.Date(), half_life = 540,
                           calibration = NULL, tier_class = NULL,
                           precision_scale = 1) {
@@ -197,7 +197,7 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
   age_days[is.na(age_days) | age_days < 0] <- 0
   recency <- 0.5^(age_days / half_life)
 
-  tier <- rep_len(as.character(tier), n)
+  race_code <- rep_len(as.character(race_code), n)
   round <- rep_len(as.character(round), n)
 
   # `tier_class` lets the caller pass a class that is already resolved -- in
@@ -214,7 +214,7 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
   # Do NOT route a resolved class back through `tier`: .tier_class() maps any
   # unrecognised code to "mid", so .tier_class("top") is "mid", and the
   # double-mapping would be silent.
-  tc <- if (is.null(tier_class)) .tier_class(tier) else rep_len(as.character(tier_class), n)
+  tc <- if (is.null(tier_class)) .tier_class(race_code) else rep_len(as.character(tier_class), n)
 
   prec <- .context_precision(calibration, "round", .round_class(round)) *
     .context_precision(calibration, "tier", tc)
@@ -871,7 +871,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
   # What IS fixed: estimate_ability() now passes this resolved class to
   # result_weight(), so the 84.6% of rows the catalogue covers weight and offset
   # on the same label. Only the uncovered remainder can still reach "high".
-  fb <- .tier_class(if ("tier" %in% names(dt)) dt$tier else NA_character_)
+  fb <- .tier_class(if ("race_code" %in% names(dt)) dt$race_code else NA_character_)
   if (!"meet_tier" %in% names(dt)) return(fb)
   mapped <- unname(c(T1_elite = "top", T2_strong = "mid",
                      T3_development = "low")[as.character(dt$meet_tier)])
@@ -911,8 +911,8 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' FIRST, redeploy that calibration, THEN reinstate the 3-class mapping
 #' below in the SAME change -- never as two separate commits, or the window
 #' between them reintroduces this exact mismatch.
-.tier_class <- function(tier) {
-  t <- toupper(trimws(as.character(tier)))
+.tier_class <- function(race_code) {
+  t <- toupper(trimws(as.character(race_code)))
   known <- c("OW", "GW", "GL", "A", "B", "C", "D", "DF", "E", "F")
   out <- rep("mid", length(t))
   out[t %in% c("OW", "GW", "GL")] <- "top"
@@ -1064,7 +1064,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
     rr <- data.table::as.data.table(calibration$race)
     if (!"ref_c_r" %in% names(rr)) {
       rr[, .rcl := .round_class(if ("round" %in% names(rr)) round else NA_character_)]
-      rr[, .tcl := .tier_class(if ("tier" %in% names(rr)) tier else NA_character_)]
+      rr[, .tcl := .tier_class(if ("race_code" %in% names(rr)) race_code else NA_character_)]
       # Per event, the mean race effect of a top-tier final. Fall back to the
       # event's own mean where an event has none (indoor-only events, thin
       # ones), and to zero only if even that is unavailable -- never silently
@@ -1097,7 +1097,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
       # they raced in to the ones they are entering.
       if (!".rcl" %in% names(rr)) {
         rr[, .rcl := .round_class(if ("round" %in% names(rr)) round else NA_character_)]
-        rr[, .tcl := .tier_class(if ("tier" %in% names(rr)) tier else NA_character_)]
+        rr[, .tcl := .tier_class(if ("race_code" %in% names(rr)) race_code else NA_character_)]
       }
       ex <- data.table::as.data.table(rs$expected)
       e_cell <- ex$e_cell[match(paste(rr$event_id, rr$.tcl, rr$.rcl, sep = "|"),
@@ -1357,7 +1357,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
     co <- calibration$championship$offset[
       match(fam_ch, calibration$championship$family)]
     co[!is.finite(co)] <- 0
-    is_ch <- .is_championship(if ("tier" %in% names(dt)) dt$tier else NA_character_) &
+    is_ch <- .is_championship(if ("race_code" %in% names(dt)) dt$race_code else NA_character_) &
       .round_class(if ("round" %in% names(dt)) dt$round else NA_character_) == "final"
     co[!is_ch] <- 0
     dt[, perf := perf - co]
@@ -1514,7 +1514,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # (line 286), so the weighting and the offsets cannot drift onto different
   # tier vocabularies. Passing only `tier` here is what let the WAC promotion
   # reach the offsets and miss the weights.
-  dt[, w := result_weight(date, tier = if ("tier" %in% names(dt)) tier else NA_character_,
+  dt[, w := result_weight(date, race_code = if ("race_code" %in% names(dt)) race_code else NA_character_,
                           round = if ("round" %in% names(dt)) round else NA_character_,
                           as_of = as_of, half_life = hl,
                           calibration = calibration,

@@ -88,7 +88,7 @@ test_that("the per-event value travels with its row, not with the sort order", {
 
 test_that("context_scale 1 is the default and 0 leaves the raw mark", {
   h <- hist2("AT-100Metres-M")
-  h[, `:=`(round = "final", tier = "GW")]
+  h[, `:=`(round = "final", race_code = "GW")]
   a_default <- estimate_ability(h, as_of = as.Date("2024-09-01"))
   a_one     <- estimate_ability(h, as_of = as.Date("2024-09-01"), context_scale = 1)
   expect_equal(a_default$ability, a_one$ability)
@@ -164,14 +164,14 @@ test_that("the tactical override only fires in families where tactics exist", {
 test_that("precision_scale exponentiates the context weights and leaves recency alone", {
   cal <- list(round = data.frame(round_class = c("final", "heat"),
                                  precision = c(0.8, 1.6)),
-              tier  = data.frame(tier_class = c("low", "top"),
+              race_code  = data.frame(tier_class = c("low", "top"),
                                  precision = c(1.1, 0.9)))
   d <- as.Date("2025-01-01")
-  w1 <- result_weight(d, tier = "F", round = "heat", as_of = d,
+  w1 <- result_weight(d, race_code = "F", round = "heat", as_of = d,
                       half_life = Inf, calibration = cal)
-  w0 <- result_weight(d, tier = "F", round = "heat", as_of = d,
+  w0 <- result_weight(d, race_code = "F", round = "heat", as_of = d,
                       half_life = Inf, calibration = cal, precision_scale = 0)
-  wh <- result_weight(d, tier = "F", round = "heat", as_of = d,
+  wh <- result_weight(d, race_code = "F", round = "heat", as_of = d,
                       half_life = Inf, calibration = cal, precision_scale = 0.5)
   # scale 0 flattens the context weight to exactly 1
   expect_equal(w0, 1)
@@ -182,9 +182,9 @@ test_that("precision_scale exponentiates the context weights and leaves recency 
   # the precision would silently rescale the half-life, which is a different
   # parameter with its own fitted value.
   old <- as.Date("2024-01-01")
-  r1 <- result_weight(old, tier = "F", round = "heat", as_of = d,
+  r1 <- result_weight(old, race_code = "F", round = "heat", as_of = d,
                       half_life = 365, calibration = cal)
-  r0 <- result_weight(old, tier = "F", round = "heat", as_of = d,
+  r0 <- result_weight(old, race_code = "F", round = "heat", as_of = d,
                       half_life = 365, calibration = cal, precision_scale = 0)
   expect_equal(r0, 0.5^(as.numeric(d - old) / 365))
   expect_equal(r1 / r0, w1)          # the ratio is the context weight alone
@@ -199,12 +199,12 @@ test_that("precision_scale reaches estimate_ability and takes a per-event table"
       mark = if (ori < 0) c(10.4, 10.3, 10.2, 10.1) else c(20.2, 20.3, 20.4, 20.5),
       orientation = ori,
       round = c("heat", "final", "heat", "final"),
-      tier = c("F", "OW", "F", "OW"))
+      race_code = c("F", "OW", "F", "OW"))
   }))
   h[, perf := orientation * log(mark)]
   cal <- list(round = data.frame(round_class = c("final", "heat"),
                                  precision = c(0.8, 1.6)),
-              tier  = data.frame(tier_class = c("low", "top"),
+              race_code  = data.frame(tier_class = c("low", "top"),
                                  precision = c(1.1, 0.9)))
   a1 <- estimate_ability(h, adjust_context = FALSE, as_of = as.Date("2024-09-01"),
                          calibration = cal)
