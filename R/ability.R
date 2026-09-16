@@ -1064,7 +1064,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
     rr <- data.table::as.data.table(calibration$race)
     if (!"ref_c_r" %in% names(rr)) {
       rr[, .rcl := .round_class(if ("round" %in% names(rr)) round else NA_character_)]
-      rr[, .tcl := .tier_class(if ("race_code" %in% names(rr)) race_code else NA_character_)]
+      rr[, .tcl := .tier_class(if ("tier" %in% names(rr)) tier else NA_character_)]
       # Per event, the mean race effect of a top-tier final. Fall back to the
       # event's own mean where an event has none (indoor-only events, thin
       # ones), and to zero only if even that is unavailable -- never silently
@@ -1097,7 +1097,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
       # they raced in to the ones they are entering.
       if (!".rcl" %in% names(rr)) {
         rr[, .rcl := .round_class(if ("round" %in% names(rr)) round else NA_character_)]
-        rr[, .tcl := .tier_class(if ("race_code" %in% names(rr)) race_code else NA_character_)]
+        rr[, .tcl := .tier_class(if ("tier" %in% names(rr)) tier else NA_character_)]
       }
       ex <- data.table::as.data.table(rs$expected)
       e_cell <- ex$e_cell[match(paste(rr$event_id, rr$.tcl, rr$.rcl, sep = "|"),

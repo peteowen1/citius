@@ -101,7 +101,7 @@ test_that("the excess strip removes (1 - beta) * (c_r - expected) and nothing wh
     perf = -log(10 + a * 0.02 + rnorm(6, 0, 0.02)))))
   race <- data.table::data.table(race_key = paste0("r", 1:6), event_id = "AT-100Metres-M",
                                  c_r = c(0.03, 0.01, 0.01, 0.01, 0.01, 0.01), n_in_race = 50L,
-                                 round = "Final", race_code = "A")
+                                 round = "Final", tier = "A")
   ev <- data.table::data.table(event_id = "AT-100Metres-M", sigma_within = 0.01, condition_sd = 0.015,
                                tactical_index = 0, calibrated = TRUE, foul_rate = 0)
   expected <- data.table::data.table(event_id = "AT-100Metres-M", tier_class = "high", round_class = "final",

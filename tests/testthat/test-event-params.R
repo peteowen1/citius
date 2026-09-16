@@ -164,7 +164,7 @@ test_that("the tactical override only fires in families where tactics exist", {
 test_that("precision_scale exponentiates the context weights and leaves recency alone", {
   cal <- list(round = data.frame(round_class = c("final", "heat"),
                                  precision = c(0.8, 1.6)),
-              race_code  = data.frame(tier_class = c("low", "top"),
+              tier  = data.frame(tier_class = c("low", "top"),
                                  precision = c(1.1, 0.9)))
   d <- as.Date("2025-01-01")
   w1 <- result_weight(d, race_code = "F", round = "heat", as_of = d,
@@ -204,7 +204,7 @@ test_that("precision_scale reaches estimate_ability and takes a per-event table"
   h[, perf := orientation * log(mark)]
   cal <- list(round = data.frame(round_class = c("final", "heat"),
                                  precision = c(0.8, 1.6)),
-              race_code  = data.frame(tier_class = c("low", "top"),
+              tier  = data.frame(tier_class = c("low", "top"),
                                  precision = c(1.1, 0.9)))
   a1 <- estimate_ability(h, adjust_context = FALSE, as_of = as.Date("2024-09-01"),
                          calibration = cal)

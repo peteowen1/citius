@@ -822,7 +822,7 @@ fit_tail_df <- function(results, candidates = c(4, 5, 6, 8, 10, 15, 20, 30, 50, 
       event_id = character(), sigma_within = numeric(), condition_sd = numeric(),
       tactical_index = numeric(), cond_share = numeric(), calibrated = logical(),
       foul_rate = numeric(), n_results = integer(), n_races = integer()),
-    round = NULL, race_code = NULL, athlete = NULL, race = NULL, wind = NULL,
+    round = NULL, tier = NULL, athlete = NULL, race = NULL, wind = NULL,
     min_races = 8L, converged = TRUE
   ), class = "citius_calibration")
 }
