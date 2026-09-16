@@ -26,7 +26,7 @@ the first page.}
 }
 \value{
 A \code{data.table} with columns \code{competition_id}, \code{name}, \code{venue},
-\code{area}, \code{ranking_category}, \code{disciplines}, \code{competition_group},
+\code{area}, \code{meet_code}, \code{disciplines}, \code{competition_group},
 \code{competition_subgroup}, \code{start_date}, \code{has_results}, \code{has_api_results},
 \code{has_startlist}, and two attributes: \code{"hits"} gives the total match
 count for the query (not just this page) -- read it with

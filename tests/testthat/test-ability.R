@@ -609,7 +609,7 @@ test_that("tier class is derived identically wherever it is needed", {
   # on "the catalogue says T3". One helper now serves both.
   d <- data.table::data.table(
     race_code = c("F", "F", "A", "OW"),
-    meet_tier = c("T1_elite", "T3_development", NA, "T2_strong"))
+    meet_tier = c("M1", "M3", NA, "M2"))
   tc <- citius:::.tier_class_of(d)
   # catalogue wins where it has an opinion...
   expect_equal(tc[1], "top")     # feed said low (F); catalogue says T1
@@ -639,8 +639,8 @@ test_that("a meet_tier column changes the FITTED offsets, not just applied ones"
   base[, perf := ab[athlete_id] + stats::rnorm(.N, 0, 0.005)]
   # The feed calls these all "F"/"A", but the catalogue disagrees on half of
   # them, and the truth follows the CATALOGUE.
-  base[, meet_tier := rep(c("T1_elite", "T3_development"), length.out = .N)]
-  base[meet_tier == "T3_development", perf := perf - 0.04]
+  base[, meet_tier := rep(c("M1", "M3"), length.out = .N)]
+  base[meet_tier == "M3", perf := perf - 0.04]
 
   with_mt <- estimate_context_effects(base, min_cell = 50L)
   without  <- estimate_context_effects(base[, !"meet_tier"], min_cell = 50L)

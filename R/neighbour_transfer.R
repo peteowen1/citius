@@ -8,7 +8,7 @@
 #' point of the 85%+ runtime saving documented in `citius/CLAUDE.md`. Calling
 #' [estimate_ability()] again without `only=` just to get the population
 #' shape, once per race, measured at **~21 seconds for 4 events** (421k rows)
-#' -- across a T1_elite backtest's 900+ meets that is **3-5 added hours**,
+#' -- across a M1 backtest's 900+ meets that is **3-5 added hours**,
 #' for a quantity (the relative SHAPE of two events' ability distributions)
 #' that moves slowly.
 #'

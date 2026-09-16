@@ -33,7 +33,7 @@ computes or returns other athletes' \code{ability_raw} -- that is the whole
 point of the 85\%+ runtime saving documented in \code{citius/CLAUDE.md}. Calling
 \code{\link[=estimate_ability]{estimate_ability()}} again without \verb{only=} just to get the population
 shape, once per race, measured at \strong{~21 seconds for 4 events} (421k rows)
--- across a T1_elite backtest's 900+ meets that is \strong{3-5 added hours},
+-- across a M1 backtest's 900+ meets that is \strong{3-5 added hours},
 for a quantity (the relative SHAPE of two events' ability distributions)
 that moves slowly.
 }

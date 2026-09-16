@@ -154,7 +154,7 @@ condition_sensitivity <- function(ability, event_id, calibration = NULL) {
 #'   simulating. `0` (the default) leaves the ability table as supplied; only
 #'   applied when the table carries `ability_raw`, `shrinkage` and `prior_mu`.
 #' @param context Optional `list(meet_tier = , round_class = )` naming the race
-#'   being simulated (catalogue tier `T1_elite`/`T2_strong`/`T3_development`,
+#'   being simulated (catalogue tier `M1`/`M2`/`M3`,
 #'   round class `final`/`semi`/`heat`/`other`). When the calibration carries
 #'   a `condition_sd_context` table the shared-shock sd is taken from the
 #'   matching event or family cell instead of the event-wide value; otherwise

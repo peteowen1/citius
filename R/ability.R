@@ -151,11 +151,11 @@
 #'   `"DF"`, `"A"`..`"F"`, or `NA`.
 #'
 #'   **Not `meet_tier`**, which is the catalogue's rating of a MEETING
-#'   (`"T1_elite"`, `"T2_strong"`, `"T3_development"`). The two classifications
-#'   cross rather than nest: one T1_elite meeting contains races of several WAC
+#'   (`"M1"`, `"M2"`, `"M3"`). The two classifications
+#'   cross rather than nest: one M1 meeting contains races of several WAC
 #'   categories, because a Diamond League meeting's headline disciplines and its
 #'   supporting programme are categorised separately. Weltklasse Zürich runs
-#'   `"GW"` disciplines beside `"F"` support races inside a single T1_elite
+#'   `"GW"` disciplines beside `"F"` support races inside a single M1
 #'   meeting, and 90 of the 849 races in the lab's "elite" test set are `"F"`
 #'   for exactly that reason.
 #'
@@ -873,8 +873,8 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
   # on the same label. Only the uncovered remainder can still reach "high".
   fb <- .tier_class(if ("race_code" %in% names(dt)) dt$race_code else NA_character_)
   if (!"meet_tier" %in% names(dt)) return(fb)
-  mapped <- unname(c(T1_elite = "top", T2_strong = "mid",
-                     T3_development = "low")[as.character(dt$meet_tier)])
+  mapped <- unname(c(M1 = "top", M2 = "mid",
+                     M3 = "low")[as.character(dt$meet_tier)])
   # An unclassified meet keeps the feed code rather than a guess.
   unname(data.table::fifelse(is.na(mapped), fb, mapped))
 }
