@@ -849,28 +849,23 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @keywords internal
 #' @noRd
 .tier_class_of <- function(dt) {
-  # KNOWN VOCABULARY SPLIT, deliberately left in place (2026-09-06). This
-  # fallback is the legacy FOUR-class feed mapping (top/high/mid/low) while the
-  # catalogue branch below is the THREE-class WAC one (top/mid/low), so a row
-  # without `meet_tier` and a feed code of A or B still yields "high" -- a class
-  # the WAC-fitted calibration does not contain, which then takes the median
-  # precision in .context_precision().
+  # VOCABULARY SPLIT RESOLVED 2026-09-16 (2nd attempt at the fallback's
+  # 3-class remap, this time with the race_shock refit landing in the same
+  # change -- see `.tier_class()`'s own comment for the full history and
+  # what is still pending before this reaches a deployed prediction). Before
+  # this, the fallback below was the legacy FOUR-class feed mapping
+  # (top/high/mid/low) while the catalogue branch was the THREE-class WAC
+  # one (top/mid/low), so a row without `meet_tier` and a feed code of A or
+  # B yielded "high" -- a class the WAC-fitted calibration does not
+  # contain, which then took the median precision in .context_precision().
+  # `.tier_class()` now only ever emits top/mid/low, so the fallback and the
+  # catalogue branch share one vocabulary -- the uncovered ~15.4% of rows
+  # (no `meet_tier`) can no longer land in a class the calibration has never
+  # seen.
   #
-  # A 3-class version of `.tier_class()` was tried and REVERTED 2026-09-16
-  # (see that function's own comment): `.tier_class()` is also called
-  # directly by the race-shock excess-strip and by
-  # `fit_race_shock_persistence.R`, which fit `calibration$race_shock` under
-  # the current four-class vocabulary. Changing the mapping without refitting
-  # that table silently pointed live predictions at the wrong population's
-  # beta on `adjust_race = TRUE`, the live default. Collapsing the fallback
-  # onto the WAC table (A/B/C/D -> "mid", DF -> "top") is still probably
-  # right in the end -- it MOVES ~7.5% of the corpus between buckets and
-  # changes which offsets are fitted for `result_weight()`, so it ships
-  # through a measured arm AND a race_shock refit together, or not at all.
-  #
-  # What IS fixed: estimate_ability() now passes this resolved class to
-  # result_weight(), so the 84.6% of rows the catalogue covers weight and offset
-  # on the same label. Only the uncovered remainder can still reach "high".
+  # estimate_ability() passes this resolved class to result_weight(), so the
+  # 84.6% of rows the catalogue covers weight and offset on the same label
+  # as before; the fix here is specifically for the uncovered remainder.
   fb <- .tier_class(if ("race_code" %in% names(dt)) dt$race_code else NA_character_)
   if (!"meet_tier" %in% names(dt)) return(fb)
   mapped <- unname(c(M1 = "top", M2 = "mid",
@@ -882,42 +877,42 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @keywords internal
 #' @noRd
 #'
-#' STILL FOUR CLASSES -- the 3-class fix was REVERTED 2026-09-16, hours after
-#' shipping, before it reached anything live. The empirical finding behind it
-#' is real and stands: standardising every winning mark against its own
-#' event's mean/sd and averaging by code (docs/reference/modelling-traps.md,
-#' "R1 vs M1") found DF is the single best-performing code of any of them
-#' (was "mid") and B performs like a mid code, below C and D (was "high").
-#' Order: DF 2.34, GW 1.96, OW 1.85, A 1.66, GL 1.54 | C 1.26, B 0.84, D
-#' 0.81 | E 0.59, F 0.12.
+#' THREE CLASSES, reinstated 2026-09-16 (2nd attempt), refit and mapping in
+#' the SAME change this time. First attempt shipped then REVERTED hours
+#' later: `.tier_class()` is called directly (bypassing
+#' `.tier_class_of()`'s catalogue-preferring logic) by the race-shock
+#' excess-strip below and by `fit_race_shock_persistence.R`, which FITS
+#' `calibration$race_shock`'s `by_tier`/`expected` tables -- changing the
+#' mapping without refitting that table first silently points live
+#' predictions at the wrong population's beta on `adjust_race = TRUE`, the
+#' live default. This time the refit came first: `race_shock` was refit
+#' under this exact 3-class vocabulary
+#' (`fit_race_shock_persistence_3class.R` ->
+#' `calibration_race_eb_perevent_persist_3class_TEST.rds`, same base
+#' calibration as the deployed `calibration_race_eb_perevent.rds` --
+#' `events`/`ability` tables verified identical) BEFORE this mapping change,
+#' and both land in the same commit.
 #'
-#' WHY REVERTED: `.tier_class()` is called directly (bypassing
-#' `.tier_class_of()`'s catalogue-preferring logic entirely) by the
-#' race-shock excess-strip at ability.R:1036/:1069 and by
-#' `fit_race_shock_persistence.R`, which FIT `calibration$race_shock`'s
-#' `by_tier`/`expected` tables under the OLD four-class vocabulary. The
-#' deployed calibration's `by_tier` still has `high` (beta 0.6421, 211,429
-#' rows fit on A/B) and `top` (beta 0.4846, 86,002 rows fit on OW/GW/GL
-#' only, no DF/A) -- a 3-class `.tier_class()` would have silently pointed
-#' every A/DF race at "top"'s wrong-population beta, every B race at
-#' "mid"'s wrong-population beta, and made the 211,429-row "high" bucket
-#' permanently unreachable, on `adjust_race = TRUE` (the live default) for
-#' every prediction. Caught by a pr-review-toolkit code-reviewer pass before
-#' this reached anything live. `.tier_class_of()`'s own fallback path is
-#' unaffected either way -- verified dead code, 100% catalogue coverage.
+#' THE EMPIRICAL FINDING (unchanged from the first attempt):
+#' standardising every winning mark against its own event's mean/sd and
+#' averaging by code (docs/reference/modelling-traps.md, "R1 vs M1") found
+#' DF is the single best-performing code of any of them (was "mid") and B
+#' performs like a mid code, below C and D (was "high"). Order: DF 2.34, GW
+#' 1.96, OW 1.85, A 1.66, GL 1.54 | C 1.26, B 0.84, D 0.81 | E 0.59, F 0.12.
 #'
-#' TO RE-APPLY: refit `race_shock` (`fit_race_shock_persistence.R`) and any
-#' other table keyed on raw `.tier_class()` under the 3-class vocabulary
-#' FIRST, redeploy that calibration, THEN reinstate the 3-class mapping
-#' below in the SAME change -- never as two separate commits, or the window
-#' between them reintroduces this exact mismatch.
+#' STILL PENDING before this can be promoted to the deployed calibration:
+#' compose the 3-class TEST refit into a full candidate calibration
+#' (`build_calibration_compose.R`, `CITIUS_COMPOSE_SHOCK` pointed at the
+#' TEST file) and run it as its own measured arm (`backtest_athletics.R`,
+#' M1 + R1) against the current deployed calibration before
+#' `DEPLOYED$calibration` is repointed. This mapping change alone does
+#' nothing to any prediction until a calibration built on it is deployed.
 .tier_class <- function(race_code) {
   t <- toupper(trimws(as.character(race_code)))
   known <- c("OW", "GW", "GL", "A", "B", "C", "D", "DF", "E", "F")
   out <- rep("mid", length(t))
-  out[t %in% c("OW", "GW", "GL")] <- "top"
-  out[t %in% c("A", "B")] <- "high"
-  out[t %in% c("C", "D", "DF")] <- "mid"
+  out[t %in% c("DF", "GW", "OW", "GL", "A")] <- "top"
+  out[t %in% c("B", "C", "D")] <- "mid"
   out[t %in% c("E", "F")] <- "low"
   out[is.na(t)] <- "mid"
   # An unknown NON-missing code lands "mid" silently, which is how a new feed
