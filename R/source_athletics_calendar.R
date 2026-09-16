@@ -41,7 +41,7 @@
 #' @param offset Row offset for pagination, in steps of 100. `NULL`/`0` for
 #'   the first page.
 #' @return A `data.table` with columns `competition_id`, `name`, `venue`,
-#'   `area`, `ranking_category`, `disciplines`, `competition_group`,
+#'   `area`, `meet_code`, `disciplines`, `competition_group`,
 #'   `competition_subgroup`, `start_date`, `has_results`, `has_api_results`,
 #'   `has_startlist`, and two attributes: `"hits"` gives the total match
 #'   count for the query (not just this page) -- read it with
@@ -119,7 +119,7 @@ athletics_calendar <- function(start_date = NULL, end_date = NULL, query = NULL,
     name                  = r$name %||% NA_character_,
     venue                 = r$venue %||% NA_character_,
     area                  = r$area %||% NA_character_,
-    ranking_category      = r$rankingCategory %||% NA_character_,
+    meet_code      = r$rankingCategory %||% NA_character_,
     disciplines           = r$disciplines %||% NA_character_,
     competition_group     = r$competitionGroup %||% NA_character_,
     competition_subgroup  = r$competitionSubgroup %||% NA_character_,
@@ -137,7 +137,7 @@ athletics_calendar <- function(start_date = NULL, end_date = NULL, query = NULL,
 .empty_calendar_dt <- function(fetch_ok = TRUE, reason = NA_character_) {
   out <- data.table::data.table(
     competition_id = integer(), name = character(), venue = character(),
-    area = character(), ranking_category = character(), disciplines = character(),
+    area = character(), meet_code = character(), disciplines = character(),
     competition_group = character(), competition_subgroup = character(),
     start_date = as.Date(character()), has_results = logical(),
     has_api_results = logical(), has_startlist = logical()

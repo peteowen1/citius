@@ -24,7 +24,7 @@
 #'   namespace as [athletics_calendar()]'s `id` and this package's
 #'   `athletics_competition_results()`.
 #' @return A `data.table`, one row per result, with `competition_id`,
-#'   `comp_name`, `venue`, `comp_start`, `comp_end`, `ranking_category`,
+#'   `comp_name`, `venue`, `comp_start`, `comp_end`, `meet_code`,
 #'   `event_name`, `event_id`, `sex_code` (`"M"`/`"W"`, from the response's
 #'   `gender`), `is_relay`, `round` (the response's `race` field, e.g.
 #'   `"Final"`), `race_id`, `race_number`, `race_date` (frequently `NA` --
@@ -179,11 +179,11 @@ athletics_calendar_results <- function(competition_id) {
     venue            = comp$venue %||% NA_character_,
     comp_start       = as_date_safe(comp$startDate %||% NA),
     comp_end         = as_date_safe(comp$endDate %||% NA),
-    ranking_category = comp$rankingCategory %||% NA_character_
+    meet_code = comp$rankingCategory %||% NA_character_
   )]
   data.table::setattr(dt, "fetch_ok", TRUE)
   data.table::setcolorder(dt, c("competition_id", "comp_name", "venue", "comp_start",
-                                 "comp_end", "ranking_category"))
+                                 "comp_end", "meet_code"))
   dt[]
 }
 
@@ -191,7 +191,7 @@ athletics_calendar_results <- function(competition_id) {
   out <- data.table::data.table(
     competition_id = integer(), comp_name = character(), venue = character(),
     comp_start = as.Date(character()), comp_end = as.Date(character()),
-    ranking_category = character(), event_name = character(),
+    meet_code = character(), event_name = character(),
     event_id = integer(), sex_code = character(), is_relay = logical(),
     round = character(), race_id = integer(), race_number = integer(),
     race_date = as.Date(character()), athlete_id = integer(),
