@@ -1558,6 +1558,26 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                              sigma_parts = c("estimator", "weight"),
                              sigma_mode = c("athlete", "event"),
                              only = NULL, peak_gamma = 0,
+                             # PRE-COMPUTED SIGMA SCALE, the hoist that makes
+                             # `only=` cheap. A data.table of (event_id, k_ev),
+                             # or a single number.
+                             #
+                             # k is a property of the EVENT, not the meet
+                             # (within-event spread over six years 1.94%,
+                             # between-event 19.75%), so a caller scoring many
+                             # meets off one history can compute it ONCE and
+                             # pass it here. That is what lets the `only=` path
+                             # stop dragging the n>=10 population through the
+                             # expensive per-group body in every call -- the
+                             # only reason those athletes are retained is to
+                             # make k exact.
+                             #
+                             # Supplying it is a promise that the value came
+                             # from the same history window and estimator. There
+                             # is no way to verify that from in here, so the
+                             # caller owns it: a k from a different vintage
+                             # silently rescales every sigma.
+                             sigma_k = NULL,
                              robust_location = FALSE,
                              decouple_peak = FALSE,
                              # Subtract the fitted race effect, referenced to
@@ -1878,9 +1898,18 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     # EXACT for about a fifth of the work. An approximation would have been
     # faster still, and today is a poor day to trade exactness for speed on a
     # quantity that feeds every ability estimate.
-    n_by <- dt[, .(n = .N), by = .(athlete_id, event_id)]
-    k_ids <- unique(as.character(n_by[n >= 10L]$athlete_id))
-    dt <- dt[as.character(athlete_id) %in% union(keep_ids, k_ids)]
+    # THE HOIST. Those athletes are retained for ONE reason: to make k exact.
+    # If the caller has already computed k -- legitimate, because k belongs to
+    # the event and the history window, not to the meet -- they are dead weight,
+    # and dropping them takes the expensive per-group body down to the entrants
+    # alone.
+    if (is.null(sigma_k)) {
+      n_by <- dt[, .(n = .N), by = .(athlete_id, event_id)]
+      k_ids <- unique(as.character(n_by[n >= 10L]$athlete_id))
+      dt <- dt[as.character(athlete_id) %in% union(keep_ids, k_ids)]
+    } else {
+      dt <- dt[as.character(athlete_id) %in% keep_ids]
+    }
     if (!nrow(dt)) return(.empty_ability())
   }
 
@@ -2047,7 +2076,20 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     # Falls back to the pooled k per event when that event has too few
     # well-observed athletes to estimate its own, so a thin event degrades to
     # today's behaviour rather than to a noisy ratio from a handful of rows.
-    if (identical(Sys.getenv("CITIUS_SIGMA_K_BY_EVENT", "0"), "1")) {
+    if (!is.null(sigma_k)) {
+      # Supplied by the caller. A bare number applies everywhere; a table is
+      # matched per event and falls back to the pooled k for events it omits,
+      # so a partial table degrades gracefully instead of producing NA sigma.
+      if (is.numeric(sigma_k) && length(sigma_k) == 1L) {
+        ab[, .k_use := as.numeric(sigma_k)]
+      } else {
+        skt <- data.table::as.data.table(sigma_k)
+        if (!all(c("event_id", "k_ev") %in% names(skt)))
+          cli::cli_abort("{.arg sigma_k} must be a single number or a table with {.field event_id} and {.field k_ev}.")
+        ab[, .k_use := skt$k_ev[match(event_id, skt$event_id)]]
+        ab[!is.finite(.k_use), .k_use := k_pool]
+      }
+    } else if (identical(Sys.getenv("CITIUS_SIGMA_K_BY_EVENT", "0"), "1")) {
       kt <- ref[, .(k_ev = stats::median(sigma_raw / sigma_rob), n_ref = .N),
                 by = event_id]
       kt[n_ref < 20L | !is.finite(k_ev) | k_ev <= 0, k_ev := NA_real_]
