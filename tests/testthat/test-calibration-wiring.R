@@ -90,15 +90,6 @@ KNOWN_UNREAD <- c(
 # also fails this test until its line is removed -- the register must not rot
 # into a permanent mute.
 DEPLOYED_OFF <- c(
-  # Fitted 2026-09-17 (citiusdata/scripts/fit_altitude_effect.R) and attached by
-  # compose_altitude_calibration.R, so it HAS a setter -- but no deployed
-  # calibration carries it yet because the arm has not run. Per-family, measured
-  # within athlete-event on 2.47M rows: distance -2.06%/km, sprint +0.30%/km,
-  # the sign flipping with aerobic demand. Correcting altitude races to sea
-  # level halves the error in predicting an athlete's actual sea-level time
-  # (26.2s -> 13.2s median, n=65). REMOVE THIS ENTRY the moment an arm promotes
-  # it; leaving it here once deployed would hide a real regression. (2026-09-17)
-  "altitude",
   # `casym`. Measured gold Brier -0.62% and medal -0.24%, BOTH SIGNIFICANT, and
   # OPTIMISATION-FRAMEWORK.md SS7 still lists it "pending - decide on the new
   # metric". A measured BENEFIT that has never reached a deployed calibration.
