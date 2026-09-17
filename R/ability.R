@@ -813,6 +813,22 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @keywords internal
 #' @noRd
 .round_class <- function(round) {
+  # CLASSIFY THE DISTINCT LABELS, THEN MAP BACK.
+  #
+  # This function is pure, and estimate_ability() calls it on the whole history:
+  # 4.4M rows per meet, 120 meets per arm. The body below runs toupper, trimws
+  # and EIGHT grepl passes, so it was doing ~35M regex matches per meet to
+  # resolve a few dozen distinct round labels. Profiled 2026-09-17: grepl 19.4%,
+  # sub 11.2%, toupper 10.7% of estimate_ability()'s self time, and
+  # estimate_ability() is 89% of an arm.
+  #
+  # Vectorised is not the same as cheap. The work was already vectorised; it was
+  # simply being done 4.4M times instead of 40.
+  #
+  # Output-identical by construction: a pure function of a value cannot depend
+  # on how many times that value appears.
+  .u <- unique(round)
+  if (length(.u) < length(round)) return(.round_class(.u)[match(round, .u)])
   r <- toupper(trimws(as.character(round)))
   out <- rep("other", length(r))
   # These are sequential overwrites, so the LAST match wins and the patterns
@@ -912,6 +928,12 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' below in the SAME change -- never as two separate commits, or the window
 #' between them reintroduces this exact mismatch.
 .tier_class <- function(race_code) {
+  # Same reason as .round_class() above: pure function, called on millions of
+  # rows to resolve about ten distinct codes. The unknown-code warning still
+  # fires -- it names the codes, not their row count -- so the diagnostic that
+  # caught "DF" when it first appeared is unaffected.
+  .u <- unique(race_code)
+  if (length(.u) < length(race_code)) return(.tier_class(.u)[match(race_code, .u)])
   t <- toupper(trimws(as.character(race_code)))
   known <- c("OW", "GW", "GL", "A", "B", "C", "D", "DF", "E", "F")
   out <- rep("mid", length(t))
