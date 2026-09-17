@@ -1264,6 +1264,50 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
     dt[, perf := perf - wind_beta * wind_val]
   }
 
+  # Altitude, per FAMILY, where the calibration carries coefficients. Same
+  # adjustment layer as round, tier and wind: it makes a mark comparable across
+  # the venues an athlete has raced at, so ability is estimated at a common
+  # (sea-level) reference.
+  #
+  # WHY PER FAMILY AND NOT GLOBAL: the sign flips. Measured within athlete-event
+  # on 2.47M outdoor rows (fit_altitude_effect.R, 2026-09-17), per +1 km --
+  # distance -2.06%, road -1.99%, walk -1.41%, middle -0.87%, throw and combined
+  # null, hurdles +0.20%, jump +0.24%, sprint +0.30%. Thinner air costs an
+  # aerobic athlete oxygen and saves a sprinter drag, in that order of aerobic
+  # demand. A single global coefficient would be worse than none.
+  #
+  # WHY TWO COEFFICIENTS: `c_r` absorbs part of altitude, as it does wind --
+  # but unlike wind, `calibrate()` does not deliberately fold altitude into the
+  # race effect, so the absorbed share is small and uneven. The strip actually
+  # applied is (1 - beta_shock) * (c_r - e_cell), not the full c_r, which leaves
+  # 91% of the distance effect and 100% of the jump effect still in the mark.
+  # So rows WITH a race effect take the residual coefficient and rows without
+  # take the gross one. Suppressing entirely where `has_cr` (the wind pattern)
+  # would leave almost all of it uncorrected; applying the gross beta everywhere
+  # would double-count the sliver already removed.
+  #
+  # Local names are deliberately distinct from any column in `dt`: the wind
+  # block above carries a scar from a local `w` being shadowed by dt's own `w`,
+  # which silently subtracted beta * weight instead of beta * wind.
+  if (!is.null(calibration$altitude) && NROW(calibration$altitude) &&
+      "alt_m" %in% names(dt)) {
+    .alt_tbl <- data.table::as.data.table(calibration$altitude)
+    .fam_of  <- citius_events()[, c("event_id", "family")]
+    .fam_vec <- .fam_of$family[match(dt$event_id, .fam_of$event_id)]
+    # has_cr picks the scope; an event with no fitted family coefficient gets 0
+    # rather than a guess, exactly as an uncalibrated wind event does.
+    .key   <- paste(.fam_vec, ifelse(has_cr, "TRUE", "FALSE"))
+    .tkey  <- paste(.alt_tbl$family, ifelse(.alt_tbl$has_cr, "TRUE", "FALSE"))
+    .a_beta <- .alt_tbl$beta[match(.key, .tkey)]
+    .a_beta[!is.finite(.a_beta)] <- 0
+    .a_km <- as.numeric(dt$alt_m) / 1000
+    # A venue with no elevation is left alone, never imputed to sea level: an
+    # unknown altitude and a known 0 m are different facts, and treating the
+    # first as the second would silently "correct" every unmatched venue.
+    .a_km[!is.finite(.a_km)] <- 0
+    dt[, perf := perf - .a_beta * .a_km]
+  }
+
   # Race momentum: an exponentially decayed count of recent race days. Same
   # adjustment layer as round, tier and wind, but note what it is NOT.
   #
