@@ -2019,10 +2019,46 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     # one moved the result.
     ref <- ab[n >= 10L & is.finite(sigma_rob) & sigma_rob > 0 &
                 is.finite(sigma_raw) & sigma_raw > 0]
-    k <- if (nrow(ref) >= 20L) stats::median(ref$sigma_raw / ref$sigma_rob) else 1
-    if (!is.finite(k) || k <= 0) k <- 1
+    k_pool <- if (nrow(ref) >= 20L) stats::median(ref$sigma_raw / ref$sigma_rob) else 1
+    if (!is.finite(k_pool) || k_pool <= 0) k_pool <- 1
+
+    # PER-EVENT k, opt-in via CITIUS_SIGMA_K_BY_EVENT.
+    #
+    # k is the ratio between two estimators of the same spread, and it is a
+    # property of the EVENT, not of the meet or the moment. Measured 2026-09-17
+    # across four events at three cutoffs six years apart:
+    #
+    #   within-event spread over time : 1.94%
+    #   between-event spread          : 19.75%
+    #
+    #   800m M    1.2209 / 1.2184 / 1.2394     5000m M  1.0116 / 1.0257 / 1.0238
+    #   100m M    1.1571 / 1.1322 / 1.1503     LongJump 1.1659 / 1.1632 / 1.1318
+    #
+    # A 10x separation. The pooled scalar therefore blends whatever events a
+    # meet happens to contest: a card with 800m and 5000m gets one k near 1.12
+    # applied to both, too high for the 5000m and too low for the 800m. Per
+    # event is MORE exact, not a speed-for-accuracy trade.
+    #
+    # It is also hoistable, which is the point -- a quantity that depends only
+    # on the event and the history window does not need the n>=10 population
+    # carried into every per-meet call. That is a caller-side change and is not
+    # made here; this flag is what makes it measurable first.
+    #
+    # Falls back to the pooled k per event when that event has too few
+    # well-observed athletes to estimate its own, so a thin event degrades to
+    # today's behaviour rather than to a noisy ratio from a handful of rows.
+    if (identical(Sys.getenv("CITIUS_SIGMA_K_BY_EVENT", "0"), "1")) {
+      kt <- ref[, .(k_ev = stats::median(sigma_raw / sigma_rob), n_ref = .N),
+                by = event_id]
+      kt[n_ref < 20L | !is.finite(k_ev) | k_ev <= 0, k_ev := NA_real_]
+      ab[, .k_use := kt$k_ev[match(event_id, kt$event_id)]]
+      ab[!is.finite(.k_use), .k_use := k_pool]
+    } else {
+      ab[, .k_use := k_pool]
+    }
     ab[, sigma := data.table::fifelse(is.finite(sigma_rob) & sigma_rob > 0,
-                                      sigma_rob * k, NA_real_)]
+                                      sigma_rob * .k_use, NA_real_)]
+    ab[, .k_use := NULL]
     # No usable good side at all: fall back to the event value, NOT to
     # `sigma_raw`. Falling back to the raw spread restores exactly the
     # contaminated number this estimator exists to avoid -- which is the bug
