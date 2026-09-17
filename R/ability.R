@@ -955,6 +955,27 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
   out
 }
 
+#' Altitude band from venue metres, SHARED between the fit and the model.
+#'
+#' fit_altitude_effect.R fits per (family, sex, band); this classifies dt$alt_m
+#' the same way when the model applies the result. One function rather than the
+#' same cut() breaks typed twice, because a breakpoint that drifts between the
+#' two silently misapplies every coefficient -- a "800-1500" fitted cell would
+#' be looked up against a row keyed "800-1400", find nothing, and default to 0
+#' with no error. `.round_class()`/`.tier_class()` are the precedent for a
+#' classifier shared this way between fitting and application.
+.altitude_band <- function(alt_m) {
+  a <- suppressWarnings(as.numeric(alt_m))
+  out <- rep(NA_character_, length(a))
+  ok <- is.finite(a)
+  out[ok & a < 200]                 <- "<200"
+  out[ok & a >= 200  & a < 800]     <- "200-800"
+  out[ok & a >= 800  & a < 1500]    <- "800-1500"
+  out[ok & a >= 1500 & a < 2200]    <- "1500-2200"
+  out[ok & a >= 2200]               <- ">2200"
+  out
+}
+
 
 #' Put every performance on the footing the forecast targets
 #'
@@ -1286,27 +1307,37 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
     dt[, perf := perf - wind_beta * wind_val]
   }
 
-  # Altitude, per FAMILY, where the calibration carries coefficients. Same
-  # adjustment layer as round, tier and wind: it makes a mark comparable across
-  # the venues an athlete has raced at, so ability is estimated at a common
-  # (sea-level) reference.
+  # Altitude, per (FAMILY, SEX, BAND), where the calibration carries
+  # coefficients. Same adjustment layer as round, tier and wind: it makes a
+  # mark comparable across the venues an athlete has raced at, so ability is
+  # estimated at a common (sea-level) reference.
   #
-  # WHY PER FAMILY AND NOT GLOBAL: the sign flips. Measured within athlete-event
-  # on 2.47M outdoor rows (fit_altitude_effect.R, 2026-09-17), per +1 km --
-  # distance -2.06%, road -1.99%, walk -1.41%, middle -0.87%, throw and combined
-  # null, hurdles +0.20%, jump +0.24%, sprint +0.30%. Thinner air costs an
-  # aerobic athlete oxygen and saves a sprinter drag, in that order of aerobic
-  # demand. A single global coefficient would be worse than none.
+  # BANDED, NOT LINEAR-IN-METRES. A single slope was fitted and measured
+  # against its own banded diagnostic on 2026-09-17: true effect ~0 (+0.0012)
+  # at <200m, -0.0232 at >2200m. A line through those points over-corrects sea
+  # level by nearly its full magnitude and under-corrects extreme altitude by
+  # half. Confirmed 2026-09-18 by isolating the add-back's own effect: the
+  # linear coefficient made 9,677 SEA-LEVEL races significantly WORSE
+  # (t=4.36). Refit as a step function -- <200m is the reference band, beta=0
+  # there by construction, so this layer literally cannot move a sea-level
+  # mark regardless of what the other bands' coefficients are.
   #
-  # WHY TWO COEFFICIENTS: `c_r` absorbs part of altitude, as it does wind --
+  # WHY PER FAMILY AND SEX: the sign flips by family (thinner air costs an
+  # aerobic athlete oxygen and saves a sprinter drag), and sex matters
+  # mechanically, not just plausibly -- East African distance/middle fields are
+  # male-skewed relative to women's in this corpus, and that population is
+  # exactly what drives the athlete-history correlation (-0.940) this term
+  # exists to separate from a pure venue effect. See
+  # docs/reviews/altitude-arm-2026-09-17.md and fit_altitude_effect.R.
+  #
+  # WHY TWO has_cr SCOPES: `c_r` absorbs part of altitude, as it does wind --
   # but unlike wind, `calibrate()` does not deliberately fold altitude into the
   # race effect, so the absorbed share is small and uneven. The strip actually
-  # applied is (1 - beta_shock) * (c_r - e_cell), not the full c_r, which leaves
-  # 91% of the distance effect and 100% of the jump effect still in the mark.
-  # So rows WITH a race effect take the residual coefficient and rows without
-  # take the gross one. Suppressing entirely where `has_cr` (the wind pattern)
-  # would leave almost all of it uncorrected; applying the gross beta everywhere
-  # would double-count the sliver already removed.
+  # applied is (1 - beta_shock) * (c_r - e_cell), not the full c_r. So rows
+  # WITH a race effect take the residual coefficient and rows without take the
+  # gross one; suppressing entirely where `has_cr` would leave most of it
+  # uncorrected, applying the gross beta everywhere would double-count the
+  # sliver already removed.
   #
   # Local names are deliberately distinct from any column in `dt`: the wind
   # block above carries a scar from a local `w` being shadowed by dt's own `w`,
@@ -1314,12 +1345,20 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
   if (!is.null(calibration$altitude) && NROW(calibration$altitude) &&
       "alt_m" %in% names(dt)) {
     .alt_tbl <- data.table::as.data.table(calibration$altitude)
-    .fam_of  <- citius_events()[, c("event_id", "family")]
-    .fam_vec <- .fam_of$family[match(dt$event_id, .fam_of$event_id)]
-    # has_cr picks the scope; an event with no fitted family coefficient gets 0
-    # rather than a guess, exactly as an uncalibrated wind event does.
-    .key   <- paste(.fam_vec, ifelse(has_cr, "TRUE", "FALSE"))
-    .tkey  <- paste(.alt_tbl$family, ifelse(.alt_tbl$has_cr, "TRUE", "FALSE"))
+    .fam_of  <- citius_events()[, c("event_id", "family", "sex")]
+    .fi      <- match(dt$event_id, .fam_of$event_id)
+    .fam_vec <- .fam_of$family[.fi]
+    .sex_vec <- .fam_of$sex[.fi]
+    .band_vec <- .altitude_band(dt$alt_m)
+    # A venue with no elevation is left alone, never imputed to sea level: an
+    # unknown altitude and a known <200m are different facts, and treating the
+    # first as the second would silently "correct" every unmatched venue as if
+    # it were confirmed sea-level. .altitude_band() already returns NA for a
+    # non-finite alt_m, so this key simply fails to match, same effect as the
+    # existing "unfitted family gets 0" fallback below.
+    .key   <- paste(.fam_vec, .sex_vec, ifelse(has_cr, "TRUE", "FALSE"), .band_vec)
+    .tkey  <- paste(.alt_tbl$family, .alt_tbl$sex,
+                    ifelse(.alt_tbl$has_cr, "TRUE", "FALSE"), .alt_tbl$band)
     .mi     <- match(.key, .tkey)
     .a_beta <- .alt_tbl$beta[.mi]
     .a_beta[!is.finite(.a_beta)] <- 0
@@ -1329,23 +1368,22 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
     # has_cr as NA and the layer goes quietly inert -- the same shape as the
     # column that sat 100% empty for months here.
     #
-    # Only TOTAL failure warns. A partial miss is by design (an unfitted family
-    # gets 0), and this function runs inside backtest loops, so warning on the
-    # normal case would be noise that teaches everyone to ignore it. Checking
-    # the match index rather than the beta matters: a family legitimately zeroed
-    # for |t| < 3 still MATCHES, and testing `any(beta != 0)` would cry wolf on
-    # a dt holding only throws.
+    # Only TOTAL failure warns. A partial miss is by design (an unfitted cell
+    # gets 0 -- <200m always does, by construction, and a thin family/sex/band
+    # combination that never cleared MIN_PAIRS does too), and this function
+    # runs inside backtest loops, so warning on the normal case would be noise
+    # that teaches everyone to ignore it. Checking the match index rather than
+    # the beta matters: a band legitimately at beta=0 (the reference, or zeroed
+    # for |t| < 3) still MATCHES, and testing `any(beta != 0)` would cry wolf
+    # on a dt holding only sea-level races.
     if (length(.mi) && all(is.na(.mi))) {
-      warning("calibration$altitude matched no rows -- its family/has_cr keys ",
-              "do not align with this data, so the altitude adjustment is ",
-              "silently doing nothing.", call. = FALSE)
+      warning("calibration$altitude matched no rows -- its family/sex/has_cr/",
+              "band keys do not align with this data, so the altitude ",
+              "adjustment is silently doing nothing.", call. = FALSE)
     }
-    .a_km <- as.numeric(dt$alt_m) / 1000
-    # A venue with no elevation is left alone, never imputed to sea level: an
-    # unknown altitude and a known 0 m are different facts, and treating the
-    # first as the second would silently "correct" every unmatched venue.
-    .a_km[!is.finite(.a_km)] <- 0
-    dt[, perf := perf - .a_beta * .a_km]
+    # No km multiplier: beta IS the level effect of the band, already relative
+    # to <200m, not a per-km rate to scale.
+    dt[, perf := perf - .a_beta]
   }
 
   # Race momentum: an exponentially decayed count of recent race days. Same
