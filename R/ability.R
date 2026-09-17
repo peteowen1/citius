@@ -1298,8 +1298,26 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
     # rather than a guess, exactly as an uncalibrated wind event does.
     .key   <- paste(.fam_vec, ifelse(has_cr, "TRUE", "FALSE"))
     .tkey  <- paste(.alt_tbl$family, ifelse(.alt_tbl$has_cr, "TRUE", "FALSE"))
-    .a_beta <- .alt_tbl$beta[match(.key, .tkey)]
+    .mi     <- match(.key, .tkey)
+    .a_beta <- .alt_tbl$beta[.mi]
     .a_beta[!is.finite(.a_beta)] <- 0
+    # A join that resolves NOTHING is a wiring failure, and without this line it
+    # is byte-identical to the intended no-op: every beta NA, every NA coerced
+    # to 0, nothing adjusted, nothing said. Rename a family string or store
+    # has_cr as NA and the layer goes quietly inert -- the same shape as the
+    # column that sat 100% empty for months here.
+    #
+    # Only TOTAL failure warns. A partial miss is by design (an unfitted family
+    # gets 0), and this function runs inside backtest loops, so warning on the
+    # normal case would be noise that teaches everyone to ignore it. Checking
+    # the match index rather than the beta matters: a family legitimately zeroed
+    # for |t| < 3 still MATCHES, and testing `any(beta != 0)` would cry wolf on
+    # a dt holding only throws.
+    if (length(.mi) && all(is.na(.mi))) {
+      warning("calibration$altitude matched no rows -- its family/has_cr keys ",
+              "do not align with this data, so the altitude adjustment is ",
+              "silently doing nothing.", call. = FALSE)
+    }
     .a_km <- as.numeric(dt$alt_m) / 1000
     # A venue with no elevation is left alone, never imputed to sea level: an
     # unknown altitude and a known 0 m are different facts, and treating the
