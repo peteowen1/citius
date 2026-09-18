@@ -9,7 +9,8 @@ adjust_conditions(
   wind = NA_real_,
   alt_m = NA_real_,
   indoor = FALSE,
-  venue = NULL
+  venue = NULL,
+  stadium = NULL
 )
 }
 \arguments{
@@ -22,6 +23,9 @@ adjust_conditions(
 \item{indoor}{Logical, \code{TRUE} for an indoor mark.}
 
 \item{venue}{Venue name as the corpus spells it (\code{venue_city}), or \code{NULL}.}
+
+\item{stadium}{Stadium within the city (\code{venue_stadium}), or \code{NULL}; used
+when the parameters carry a \code{stadiums} lookup keyed \code{"city|stadium"}.}
 }
 \value{
 A \code{data.table} with \code{wind_adj}, \code{venue_adj}, \code{indoor_adj},

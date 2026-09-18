@@ -24,6 +24,10 @@ test_that("a venue lookup adds its offset to the altitude curve; unknown venues 
   # no lookup on the params: venue argument is inert
   b <- adjust_conditions(fake_params(), alt_m = 100, venue = "Eugene")
   expect_equal(b$venue_off, 0)
+  # stadium beats city when known, city otherwise
+  p$stadiums <- list(`Eugene|Hayward Field` = 0.006)
+  s <- adjust_conditions(p, alt_m = 100, venue = c("Eugene", "Eugene", "Doha"), stadium = c("Hayward Field", "Other", NA))
+  expect_equal(s$venue_off, c(0.006, 0.004, -0.003))
 })
 
 test_that("an event without a wind term gives zero wind correction", {

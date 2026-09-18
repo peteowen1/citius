@@ -39,11 +39,13 @@ conditions_params <- function(event_id, dir) {
 #' @param alt_m Venue altitude in metres.
 #' @param indoor Logical, `TRUE` for an indoor mark.
 #' @param venue Venue name as the corpus spells it (`venue_city`), or `NULL`.
+#' @param stadium Stadium within the city (`venue_stadium`), or `NULL`; used
+#'   when the parameters carry a `stadiums` lookup keyed `"city|stadium"`.
 #' @return A `data.table` with `wind_adj`, `venue_adj`, `indoor_adj`,
 #'   `alt_adj`, `venue_off`.
 #' @export
-adjust_conditions <- function(params, wind = NA_real_, alt_m = NA_real_, indoor = FALSE, venue = NULL) {
-  n <- max(length(wind), length(alt_m), length(indoor), length(venue))
+adjust_conditions <- function(params, wind = NA_real_, alt_m = NA_real_, indoor = FALSE, venue = NULL, stadium = NULL) {
+  n <- max(length(wind), length(alt_m), length(indoor), length(venue), length(stadium))
   wind <- rep_len(wind, n); alt_m <- rep_len(alt_m, n); indoor <- rep_len(indoor, n)
   interp <- function(grid, curve, x) {
     out <- numeric(length(x)); ok <- is.finite(x)
@@ -52,11 +54,18 @@ adjust_conditions <- function(params, wind = NA_real_, alt_m = NA_real_, indoor 
   }
   wind_adj <- if (!is.null(params$wind)) interp(params$wind$grid, params$wind$curve, wind) else numeric(n)
   alt_adj <- interp(params$altitude$grid_m, params$altitude$curve, pmax(alt_m, 0))
+  # stadium ("city|stadium" key) first, then city; each level was shrunk toward
+  # the one above it when built, so falling back is consistent, not a guess
   venue_off <- numeric(n)
   if (!is.null(venue) && length(params$venues)) {
     venue <- rep_len(as.character(venue), n)
     hit <- !is.na(venue) & venue %in% names(params$venues)
     if (any(hit)) venue_off[hit] <- as.numeric(unlist(params$venues[venue[hit]]))
+    if (!is.null(stadium) && length(params$stadiums)) {
+      key <- paste(venue, rep_len(as.character(stadium), n), sep = "|")
+      hs <- !is.na(venue) & !is.na(stadium) & key %in% names(params$stadiums)
+      if (any(hs)) venue_off[hs] <- as.numeric(unlist(params$stadiums[key[hs]]))
+    }
   }
   indoor_adj <- if (isTRUE(params$has_indoor)) ifelse(indoor %in% TRUE, params$indoor_coef, 0) else numeric(n)
   data.table::data.table(wind_adj = wind_adj, venue_adj = alt_adj + venue_off, indoor_adj = indoor_adj,
