@@ -4,7 +4,13 @@
 \alias{adjust_conditions}
 \title{Wind, altitude and indoor corrections for a set of marks}
 \usage{
-adjust_conditions(params, wind = NA_real_, alt_m = NA_real_, indoor = FALSE)
+adjust_conditions(
+  params,
+  wind = NA_real_,
+  alt_m = NA_real_,
+  indoor = FALSE,
+  venue = NULL
+)
 }
 \arguments{
 \item{params}{Output of \code{\link[=conditions_params]{conditions_params()}}.}
@@ -14,9 +20,12 @@ adjust_conditions(params, wind = NA_real_, alt_m = NA_real_, indoor = FALSE)
 \item{alt_m}{Venue altitude in metres.}
 
 \item{indoor}{Logical, \code{TRUE} for an indoor mark.}
+
+\item{venue}{Venue name as the corpus spells it (\code{venue_city}), or \code{NULL}.}
 }
 \value{
-A \code{data.table} with \code{wind_adj}, \code{venue_adj}, \code{indoor_adj}.
+A \code{data.table} with \code{wind_adj}, \code{venue_adj}, \code{indoor_adj},
+\code{alt_adj}, \code{venue_off}.
 }
 \description{
 Applies an event's exported conditions curves. Every correction is the
@@ -25,4 +34,11 @@ in perf-log units (positive = the condition helped), so
 \code{perf - wind_adj - venue_adj - indoor_adj} is what the athlete would have
 produced without it. Values beyond the fitted grid are clamped to its ends
 rather than extrapolated. Missing wind / altitude give a zero correction.
+}
+\details{
+\code{venue_adj} is the altitude curve plus, when the event's parameters carry a
+\code{venues} lookup and the venue is in it, that venue's offset -- a course or a
+track, measured 2026-09-19 at 1.36\% sd on the marathon and 0.50\% on the
+100m, more than a race's shock. An unknown venue gets the altitude curve
+only. \code{alt_adj} and \code{venue_off} are returned separately as well.
 }

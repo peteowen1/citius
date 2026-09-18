@@ -15,6 +15,17 @@ test_that("adjust_conditions interpolates, clamps, and treats NA as no correctio
   expect_equal(a$indoor_adj, c(0, 0, -0.002, 0))
 })
 
+test_that("a venue lookup adds its offset to the altitude curve; unknown venues get the curve only", {
+  p <- fake_params(); p$venues <- list(Eugene = 0.004, Doha = -0.003)
+  a <- adjust_conditions(p, wind = 0, alt_m = c(100, 100, 100, NA), indoor = FALSE, venue = c("Eugene", "Doha", "Nowhere", NA))
+  expect_equal(a$alt_adj, c(0.0005, 0.0005, 0.0005, 0))
+  expect_equal(a$venue_off, c(0.004, -0.003, 0, 0))
+  expect_equal(a$venue_adj, a$alt_adj + a$venue_off)
+  # no lookup on the params: venue argument is inert
+  b <- adjust_conditions(fake_params(), alt_m = 100, venue = "Eugene")
+  expect_equal(b$venue_off, 0)
+})
+
 test_that("an event without a wind term gives zero wind correction", {
   a <- adjust_conditions(fake_params(has_wind = FALSE), wind = c(3, -3), alt_m = 0)
   expect_equal(a$wind_adj, c(0, 0))

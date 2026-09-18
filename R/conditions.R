@@ -28,14 +28,22 @@ conditions_params <- function(event_id, dir) {
 #' produced without it. Values beyond the fitted grid are clamped to its ends
 #' rather than extrapolated. Missing wind / altitude give a zero correction.
 #'
+#' `venue_adj` is the altitude curve plus, when the event's parameters carry a
+#' `venues` lookup and the venue is in it, that venue's offset -- a course or a
+#' track, measured 2026-09-19 at 1.36% sd on the marathon and 0.50% on the
+#' 100m, more than a race's shock. An unknown venue gets the altitude curve
+#' only. `alt_adj` and `venue_off` are returned separately as well.
+#'
 #' @param params Output of [conditions_params()].
 #' @param wind Wind reading in m/s (`NA` where not measured).
 #' @param alt_m Venue altitude in metres.
 #' @param indoor Logical, `TRUE` for an indoor mark.
-#' @return A `data.table` with `wind_adj`, `venue_adj`, `indoor_adj`.
+#' @param venue Venue name as the corpus spells it (`venue_city`), or `NULL`.
+#' @return A `data.table` with `wind_adj`, `venue_adj`, `indoor_adj`,
+#'   `alt_adj`, `venue_off`.
 #' @export
-adjust_conditions <- function(params, wind = NA_real_, alt_m = NA_real_, indoor = FALSE) {
-  n <- max(length(wind), length(alt_m), length(indoor))
+adjust_conditions <- function(params, wind = NA_real_, alt_m = NA_real_, indoor = FALSE, venue = NULL) {
+  n <- max(length(wind), length(alt_m), length(indoor), length(venue))
   wind <- rep_len(wind, n); alt_m <- rep_len(alt_m, n); indoor <- rep_len(indoor, n)
   interp <- function(grid, curve, x) {
     out <- numeric(length(x)); ok <- is.finite(x)
@@ -43,9 +51,16 @@ adjust_conditions <- function(params, wind = NA_real_, alt_m = NA_real_, indoor 
     out
   }
   wind_adj <- if (!is.null(params$wind)) interp(params$wind$grid, params$wind$curve, wind) else numeric(n)
-  venue_adj <- interp(params$altitude$grid_m, params$altitude$curve, pmax(alt_m, 0))
+  alt_adj <- interp(params$altitude$grid_m, params$altitude$curve, pmax(alt_m, 0))
+  venue_off <- numeric(n)
+  if (!is.null(venue) && length(params$venues)) {
+    venue <- rep_len(as.character(venue), n)
+    hit <- !is.na(venue) & venue %in% names(params$venues)
+    if (any(hit)) venue_off[hit] <- as.numeric(unlist(params$venues[venue[hit]]))
+  }
   indoor_adj <- if (isTRUE(params$has_indoor)) ifelse(indoor %in% TRUE, params$indoor_coef, 0) else numeric(n)
-  data.table::data.table(wind_adj = wind_adj, venue_adj = venue_adj, indoor_adj = indoor_adj)
+  data.table::data.table(wind_adj = wind_adj, venue_adj = alt_adj + venue_off, indoor_adj = indoor_adj,
+                         alt_adj = alt_adj, venue_off = venue_off)
 }
 
 #' Race shock: the shrunk field-mean surprise
