@@ -24,22 +24,23 @@ utils::globalVariables(c(
   "offset", "precision", "race_key", "sensitivity", "sensitivity_raw",
   "sigma_e", "sigma_within", "slope", "slope_adj", "sxx", "tactical_index", "y"
 ))
-utils::globalVariables(c("shared", "implausible", "guess_frac", "guessed_cond"))
+utils::globalVariables(c("shared", "implausible"))
 utils::globalVariables(c("family", "dev", "n_ages", "peak_age", "effect",
                          "age_now", "age_ref", "age_shift", "N"))
 utils::globalVariables(c("supported", "plateau_lo", "plateau_hi", "min_density"))
 utils::globalVariables(c("peak_identified"))
 utils::globalVariables(c("country", "athlete_name", "implied", "p_gold", "p_medal"))
 utils::globalVariables(c("w_total", "idx", "n_tot", "err", "half_life", "mae",
-                         "stale_years", "gap", "age_last", "age_asof"))
+                         "stale_years", "gap"))
 utils::globalVariables(c("hl", "identified"))
 utils::globalVariables(c("prob", "hit", "brier", "brier_base", "logloss",
                          "logloss_base", "base", "field", "bin", "observed",
                          "mean_predicted", "skill"))
-utils::globalVariables(c("z", "df", "comp_start", "comp_name", "hit_medal", "winner_present"))
+utils::globalVariables(c("z", "df", "comp_start", "comp_name"))
 utils::globalVariables(c("ability_se"))
 utils::globalVariables(c("beta", "wind_adj", "r2", "dev"))
 utils::globalVariables(c("venue_city", "venue_stadium", "high"))
+utils::globalVariables(c("nat_in_games", "meet_code"))
 utils::globalVariables(c("venue", "venue_adj", "effect", "comp_name"))
 utils::globalVariables(c("level", "context_adj", "surface"))
 utils::globalVariables(c("lev_eff", "ath_eff", "le", "ven_eff", "ve"))

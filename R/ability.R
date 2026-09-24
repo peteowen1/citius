@@ -2473,17 +2473,6 @@ condition_prior <- function(ability, field = NULL, weight = 1) {
   )
 }
 
-#' Drop the worst-performing fraction of a set of results
-#' @keywords internal
-#' @noRd
-.trim_worst <- function(perf, w, trim) {
-  if (is.na(trim) || trim <= 0 || length(perf) < 4L) return(seq_along(perf))
-  k <- floor(length(perf) * trim)
-  if (k < 1L) return(seq_along(perf))
-  ord <- order(perf)             # ascending: worst first on the oriented scale
-  seq_along(perf)[-ord[seq_len(k)]]
-}
-
 #' @keywords internal
 #' @noRd
 .weighted_sd <- function(x, w) {

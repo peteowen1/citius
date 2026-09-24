@@ -910,11 +910,17 @@ print.citius_calibration <- function(x, ...) {
 #' Look up a calibrated value with a documented fallback
 #' @keywords internal
 #' @noRd
-.calibrated_value <- function(calibration, event_id, column, fallback) {
+.calibrated_value <- function(calibration, event_id, column, fallback,
+                              require_calibrated = TRUE) {
   if (is.null(calibration) || !inherits(calibration, "citius_calibration")) return(fallback)
   ev <- calibration$events
   idx <- match(event_id, ev$event_id)
-  if (is.na(idx) || !isTRUE(ev$calibrated[idx])) return(fallback)
+  if (is.na(idx)) return(fallback)
+  # `calibrated` counts races with >= 2 shared athletes -- the right gate for
+  # quantities decomposed from those races (condition_sd, tail_df), and the
+  # wrong one for a rate measured on every result (foul_rate). Callers of the
+  # latter pass require_calibrated = FALSE.
+  if (require_calibrated && !isTRUE(ev$calibrated[idx])) return(fallback)
   val <- ev[[column]][idx]
   if (is.null(val) || !is.finite(val)) return(fallback)
   val

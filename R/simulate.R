@@ -25,6 +25,11 @@
 race_conditions <- function(event_id, calibration = NULL, context = NULL) {
   reg <- .citius_event_registry
   idx <- match(event_id, reg$event_id)
+  # NO-CALIBRATION placeholders, not measured values: a quarter of the event's
+  # cv_prior, or 0.003 for an event with none. They exist only so the simulator
+  # runs before calibrate() has data; with a calibration, condition_sd replaces
+  # them. An exception to the no-hand-tuned-constants rule, recorded here as
+  # rounds.R records its tail_df placeholder.
   fallback <- reg$cv_prior[idx] * 0.25
   fallback[is.na(fallback)] <- 0.003
 
@@ -234,7 +239,8 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
   if (is.na(orientation)) orientation <- -1L
   if (is.null(foul_prob)) {
     # The measured rate of recording no valid performance across the event.
-    foul_prob <- .calibrated_value(calibration, event_id, "foul_rate", NA_real_)
+    foul_prob <- .calibrated_value(calibration, event_id, "foul_rate", NA_real_,
+                                   require_calibrated = FALSE)
     if (!is.finite(foul_prob)) {
       foul_prob <- 0
       cli::cli_warn(

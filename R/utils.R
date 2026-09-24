@@ -149,5 +149,20 @@ isTRUE_vec <- function(x) !is.na(x) & as.logical(x)
 #' @noRd
 as_date_safe <- function(x) {
   x <- as.character(x)
-  suppressWarnings(as.Date(substr(x, 1, 10)))
+  # Explicit formats, tried per element. Bare as.Date() picks ONE format from
+  # the first non-NA value and applies it to the whole vector, so a leading
+  # "01/08/2024" was read as year 0001 and every ISO date after it became NA.
+  d <- substr(x, 1, 10)
+  # %Y also accepts a one-digit year, so require the shape before parsing.
+  d[!grepl("^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}$", d)] <- NA_character_
+  out <- as.Date(d, format = "%Y-%m-%d")
+  miss <- is.na(out) & !is.na(d)
+  if (any(miss)) out[miss] <- as.Date(d[miss], format = "%Y/%m/%d")
+  # A value that was there and did not parse is a format change upstream, not
+  # a missing date; turning it into NA without a word is how a feed's date
+  # column empties silently.
+  n_bad <- sum(is.na(out) & !is.na(x) & nzchar(trimws(x)))
+  if (n_bad)
+    cli::cli_warn("{n_bad} date value{?s} could not be parsed and became NA (e.g. {.val {utils::head(x[is.na(out) & !is.na(x) & nzchar(trimws(x))], 3)}}).")
+  out
 }
