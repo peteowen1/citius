@@ -37,8 +37,7 @@ write_results_store <- function(results, path, partition_by = "event_id") {
   # C:/dev/.claude/rules/r-datatable-gotchas.md, and this is the function whose
   # whole purpose is making corpus I/O cheap. One copy, because the `:=` below
   # must not mutate the caller's table.
-  dt <- data.table::copy(if (data.table::is.data.table(results)) results else
-                         data.table::as.data.table(results))
+  dt <- .one_copy_dt(results)
   if (!partition_by %in% names(dt)) {
     cli::cli_abort("{.arg partition_by} column {.field {partition_by}} not found.")
   }

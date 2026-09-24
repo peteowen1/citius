@@ -360,6 +360,9 @@ project_ability <- function(ability, aging, max_shift = 0.05) {
 #' both estimators, so they imply `w > 1`. The weight targets the tails, which is
 #' where the two estimators actually disagree.
 #'
+#' This function applies ONE weight at every age; it does not reproduce the
+#' band-by-band values above. The default `0.7` is the youngest band's.
+#'
 #' @param centred,difference Aging objects from [fit_aging_curve()].
 #' @param weight How far toward `difference` to move, in `[0, 1]`.
 #' @return A `citius_aging` object on the blended curve.

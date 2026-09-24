@@ -220,6 +220,8 @@ summary_games_dominance <- function(games = NULL, top_n = 20L, min_golds = 5L, m
     if (!"total_golds_in_games" %in% names(dt)) {
       dt[, total_golds_in_games := sum(gold, na.rm = TRUE), by = .(games, year)]
     }
+    # Same reason for the nation-count fallback: per edition, and before the filter.
+    dt[, nat_in_games := data.table::uniqueN(nation), by = .(games, year)]
     dt <- dt[gold >= min_golds]
     data.table::setorder(dt, -gold_share, -gold)
     
@@ -228,8 +230,8 @@ summary_games_dominance <- function(games = NULL, top_n = 20L, min_golds = 5L, m
       year,
       country = nation,
       host = data.table::fifelse(is.na(host) | host == "", "Unknown", host),
-      competing_nations = data.table::fifelse(!is.na(competing_nations), competing_nations, data.table::uniqueN(nation)),
-      medalling_nations = data.table::fifelse(!is.na(medalling_nations), medalling_nations, data.table::uniqueN(nation)),
+      competing_nations = data.table::fifelse(!is.na(competing_nations), competing_nations, nat_in_games),
+      medalling_nations = data.table::fifelse(!is.na(medalling_nations), medalling_nations, nat_in_games),
       golds = gold,
       total_event_golds = total_golds_in_games,
       gold_pct = paste0(round(gold_share * 100, 1), "%"),
@@ -273,9 +275,10 @@ summary_games_dominance <- function(games = NULL, top_n = 20L, min_golds = 5L, m
 #' @export
 summary_games_excess_gold <- function(games = NULL, top_n = 20L, min_golds = 5L) {
   dt <- get_games_medals(games = games)
+  dt[, nat_in_games := data.table::uniqueN(nation), by = .(games, year)]   # per edition, before the filter
   dt <- dt[gold >= min_golds]
   
-  dt[, comp_nations := data.table::fifelse(!is.na(competing_nations) & competing_nations > 0, competing_nations, data.table::uniqueN(nation))]
+  dt[, comp_nations := data.table::fifelse(!is.na(competing_nations) & competing_nations > 0, competing_nations, nat_in_games)]
   dt[, exp_gold_pct := 100.0 / comp_nations]
   dt[, act_gold_pct := (as.numeric(gold) / total_golds_in_games) * 100.0]
   dt[, excess_pct := act_gold_pct - exp_gold_pct]
@@ -317,9 +320,10 @@ summary_games_excess_gold <- function(games = NULL, top_n = 20L, min_golds = 5L)
 #' @export
 summary_games_logit_dominance <- function(games = NULL, top_n = 20L, min_golds = 5L) {
   dt <- get_games_medals(games = games)
+  dt[, nat_in_games := data.table::uniqueN(nation), by = .(games, year)]   # per edition, before the filter
   dt <- dt[gold >= min_golds]
   
-  dt[, comp_nations := data.table::fifelse(!is.na(competing_nations) & competing_nations > 0, competing_nations, data.table::uniqueN(nation))]
+  dt[, comp_nations := data.table::fifelse(!is.na(competing_nations) & competing_nations > 0, competing_nations, nat_in_games)]
   
   dt[, p_act := as.numeric(gold) / total_golds_in_games]
   dt[p_act >= .citius_logit_clip, p_act := .citius_logit_clip]

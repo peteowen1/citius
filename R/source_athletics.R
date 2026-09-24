@@ -551,7 +551,7 @@ athletics_harvest_competitions <- function(competition_ids) {
 #'
 #' @param name Competition name, full or partial (e.g. `"XXIII Commonwealth"`).
 #' @return A `data.table` of matching competitions with `competition_id`,
-#'   `name`, `city`, `country`, `start`, `end`, `tier`, `has_results`.
+#'   `name`, `city`, `country`, `start`, `end`, `meet_code` (the meet-level `rankingCategory`), `has_results`.
 #' @examples
 #' \dontrun{
 #' athletics_find_competition("XXIII Commonwealth Games")
@@ -564,7 +564,7 @@ athletics_find_competition <- function(name) {
     return(data.table::data.table(
       competition_id = integer(), name = character(), city = character(),
       country = character(), start = as.Date(character()), end = as.Date(character()),
-      race_code = character(), has_results = logical()
+      meet_code = character(), has_results = logical()
     ))
   }
 
@@ -577,7 +577,7 @@ athletics_find_competition <- function(name) {
       country = loc$country %||% NA_character_,
       start   = as_date_safe(c_$start %||% NA),
       end     = as_date_safe(c_$end %||% NA),
-      race_code    = c_$rankingCategory %||% NA_character_,
+      meet_code    = c_$rankingCategory %||% NA_character_,
       has_results = isTRUE(c_$hasResults)
     )
   }), use.names = TRUE, fill = TRUE)[]

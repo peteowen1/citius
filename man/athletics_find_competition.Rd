@@ -11,7 +11,7 @@ athletics_find_competition(name)
 }
 \value{
 A \code{data.table} of matching competitions with \code{competition_id},
-\code{name}, \code{city}, \code{country}, \code{start}, \code{end}, \code{tier}, \code{has_results}.
+\code{name}, \code{city}, \code{country}, \code{start}, \code{end}, \code{meet_code} (the meet-level \code{rankingCategory}), \code{has_results}.
 }
 \description{
 Look up a World Athletics competition by name

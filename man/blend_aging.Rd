@@ -30,4 +30,7 @@ at age 20 and under, 0.65 at 20–23 and 0.74 above 32.
 No single scalar can zero every band — the middle bands are negative under
 both estimators, so they imply \code{w > 1}. The weight targets the tails, which is
 where the two estimators actually disagree.
+
+This function applies ONE weight at every age; it does not reproduce the
+band-by-band values above. The default \code{0.7} is the youngest band's.
 }
