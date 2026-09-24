@@ -98,7 +98,7 @@ test_that("a planted seasonal curve is recovered within athlete", {
     m <- rep(3:11, 2)
     data.table::data.table(
       athlete_id = as.character(i), event_id = "AT-100Metres-M",
-      tier = "OW", round = "F", indoor = FALSE, venue_country = "GBR",
+      race_code = "OW", round = "F", indoor = FALSE, venue_country = "GBR",
       date = as.Date(sprintf("2021-%02d-15", m)),
       perf = ab - 0.02 * ((m - 7) / 4)^2 + stats::rnorm(length(m), 0, 0.003))
   }))
@@ -118,7 +118,7 @@ test_that("northern winter outdoor marks are excluded, not fitted as form", {
   set.seed(10)
   base <- data.table::rbindlist(lapply(1:150, function(i) {
     data.table::data.table(
-      athlete_id = as.character(i), event_id = "AT-100Metres-M", tier = "OW",
+      athlete_id = as.character(i), event_id = "AT-100Metres-M", race_code = "OW",
       round = "F", indoor = FALSE, venue_country = "GBR",
       date = as.Date(sprintf("2021-%02d-15", 5:10)),
       perf = 2.3 + stats::rnorm(6, 0, 0.003))
@@ -133,7 +133,7 @@ test_that("offsets are centred so they shift phase, not level", {
   set.seed(11)
   rows <- data.table::rbindlist(lapply(1:200, function(i) {
     data.table::data.table(
-      athlete_id = as.character(i), event_id = "AT-100Metres-M", tier = "OW",
+      athlete_id = as.character(i), event_id = "AT-100Metres-M", race_code = "OW",
       round = "F", indoor = FALSE, venue_country = "GBR",
       date = as.Date(sprintf("2021-%02d-15", 4:10)),
       perf = 2.3 + stats::rnorm(7, 0, 0.01))
@@ -146,7 +146,7 @@ test_that("missing venue_country degrades to a single calendar", {
   set.seed(12)
   rows <- data.table::rbindlist(lapply(1:150, function(i) {
     data.table::data.table(
-      athlete_id = as.character(i), event_id = "AT-100Metres-M", tier = "OW",
+      athlete_id = as.character(i), event_id = "AT-100Metres-M", race_code = "OW",
       round = "F", indoor = FALSE,
       date = as.Date(sprintf("2021-%02d-15", 4:10)),
       perf = 2.3 + stats::rnorm(7, 0, 0.01))
@@ -166,10 +166,10 @@ champ_history <- function(n = 200, gap = 0.02, seed = 5) {
     ab <- stats::rnorm(1, 2.3, 0.05)
     data.table::rbindlist(list(
       data.table::data.table(athlete_id = as.character(i), event_id = "AT-100Metres-M",
-                             tier = "GL", round = "F", date = Sys.Date() - 1:6,
+                             race_code = "GL", round = "F", date = Sys.Date() - 1:6,
                              perf = ab + stats::rnorm(6, 0, 0.003)),
       data.table::data.table(athlete_id = as.character(i), event_id = "AT-100Metres-M",
-                             tier = "OW", round = "F", date = Sys.Date() - 7:12,
+                             race_code = "OW", round = "F", date = Sys.Date() - 7:12,
                              perf = ab + gap + stats::rnorm(6, 0, 0.003))))
   }))
 }
@@ -190,7 +190,7 @@ test_that("round and tier are held constant, so heats cannot leak in", {
   # the round effect, producing offsets like throw +5.33%. Adding slow heats must
   # not move the estimate.
   h <- champ_history(gap = 0.02)
-  heats <- data.table::copy(h[tier == "GL"])[, `:=`(round = "H", perf = perf - 0.05)]
+  heats <- data.table::copy(h[race_code == "GL"])[, `:=`(round = "H", perf = perf - 0.05)]
   with_heats <- fit_championship_effect(rbind(h, heats), min_n = 50L)
   expect_equal(with_heats[family == "sprint"]$offset,
                fit_championship_effect(h, min_n = 50L)[family == "sprint"]$offset,
@@ -202,7 +202,7 @@ test_that("only athletes seen in both contexts identify the gap", {
   # adding a very fast one must not inflate the offset.
   h <- champ_history(gap = 0.02)
   ringer <- data.table::data.table(
-    athlete_id = "zz", event_id = "AT-100Metres-M", tier = "OW", round = "F",
+    athlete_id = "zz", event_id = "AT-100Metres-M", race_code = "OW", round = "F",
     date = Sys.Date() - 1:6, perf = 2.9)
   expect_equal(fit_championship_effect(rbind(h, ringer), min_n = 50L)$offset,
                fit_championship_effect(h, min_n = 50L)$offset, tolerance = 1e-9)
@@ -215,7 +215,7 @@ test_that("the round trip is an identity for an all-championship record", {
   ce <- data.table::data.table(family = "sprint", offset = 0.02, n = 999L)
   only_champ <- data.table::data.table(
     athlete_id = rep(c("a", "b"), each = 6), event_id = "AT-100Metres-M",
-    tier = "OW", round = "F", date = Sys.Date() - rep(1:6, 2),
+    race_code = "OW", round = "F", date = Sys.Date() - rep(1:6, 2),
     perf = to_perf(10, -1L) + stats::rnorm(12, 0, 0.002))
   plain <- estimate_ability(only_champ, as_of = Sys.Date(), adjust_context = FALSE)
   round_trip <- project_championship(
@@ -231,7 +231,7 @@ test_that("an athlete with no championship record is moved by the full offset", 
   ce <- data.table::data.table(family = "sprint", offset = 0.02, n = 999L)
   no_champ <- data.table::data.table(
     athlete_id = rep(c("a", "b"), each = 6), event_id = "AT-100Metres-M",
-    tier = "GL", round = "F", date = Sys.Date() - rep(1:6, 2),
+    race_code = "GL", round = "F", date = Sys.Date() - rep(1:6, 2),
     perf = to_perf(10, -1L) + stats::rnorm(12, 0, 0.002))
   base <- estimate_ability(no_champ, as_of = Sys.Date(), adjust_context = TRUE,
                            calibration = list(championship = ce))
@@ -321,7 +321,7 @@ test_that("fit_coasting_trait estimates shrunk coasting deviations for heats", {
     athlete_id = rep(c("a", "b"), each = 4),
     event_id = "AT-400Metres-M",
     round = c("Heat 1", "Heat 2", "Final", "Final", "Heat 1", "Heat 2", "Final", "Final"),
-    tier = "OW",
+    race_code = "OW",
     perf = c(2.0, 2.0, 2.1, 2.1, 2.1, 2.1, 2.1, 2.1) # athlete 'a' runs slower in heats (coasted)
   )
   ct <- fit_coasting_trait(dt, min_heats = 2, shrink_k = 2)
@@ -355,7 +355,7 @@ test_that("fit_coasting_trait references FINALS, not the athlete's overall mean"
   # final-referenced round offset in estimate_ability(). (fixed 2026-08-13)
   mk <- function(id, n_heat, n_final) {
     data.table::data.table(
-      athlete_id = id, event_id = "AT-400Metres-M", tier = "OW",
+      athlete_id = id, event_id = "AT-400Metres-M", race_code = "OW",
       round = c(rep("Heat 1", n_heat), rep("Final", n_final)),
       perf = c(rep(2.0, n_heat), rep(2.1, n_final)))
   }
@@ -369,7 +369,7 @@ test_that("fit_coasting_trait references FINALS, not the athlete's overall mean"
 test_that("an athlete with heats but no final gets no trait rather than a made-up one", {
   dt <- data.table::data.table(
     athlete_id = c(rep("nofinal", 3), rep("hasfinal", 4)),
-    event_id = "AT-400Metres-M", tier = "OW",
+    event_id = "AT-400Metres-M", race_code = "OW",
     round = c("Heat 1", "Heat 2", "Heat 3", "Heat 1", "Heat 2", "Final", "Final"),
     perf = c(2.0, 2.0, 2.0, 2.0, 2.0, 2.1, 2.1))
   ct <- fit_coasting_trait(dt, min_heats = 2, shrink_k = 2)

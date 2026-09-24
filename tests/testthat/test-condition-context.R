@@ -10,7 +10,7 @@ fake_cal <- function(with_context = TRUE) {
     level       = c("event",          "family",  "family"),
     event_id    = c("AT-100Metres-M", NA,        NA),
     family      = c("sprint",         "sprint",  "sprint"),
-    meet_tier   = c("T1_elite",       "T1_elite", "T2_strong"),
+    meet_tier   = c("M1",       "M1", "M2"),
     round_class = c("final",          "final",   "heat"),
     n_races     = c(300L, 900L, 400L),
     cond_sd_raw = c(0.011, 0.013, 0.018),
@@ -23,18 +23,18 @@ fake_cal <- function(with_context = TRUE) {
 test_that("race_conditions returns the event cell, then the family cell, then the event-wide value", {
   cal <- fake_cal()
   # event cell
-  expect_equal(race_conditions("AT-100Metres-M", cal, list(meet_tier = "T1_elite", round_class = "final")), 0.012)
+  expect_equal(race_conditions("AT-100Metres-M", cal, list(meet_tier = "M1", round_class = "final")), 0.012)
   # no event cell for the 200m -> family cell
-  expect_equal(race_conditions("AT-200Metres-M", cal, list(meet_tier = "T1_elite", round_class = "final")), 0.014)
+  expect_equal(race_conditions("AT-200Metres-M", cal, list(meet_tier = "M1", round_class = "final")), 0.014)
   # a context with no cell at any level -> event-wide value
-  expect_equal(race_conditions("AT-100Metres-M", cal, list(meet_tier = "T3_development", round_class = "semi")), 0.020)
+  expect_equal(race_conditions("AT-100Metres-M", cal, list(meet_tier = "M3", round_class = "semi")), 0.020)
   # no context -> event-wide value, byte-identical to the old behaviour
   expect_equal(race_conditions("AT-100Metres-M", cal), 0.020)
   expect_equal(race_conditions("AT-100Metres-M", cal, NULL), 0.020)
   # NA fields in the context -> event-wide value
   expect_equal(race_conditions("AT-100Metres-M", cal, list(meet_tier = NA, round_class = "final")), 0.020)
   # calibration without the table -> event-wide value even with a context
-  expect_equal(race_conditions("AT-100Metres-M", fake_cal(FALSE), list(meet_tier = "T1_elite", round_class = "final")), 0.020)
+  expect_equal(race_conditions("AT-100Metres-M", fake_cal(FALSE), list(meet_tier = "M1", round_class = "final")), 0.020)
 })
 
 test_that("simulate_event uses the context cell and records it, and is unchanged without one", {
@@ -44,11 +44,11 @@ test_that("simulate_event uses the context cell and records it, and is unchanged
                                sigma = 0.008)
   s0 <- simulate_event(ab, n_sims = 500, calibration = cal, seed = 3L)
   s1 <- simulate_event(ab, n_sims = 500, calibration = cal, seed = 3L,
-                       context = list(meet_tier = "T1_elite", round_class = "final"))
+                       context = list(meet_tier = "M1", round_class = "final"))
   expect_equal(s0$settings$condition_sd, 0.020)
   expect_equal(s1$settings$condition_sd, 0.012)
   expect_null(s0$settings$context)
-  expect_equal(s1$settings$context$meet_tier, "T1_elite")
+  expect_equal(s1$settings$context$meet_tier, "M1")
   # a smaller shared shock: the spread of simulated perf is narrower
   expect_lt(stats::sd(s1$perf[, 1]), stats::sd(s0$perf[, 1]))
   # and the field's ORDER is untouched: same seed, same ranks (a shared shock
@@ -64,7 +64,7 @@ test_that("spread_scales apply only with a context, and sigma_marks drives the m
                                sigma = 0.008, sigma_marks = 0.004)
   s0 <- simulate_event(ab, n_sims = 500, calibration = cal, seed = 5L)
   s1 <- simulate_event(ab, n_sims = 500, calibration = cal, seed = 5L,
-                       context = list(meet_tier = "T1_elite", round_class = "final"))
+                       context = list(meet_tier = "M1", round_class = "final"))
   expect_equal(s0$settings$k_shared, 1); expect_equal(s0$settings$condition_sd, 0.020)
   expect_equal(s1$settings$k_shared, 0.5); expect_equal(s1$settings$condition_sd, 0.012 * 0.5)
   expect_equal(s1$settings$k_indiv, 2)
@@ -74,7 +74,7 @@ test_that("spread_scales apply only with a context, and sigma_marks drives the m
   # the ranking never sees sigma_marks or k_indiv: identical to a run without them
   ab2 <- data.table::copy(ab)[, sigma_marks := NULL]
   s2 <- simulate_event(ab2, n_sims = 500, calibration = cal, seed = 5L,
-                       context = list(meet_tier = "T1_elite", round_class = "final"))
+                       context = list(meet_tier = "M1", round_class = "final"))
   expect_identical(s1$rank, s2$rank)
   expect_null(s2$perf_std)
 })
@@ -97,7 +97,7 @@ test_that("the excess strip removes (1 - beta) * (c_r - expected) and nothing wh
   h <- data.table::rbindlist(lapply(1:6, function(a) data.table::data.table(
     athlete_id = paste0("a", a), event_id = "AT-100Metres-M",
     date = as.Date("2026-06-01") - (1:6) * 30,
-    race_key = paste0("r", 1:6), round = "Final", tier = "A",
+    race_key = paste0("r", 1:6), round = "Final", race_code = "A",
     perf = -log(10 + a * 0.02 + rnorm(6, 0, 0.02)))))
   race <- data.table::data.table(race_key = paste0("r", 1:6), event_id = "AT-100Metres-M",
                                  c_r = c(0.03, 0.01, 0.01, 0.01, 0.01, 0.01), n_in_race = 50L,

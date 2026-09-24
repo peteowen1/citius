@@ -63,6 +63,8 @@ reading — each one is a conclusion that cost a wrong answer to reach.
 | extending the model, or reasoning about conditions, tiers or rounds | [modelling-traps.md](../docs/reference/modelling-traps.md) |
 | adding a source, or judging whether a competition is in the corpus | [harvesting.md](../docs/reference/harvesting.md) |
 | quoting a skill number or comparing two calibrations | [backtests.md](../docs/reference/backtests.md) |
+| loading a big table, or choosing where to store something new | [storage-formats.md](../docs/reference/storage-formats.md) |
+| anything named `tier`, `race_code`, `meet_tier` or `meet_code` | [tier-terminology.md](../docs/reference/tier-terminology.md) |
 
 Full incident write-ups live in `../docs/incidents/`.
 

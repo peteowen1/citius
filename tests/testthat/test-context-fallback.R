@@ -5,12 +5,12 @@ plant_no_top_tier <- function(n_ath = 40, n_each = 30, seed = 71) {
   set.seed(seed)
   ability <- stats::rnorm(n_ath, to_perf(10, -1L), 0.05)
   data.table::rbindlist(lapply(seq_len(n_ath), function(i) {
-    tier <- sample(c("D", "F"), n_each, replace = TRUE, prob = c(0.7, 0.3))
+    race_code <- sample(c("D", "F"), n_each, replace = TRUE, prob = c(0.7, 0.3))
     round <- sample(c("F", "H1"), n_each, replace = TRUE)
     data.table::data.table(
       athlete_id = as.character(i), event_id = "AT-100Metres-M",
-      tier = tier, round = round, date = Sys.Date() - seq_len(n_each),
-      perf = ability[i] + ifelse(tier == "F", -0.01, 0) +
+      race_code = race_code, round = round, date = Sys.Date() - seq_len(n_each),
+      perf = ability[i] + ifelse(race_code == "F", -0.01, 0) +
         stats::rnorm(n_each, 0, 0.008))
   }))
 }

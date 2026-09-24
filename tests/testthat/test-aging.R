@@ -13,7 +13,7 @@ synthetic_careers <- function(n_athletes = 120, peak = 26, curvature = 0.0004,
     data.table::data.table(
       athlete_id = as.character(i), event_id = event_id,
       date = Sys.Date() - seq_along(ages), age = ages,
-      round = "F", tier = "OW",
+      round = "F", race_code = "OW",
       perf = ability[i] - curvature * (ages - peak)^2 +
         stats::rnorm(length(ages), 0, sigma))
   }))
@@ -64,7 +64,7 @@ test_that("sparse tails cannot set the peak", {
   tail_rows <- data.table::data.table(
     athlete_id = rep(c("t1", "t2"), each = 3), event_id = "AT-100Metres-M",
     date = Sys.Date() - 1:6, age = rep(c(39, 40, 41), 2),
-    round = "F", tier = "OW",
+    round = "F", race_code = "OW",
     perf = to_perf(10, -1L) + c(0, 0.05, 0.10, 0, 0.05, 0.10))
   ag <- suppressWarnings(fit_aging_curve(rbind(main, tail_rows)))
   expect_lt(ag$peaks[family == "sprint"]$peak_age, 32)
@@ -115,7 +115,7 @@ test_that("estimate_ability reports the weighted mean age, not the career mean",
   h <- data.table::data.table(
     athlete_id = "x", event_id = "AT-100Metres-M",
     date = c(today - (8:5) * 365, today - (60:1) * 7),
-    tier = "OW", round = "F"
+    race_code = "OW", round = "F"
   )
   h[, age := 18 + as.numeric(date - min(date)) / 365.25]
   h[, perf := to_perf(10, -1L)]

@@ -206,7 +206,7 @@ wiring_calibrate_slots <- function() {
     data.table::data.table(
       race_key = paste0("r", r), athlete_id = as.character(who),
       event_id = "AT-100Metres-M", date = Sys.Date() - r,
-      round = "F", tier = "OW", indoor = FALSE, venue_country = "GBR",
+      round = "F", race_code = "OW", indoor = FALSE, venue_country = "GBR",
       perf = ability[who] + c_r[r] + stats::rnorm(n_per, 0, 0.010))
   })
   names(suppressWarnings(calibrate(data.table::rbindlist(rows))))

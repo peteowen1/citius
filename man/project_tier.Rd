@@ -4,14 +4,10 @@
 \alias{project_tier}
 \title{Put an ability estimate onto the tier of the race being predicted}
 \usage{
-project_tier(ability, tier, calibration = NULL, shrink = 0.5)
+project_tier(ability, race_code, calibration = NULL, shrink = 0.5)
 }
 \arguments{
 \item{ability}{Ability rows, as returned by \code{\link[=estimate_ability]{estimate_ability()}}.}
-
-\item{tier}{Tier code for the race being predicted, recycled to \code{ability}.
-Raw feed codes are accepted and classified by the same rule the calibration
-was fitted under.}
 
 \item{calibration}{A \code{citius_calibration} carrying a \verb{$tier} table. \code{NULL}
 returns \code{ability} unchanged, which is the honest fallback: without measured
@@ -40,6 +36,10 @@ MAE is the one with a threshold attached. Fitting a separate offset per
 tier was also tried and OVERFITS: it reversed the bias out of sample
 (-0.460 to +0.116) and worsened MAE, because low-tier bias is not stable
 across eras (train -0.570 against a test reality of -1.19).}
+
+\item{tier}{Tier code for the race being predicted, recycled to \code{ability}.
+Raw feed codes are accepted and classified by the same rule the calibration
+was fitted under.}
 }
 \value{
 \code{ability} with \code{ability} shifted and \code{tier_adj} recording the shift.

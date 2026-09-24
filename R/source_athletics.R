@@ -211,7 +211,7 @@ athletics_athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) 
       wind          = as.numeric(r$wind %||% NA_real_),
       indoor        = isTRUE(loc$indoor),
       legal         = isTRUE(r$legal),
-      tier          = r$category %||% NA_character_,
+      race_code          = r$category %||% NA_character_,
       venue_country = loc$country %||% NA_character_,
       venue_city    = loc$city %||% NA_character_,
       venue_stadium = loc$stadium %||% NA_character_,
@@ -232,7 +232,7 @@ athletics_athlete_results <- function(athlete_id, sex = NULL, birthdate = NULL) 
     athlete_id = integer(), date = as.Date(character()), sport = character(),
     discipline = character(), event_id = character(), mark = numeric(),
     perf = numeric(), place = integer(), round = character(), wind = numeric(),
-    indoor = logical(), legal = logical(), tier = character(), age = numeric(),
+    indoor = logical(), legal = logical(), race_code = character(), age = numeric(),
     venue_country = character(), result_score = numeric(), sex = character(),
     # Kept in step with the parser above -- a zero-result athlete must return
     # the same shape as one with results, or rbindlist(fill=TRUE) quietly
@@ -314,7 +314,7 @@ athletics_competition_results <- function(competition_id, days = 1:12) {
     sex <- ev$sex %||% NA_character_
     disc <- ev$discipline %||% NA_character_
     tech <- isTRUE(ev$isTechnical)
-    tier <- ev$category %||% NA_character_
+    race_code <- ev$category %||% NA_character_
 
     # `raceNumber` is only a discriminator if it is actually distinct across the
     # event's races. Some meets -- typically age-group or multi-division -- give
@@ -394,7 +394,7 @@ athletics_competition_results <- function(competition_id, days = 1:12) {
           # silently treated 7,423 wind-aided marks as legal. They remain usable
           # once wind-adjusted (see adjust_wind), but the flag must be honest.
           legal        = is.na(x$wind %||% NA) | (as.numeric(x$wind %||% 0) <= 2.0),
-          tier         = tier,
+          race_code         = race_code,
           venue_country = loc$country %||% NA_character_,
           # City and stadium are needed for altitude, which is a real systematic
           # effect - measured at roughly -0.3% over 5000m even through a crude
@@ -564,7 +564,7 @@ athletics_find_competition <- function(name) {
     return(data.table::data.table(
       competition_id = integer(), name = character(), city = character(),
       country = character(), start = as.Date(character()), end = as.Date(character()),
-      tier = character(), has_results = logical()
+      race_code = character(), has_results = logical()
     ))
   }
 
@@ -577,7 +577,7 @@ athletics_find_competition <- function(name) {
       country = loc$country %||% NA_character_,
       start   = as_date_safe(c_$start %||% NA),
       end     = as_date_safe(c_$end %||% NA),
-      tier    = c_$rankingCategory %||% NA_character_,
+      race_code    = c_$rankingCategory %||% NA_character_,
       has_results = isTRUE(c_$hasResults)
     )
   }), use.names = TRUE, fill = TRUE)[]

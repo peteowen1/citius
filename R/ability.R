@@ -151,11 +151,11 @@
 #'   `"DF"`, `"A"`..`"F"`, or `NA`.
 #'
 #'   **Not `meet_tier`**, which is the catalogue's rating of a MEETING
-#'   (`"T1_elite"`, `"T2_strong"`, `"T3_development"`). The two classifications
-#'   cross rather than nest: one T1_elite meeting contains races of several WAC
+#'   (`"M1"`, `"M2"`, `"M3"`). The two classifications
+#'   cross rather than nest: one M1 meeting contains races of several WAC
 #'   categories, because a Diamond League meeting's headline disciplines and its
 #'   supporting programme are categorised separately. Weltklasse Zürich runs
-#'   `"GW"` disciplines beside `"F"` support races inside a single T1_elite
+#'   `"GW"` disciplines beside `"F"` support races inside a single M1
 #'   meeting, and 90 of the 849 races in the lab's "elite" test set are `"F"`
 #'   for exactly that reason.
 #'
@@ -183,7 +183,7 @@
 #' @return Numeric vector of non-negative weights.
 #' @seealso [calibrate()]
 #' @export
-result_weight <- function(date, tier = NA_character_, round = NA_character_,
+result_weight <- function(date, race_code = NA_character_, round = NA_character_,
                           as_of = Sys.Date(), half_life = 540,
                           calibration = NULL, tier_class = NULL,
                           precision_scale = 1) {
@@ -197,7 +197,7 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
   age_days[is.na(age_days) | age_days < 0] <- 0
   recency <- 0.5^(age_days / half_life)
 
-  tier <- rep_len(as.character(tier), n)
+  race_code <- rep_len(as.character(race_code), n)
   round <- rep_len(as.character(round), n)
 
   # `tier_class` lets the caller pass a class that is already resolved -- in
@@ -214,7 +214,7 @@ result_weight <- function(date, tier = NA_character_, round = NA_character_,
   # Do NOT route a resolved class back through `tier`: .tier_class() maps any
   # unrecognised code to "mid", so .tier_class("top") is "mid", and the
   # double-mapping would be silent.
-  tc <- if (is.null(tier_class)) .tier_class(tier) else rep_len(as.character(tier_class), n)
+  tc <- if (is.null(tier_class)) .tier_class(race_code) else rep_len(as.character(tier_class), n)
 
   prec <- .context_precision(calibration, "round", .round_class(round)) *
     .context_precision(calibration, "tier", tc)
@@ -813,6 +813,22 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' @keywords internal
 #' @noRd
 .round_class <- function(round) {
+  # CLASSIFY THE DISTINCT LABELS, THEN MAP BACK.
+  #
+  # This function is pure, and estimate_ability() calls it on the whole history:
+  # 4.4M rows per meet, 120 meets per arm. The body below runs toupper, trimws
+  # and EIGHT grepl passes, so it was doing ~35M regex matches per meet to
+  # resolve a few dozen distinct round labels. Profiled 2026-09-17: grepl 19.4%,
+  # sub 11.2%, toupper 10.7% of estimate_ability()'s self time, and
+  # estimate_ability() is 89% of an arm.
+  #
+  # Vectorised is not the same as cheap. The work was already vectorised; it was
+  # simply being done 4.4M times instead of 40.
+  #
+  # Output-identical by construction: a pure function of a value cannot depend
+  # on how many times that value appears.
+  .u <- unique(round)
+  if (length(.u) < length(round)) return(.round_class(.u)[match(round, .u)])
   r <- toupper(trimws(as.character(round)))
   out <- rep("other", length(r))
   # These are sequential overwrites, so the LAST match wins and the patterns
@@ -856,27 +872,69 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
   # the WAC-fitted calibration does not contain, which then takes the median
   # precision in .context_precision().
   #
-  # Collapsing the fallback onto the WAC table (A/B/C/D -> "mid", DF -> "top")
-  # would remove the split and is probably right -- WAC calls the Diamond League
-  # Final elite and it plainly is. But it MOVES ~7.5% of the corpus between
-  # buckets and changes which offsets are fitted, which makes it a modelling
-  # change, not a bugfix. It ships through a measured arm or not at all.
+  # A 3-class version of `.tier_class()` was tried and REVERTED 2026-09-16
+  # (see that function's own comment): `.tier_class()` is also called
+  # directly by the race-shock excess-strip and by
+  # `fit_race_shock_persistence.R`, which fit `calibration$race_shock` under
+  # the current four-class vocabulary. Changing the mapping without refitting
+  # that table silently pointed live predictions at the wrong population's
+  # beta on `adjust_race = TRUE`, the live default. Collapsing the fallback
+  # onto the WAC table (A/B/C/D -> "mid", DF -> "top") is still probably
+  # right in the end -- it MOVES ~7.5% of the corpus between buckets and
+  # changes which offsets are fitted for `result_weight()`, so it ships
+  # through a measured arm AND a race_shock refit together, or not at all.
   #
   # What IS fixed: estimate_ability() now passes this resolved class to
   # result_weight(), so the 84.6% of rows the catalogue covers weight and offset
   # on the same label. Only the uncovered remainder can still reach "high".
-  fb <- .tier_class(if ("tier" %in% names(dt)) dt$tier else NA_character_)
+  fb <- .tier_class(if ("race_code" %in% names(dt)) dt$race_code else NA_character_)
   if (!"meet_tier" %in% names(dt)) return(fb)
-  mapped <- unname(c(T1_elite = "top", T2_strong = "mid",
-                     T3_development = "low")[as.character(dt$meet_tier)])
+  mapped <- unname(c(M1 = "top", M2 = "mid",
+                     M3 = "low")[as.character(dt$meet_tier)])
   # An unclassified meet keeps the feed code rather than a guess.
   unname(data.table::fifelse(is.na(mapped), fb, mapped))
 }
 
 #' @keywords internal
 #' @noRd
-.tier_class <- function(tier) {
-  t <- toupper(trimws(as.character(tier)))
+#'
+#' STILL FOUR CLASSES -- the 3-class fix was REVERTED 2026-09-16, hours after
+#' shipping, before it reached anything live. The empirical finding behind it
+#' is real and stands: standardising every winning mark against its own
+#' event's mean/sd and averaging by code (docs/reference/modelling-traps.md,
+#' "R1 vs M1") found DF is the single best-performing code of any of them
+#' (was "mid") and B performs like a mid code, below C and D (was "high").
+#' Order: DF 2.34, GW 1.96, OW 1.85, A 1.66, GL 1.54 | C 1.26, B 0.84, D
+#' 0.81 | E 0.59, F 0.12.
+#'
+#' WHY REVERTED: `.tier_class()` is called directly (bypassing
+#' `.tier_class_of()`'s catalogue-preferring logic entirely) by the
+#' race-shock excess-strip at ability.R:1036/:1069 and by
+#' `fit_race_shock_persistence.R`, which FIT `calibration$race_shock`'s
+#' `by_tier`/`expected` tables under the OLD four-class vocabulary. The
+#' deployed calibration's `by_tier` still has `high` (beta 0.6421, 211,429
+#' rows fit on A/B) and `top` (beta 0.4846, 86,002 rows fit on OW/GW/GL
+#' only, no DF/A) -- a 3-class `.tier_class()` would have silently pointed
+#' every A/DF race at "top"'s wrong-population beta, every B race at
+#' "mid"'s wrong-population beta, and made the 211,429-row "high" bucket
+#' permanently unreachable, on `adjust_race = TRUE` (the live default) for
+#' every prediction. Caught by a pr-review-toolkit code-reviewer pass before
+#' this reached anything live. `.tier_class_of()`'s own fallback path is
+#' unaffected either way -- verified dead code, 100% catalogue coverage.
+#'
+#' TO RE-APPLY: refit `race_shock` (`fit_race_shock_persistence.R`) and any
+#' other table keyed on raw `.tier_class()` under the 3-class vocabulary
+#' FIRST, redeploy that calibration, THEN reinstate the 3-class mapping
+#' below in the SAME change -- never as two separate commits, or the window
+#' between them reintroduces this exact mismatch.
+.tier_class <- function(race_code) {
+  # Same reason as .round_class() above: pure function, called on millions of
+  # rows to resolve about ten distinct codes. The unknown-code warning still
+  # fires -- it names the codes, not their row count -- so the diagnostic that
+  # caught "DF" when it first appeared is unaffected.
+  .u <- unique(race_code)
+  if (length(.u) < length(race_code)) return(.tier_class(.u)[match(race_code, .u)])
+  t <- toupper(trimws(as.character(race_code)))
   known <- c("OW", "GW", "GL", "A", "B", "C", "D", "DF", "E", "F")
   out <- rep("mid", length(t))
   out[t %in% c("OW", "GW", "GL")] <- "top"
@@ -894,6 +952,27 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
       "Unknown tier code{?s} {.val {unique(t[unknown])}} classified as {.val mid}; extend .tier_class() if {?it is/they are} real.",
       .frequency = "once", .frequency_id = "citius_tier_unknown")
   }
+  out
+}
+
+#' Altitude band from venue metres, SHARED between the fit and the model.
+#'
+#' fit_altitude_effect.R fits per (family, sex, band); this classifies dt$alt_m
+#' the same way when the model applies the result. One function rather than the
+#' same cut() breaks typed twice, because a breakpoint that drifts between the
+#' two silently misapplies every coefficient -- a "800-1500" fitted cell would
+#' be looked up against a row keyed "800-1400", find nothing, and default to 0
+#' with no error. `.round_class()`/`.tier_class()` are the precedent for a
+#' classifier shared this way between fitting and application.
+.altitude_band <- function(alt_m) {
+  a <- suppressWarnings(as.numeric(alt_m))
+  out <- rep(NA_character_, length(a))
+  ok <- is.finite(a)
+  out[ok & a < 200]                 <- "<200"
+  out[ok & a >= 200  & a < 800]     <- "200-800"
+  out[ok & a >= 800  & a < 1500]    <- "800-1500"
+  out[ok & a >= 1500 & a < 2200]    <- "1500-2200"
+  out[ok & a >= 2200]               <- ">2200"
   out
 }
 
@@ -1228,6 +1307,85 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
     dt[, perf := perf - wind_beta * wind_val]
   }
 
+  # Altitude, per (FAMILY, SEX, BAND), where the calibration carries
+  # coefficients. Same adjustment layer as round, tier and wind: it makes a
+  # mark comparable across the venues an athlete has raced at, so ability is
+  # estimated at a common (sea-level) reference.
+  #
+  # BANDED, NOT LINEAR-IN-METRES. A single slope was fitted and measured
+  # against its own banded diagnostic on 2026-09-17: true effect ~0 (+0.0012)
+  # at <200m, -0.0232 at >2200m. A line through those points over-corrects sea
+  # level by nearly its full magnitude and under-corrects extreme altitude by
+  # half. Confirmed 2026-09-18 by isolating the add-back's own effect: the
+  # linear coefficient made 9,677 SEA-LEVEL races significantly WORSE
+  # (t=4.36). Refit as a step function -- <200m is the reference band, beta=0
+  # there by construction, so this layer literally cannot move a sea-level
+  # mark regardless of what the other bands' coefficients are.
+  #
+  # WHY PER FAMILY AND SEX: the sign flips by family (thinner air costs an
+  # aerobic athlete oxygen and saves a sprinter drag), and sex matters
+  # mechanically, not just plausibly -- East African distance/middle fields are
+  # male-skewed relative to women's in this corpus, and that population is
+  # exactly what drives the athlete-history correlation (-0.940) this term
+  # exists to separate from a pure venue effect. See
+  # docs/reviews/altitude-arm-2026-09-17.md and fit_altitude_effect.R.
+  #
+  # WHY TWO has_cr SCOPES: `c_r` absorbs part of altitude, as it does wind --
+  # but unlike wind, `calibrate()` does not deliberately fold altitude into the
+  # race effect, so the absorbed share is small and uneven. The strip actually
+  # applied is (1 - beta_shock) * (c_r - e_cell), not the full c_r. So rows
+  # WITH a race effect take the residual coefficient and rows without take the
+  # gross one; suppressing entirely where `has_cr` would leave most of it
+  # uncorrected, applying the gross beta everywhere would double-count the
+  # sliver already removed.
+  #
+  # Local names are deliberately distinct from any column in `dt`: the wind
+  # block above carries a scar from a local `w` being shadowed by dt's own `w`,
+  # which silently subtracted beta * weight instead of beta * wind.
+  if (!is.null(calibration$altitude) && NROW(calibration$altitude) &&
+      "alt_m" %in% names(dt)) {
+    .alt_tbl <- data.table::as.data.table(calibration$altitude)
+    .fam_of  <- citius_events()[, c("event_id", "family", "sex")]
+    .fi      <- match(dt$event_id, .fam_of$event_id)
+    .fam_vec <- .fam_of$family[.fi]
+    .sex_vec <- .fam_of$sex[.fi]
+    .band_vec <- .altitude_band(dt$alt_m)
+    # A venue with no elevation is left alone, never imputed to sea level: an
+    # unknown altitude and a known <200m are different facts, and treating the
+    # first as the second would silently "correct" every unmatched venue as if
+    # it were confirmed sea-level. .altitude_band() already returns NA for a
+    # non-finite alt_m, so this key simply fails to match, same effect as the
+    # existing "unfitted family gets 0" fallback below.
+    .key   <- paste(.fam_vec, .sex_vec, ifelse(has_cr, "TRUE", "FALSE"), .band_vec)
+    .tkey  <- paste(.alt_tbl$family, .alt_tbl$sex,
+                    ifelse(.alt_tbl$has_cr, "TRUE", "FALSE"), .alt_tbl$band)
+    .mi     <- match(.key, .tkey)
+    .a_beta <- .alt_tbl$beta[.mi]
+    .a_beta[!is.finite(.a_beta)] <- 0
+    # A join that resolves NOTHING is a wiring failure, and without this line it
+    # is byte-identical to the intended no-op: every beta NA, every NA coerced
+    # to 0, nothing adjusted, nothing said. Rename a family string or store
+    # has_cr as NA and the layer goes quietly inert -- the same shape as the
+    # column that sat 100% empty for months here.
+    #
+    # Only TOTAL failure warns. A partial miss is by design (an unfitted cell
+    # gets 0 -- <200m always does, by construction, and a thin family/sex/band
+    # combination that never cleared MIN_PAIRS does too), and this function
+    # runs inside backtest loops, so warning on the normal case would be noise
+    # that teaches everyone to ignore it. Checking the match index rather than
+    # the beta matters: a band legitimately at beta=0 (the reference, or zeroed
+    # for |t| < 3) still MATCHES, and testing `any(beta != 0)` would cry wolf
+    # on a dt holding only sea-level races.
+    if (length(.mi) && all(is.na(.mi))) {
+      warning("calibration$altitude matched no rows -- its family/sex/has_cr/",
+              "band keys do not align with this data, so the altitude ",
+              "adjustment is silently doing nothing.", call. = FALSE)
+    }
+    # No km multiplier: beta IS the level effect of the band, already relative
+    # to <200m, not a per-km rate to scale.
+    dt[, perf := perf - .a_beta]
+  }
+
   # Race momentum: an exponentially decayed count of recent race days. Same
   # adjustment layer as round, tier and wind, but note what it is NOT.
   #
@@ -1321,7 +1479,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
     co <- calibration$championship$offset[
       match(fam_ch, calibration$championship$family)]
     co[!is.finite(co)] <- 0
-    is_ch <- .is_championship(if ("tier" %in% names(dt)) dt$tier else NA_character_) &
+    is_ch <- .is_championship(if ("race_code" %in% names(dt)) dt$race_code else NA_character_) &
       .round_class(if ("round" %in% names(dt)) dt$round else NA_character_) == "final"
     co[!is_ch] <- 0
     dt[, perf := perf - co]
@@ -1397,6 +1555,13 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #'   you know which athletes you are about to score -- a backtest or a
 #'   diagnostic over a fixed set of races -- because without it the refit spends
 #'   almost all of its time on athletes the caller will discard.
+#' @param sigma_k Optional robust-sigma scale computed once by the caller: a
+#'   single number, or a table of `event_id` and `k_ev`. Passing it lets `only`
+#'   skip the population it otherwise keeps just to compute `k`. With `only`,
+#'   the table must give every event a finite `k_ev` (thin events: the
+#'   caller's pooled `k`) -- a gap is an error, because the pooled `k` cannot
+#'   be computed correctly from the entrants alone. Without `only`, an event
+#'   the table omits uses the pooled `k` from the full input.
 #' @param peak_gamma Exponent upweighting an athlete's own better marks over
 #'   worse ones, ranked within (athlete, event). `0`, the default, weights
 #'   every result equally on this axis. Scalar, or a table with a
@@ -1438,6 +1603,26 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                              sigma_parts = c("estimator", "weight"),
                              sigma_mode = c("athlete", "event"),
                              only = NULL, peak_gamma = 0,
+                             # PRE-COMPUTED SIGMA SCALE, the hoist that makes
+                             # `only=` cheap. A data.table of (event_id, k_ev),
+                             # or a single number.
+                             #
+                             # k is a property of the EVENT, not the meet
+                             # (within-event spread over six years 1.94%,
+                             # between-event 19.75%), so a caller scoring many
+                             # meets off one history can compute it ONCE and
+                             # pass it here. That is what lets the `only=` path
+                             # stop dragging the n>=10 population through the
+                             # expensive per-group body in every call -- the
+                             # only reason those athletes are retained is to
+                             # make k exact.
+                             #
+                             # Supplying it is a promise that the value came
+                             # from the same history window and estimator. There
+                             # is no way to verify that from in here, so the
+                             # caller owns it: a k from a different vintage
+                             # silently rescales every sigma.
+                             sigma_k = NULL,
                              robust_location = FALSE,
                              decouple_peak = FALSE,
                              # Subtract the fitted race effect, referenced to
@@ -1478,7 +1663,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # (line 286), so the weighting and the offsets cannot drift onto different
   # tier vocabularies. Passing only `tier` here is what let the WAC promotion
   # reach the offsets and miss the weights.
-  dt[, w := result_weight(date, tier = if ("tier" %in% names(dt)) tier else NA_character_,
+  dt[, w := result_weight(date, race_code = if ("race_code" %in% names(dt)) race_code else NA_character_,
                           round = if ("round" %in% names(dt)) round else NA_character_,
                           as_of = as_of, half_life = hl,
                           calibration = calibration,
@@ -1758,9 +1943,18 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     # EXACT for about a fifth of the work. An approximation would have been
     # faster still, and today is a poor day to trade exactness for speed on a
     # quantity that feeds every ability estimate.
-    n_by <- dt[, .(n = .N), by = .(athlete_id, event_id)]
-    k_ids <- unique(as.character(n_by[n >= 10L]$athlete_id))
-    dt <- dt[as.character(athlete_id) %in% union(keep_ids, k_ids)]
+    # THE HOIST. Those athletes are retained for ONE reason: to make k exact.
+    # If the caller has already computed k -- legitimate, because k belongs to
+    # the event and the history window, not to the meet -- they are dead weight,
+    # and dropping them takes the expensive per-group body down to the entrants
+    # alone.
+    if (is.null(sigma_k)) {
+      n_by <- dt[, .(n = .N), by = .(athlete_id, event_id)]
+      k_ids <- unique(as.character(n_by[n >= 10L]$athlete_id))
+      dt <- dt[as.character(athlete_id) %in% union(keep_ids, k_ids)]
+    } else {
+      dt <- dt[as.character(athlete_id) %in% keep_ids]
+    }
     if (!nrow(dt)) return(.empty_ability())
   }
 
@@ -1899,10 +2093,70 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     # one moved the result.
     ref <- ab[n >= 10L & is.finite(sigma_rob) & sigma_rob > 0 &
                 is.finite(sigma_raw) & sigma_raw > 0]
-    k <- if (nrow(ref) >= 20L) stats::median(ref$sigma_raw / ref$sigma_rob) else 1
-    if (!is.finite(k) || k <= 0) k <- 1
+    k_pool <- if (nrow(ref) >= 20L) stats::median(ref$sigma_raw / ref$sigma_rob) else 1
+    if (!is.finite(k_pool) || k_pool <= 0) k_pool <- 1
+
+    # PER-EVENT k, opt-in via CITIUS_SIGMA_K_BY_EVENT.
+    #
+    # k is the ratio between two estimators of the same spread, and it is a
+    # property of the EVENT, not of the meet or the moment. Measured 2026-09-17
+    # across four events at three cutoffs six years apart:
+    #
+    #   within-event spread over time : 1.94%
+    #   between-event spread          : 19.75%
+    #
+    #   800m M    1.2209 / 1.2184 / 1.2394     5000m M  1.0116 / 1.0257 / 1.0238
+    #   100m M    1.1571 / 1.1322 / 1.1503     LongJump 1.1659 / 1.1632 / 1.1318
+    #
+    # A 10x separation. The pooled scalar therefore blends whatever events a
+    # meet happens to contest: a card with 800m and 5000m gets one k near 1.12
+    # applied to both, too high for the 5000m and too low for the 800m. Per
+    # event is MORE exact, not a speed-for-accuracy trade.
+    #
+    # It is also hoistable, which is the point -- a quantity that depends only
+    # on the event and the history window does not need the n>=10 population
+    # carried into every per-meet call. That is a caller-side change and is not
+    # made here; this flag is what makes it measurable first.
+    #
+    # Falls back to the pooled k per event when that event has too few
+    # well-observed athletes to estimate its own, so a thin event degrades to
+    # today's behaviour rather than to a noisy ratio from a handful of rows.
+    if (!is.null(sigma_k)) {
+      # Supplied by the caller. A bare number applies everywhere; a table is
+      # matched per event. Without `only`, an event the table omits falls back
+      # to the pooled k, which is the population value. WITH `only`, the hoist
+      # above has already dropped that population, so k_pool here comes from a
+      # handful of entrants and usually collapses to 1 -- sigma ~15-25% too
+      # small, silently. The caller must cover every event (backfilling thin
+      # ones with its own pooled k), and a gap is an error, not a fallback.
+      if (is.numeric(sigma_k) && length(sigma_k) == 1L) {
+        ab[, .k_use := as.numeric(sigma_k)]
+      } else {
+        skt <- data.table::as.data.table(sigma_k)
+        if (!all(c("event_id", "k_ev") %in% names(skt)))
+          cli::cli_abort("{.arg sigma_k} must be a single number or a table with {.field event_id} and {.field k_ev}.")
+        ab[, .k_use := skt$k_ev[match(event_id, skt$event_id)]]
+        if (!is.null(only)) {
+          miss <- unique(as.character(ab[!is.finite(.k_use)]$event_id))
+          if (length(miss))
+            cli::cli_abort(c(
+              "{.arg sigma_k} has no finite {.field k_ev} for {length(miss)} event{?s} scored with {.arg only}: {.val {miss}}.",
+              "i" = "With {.arg only} the population k is not available here; give every event a k (thin events: the caller's pooled k)."))
+        }
+        ab[!is.finite(.k_use), .k_use := k_pool]
+      }
+    } else if (identical(Sys.getenv("CITIUS_SIGMA_K_BY_EVENT", "0"), "1")) {
+      kt <- ref[, .(k_ev = stats::median(sigma_raw / sigma_rob), n_ref = .N),
+                by = event_id]
+      kt[n_ref < 20L | !is.finite(k_ev) | k_ev <= 0, k_ev := NA_real_]
+      ab[, .k_use := kt$k_ev[match(event_id, kt$event_id)]]
+      ab[!is.finite(.k_use), .k_use := k_pool]
+    } else {
+      ab[, .k_use := k_pool]
+    }
     ab[, sigma := data.table::fifelse(is.finite(sigma_rob) & sigma_rob > 0,
-                                      sigma_rob * k, NA_real_)]
+                                      sigma_rob * .k_use, NA_real_)]
+    ab[, .k_use := NULL]
     # No usable good side at all: fall back to the event value, NOT to
     # `sigma_raw`. Falling back to the raw spread restores exactly the
     # contaminated number this estimator exists to avoid -- which is the bug
@@ -2116,10 +2370,13 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # work a two-column addition would have saved.
   #
   # Additive only: existing callers select by name and are unaffected.
+  # sigma_between joined the list 2026-09-13 so transfer_neighbour_ability()
+  # can standardise a neighbour event's ability onto its own z-scale without
+  # a second call into internals estimate_ability() already computed.
   cols <- c("athlete_id", "event_id", "ability", "ability_raw", "sigma",
             "sigma_raw", "sigma_rob", "sigma_marks", "recent_mean",
             "ability_se", "n", "n_eff", "w_total", "shrinkage", "prior_mu",
-            "age_ref", "last_date")
+            "sigma_between", "age_ref", "last_date")
   if ("ability_peak" %in% names(ab)) cols <- c(cols, "ability_peak")
   cols <- intersect(cols, names(ab))
   ab[, cols, with = FALSE][]
@@ -2210,7 +2467,8 @@ condition_prior <- function(ability, field = NULL, weight = 1) {
     sigma_raw = numeric(), sigma_rob = numeric(),
     sigma_marks = numeric(), recent_mean = numeric(), ability_se = numeric(),
     n = integer(), n_eff = numeric(), w_total = numeric(),
-    shrinkage = numeric(), prior_mu = numeric(), age_ref = numeric(),
+    shrinkage = numeric(), prior_mu = numeric(), sigma_between = numeric(),
+    age_ref = numeric(),
     last_date = as.Date(character())
   )
 }

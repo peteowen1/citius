@@ -13,7 +13,7 @@ namespace as \code{\link[=athletics_calendar]{athletics_calendar()}}'s \code{id}
 }
 \value{
 A \code{data.table}, one row per result, with \code{competition_id},
-\code{comp_name}, \code{venue}, \code{comp_start}, \code{comp_end}, \code{ranking_category},
+\code{comp_name}, \code{venue}, \code{comp_start}, \code{comp_end}, \code{meet_code},
 \code{event_name}, \code{event_id}, \code{sex_code} (\code{"M"}/\code{"W"}, from the response's
 \code{gender}), \code{is_relay}, \code{round} (the response's \code{race} field, e.g.
 \code{"Final"}), \code{race_id}, \code{race_number}, \code{race_date} (frequently \code{NA} --

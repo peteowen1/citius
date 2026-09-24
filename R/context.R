@@ -290,7 +290,7 @@ fit_sigma_context <- function(results, min_history = 4L, min_n = 500L) {
   if (!nrow(dt)) return(empty)
 
   dt[, rc := .round_class(if ("round" %in% names(dt)) round else NA_character_)]
-  dt[, tc := .tier_class(if ("tier" %in% names(dt)) tier else NA_character_)]
+  dt[, tc := .tier_class(if ("race_code" %in% names(dt)) race_code else NA_character_)]
 
   # Centre within athlete-event so what remains is performance spread, not
   # ability differences. Athletes with a short record are excluded because their
@@ -448,7 +448,7 @@ fit_championship_effect <- function(results, min_n = 100L) {
   if (!nrow(dt)) return(empty)
 
   dt[, rc := .round_class(if ("round" %in% names(dt)) round else NA_character_)]
-  dt[, tc := .tier_class(if ("tier" %in% names(dt)) tier else NA_character_)]
+  dt[, tc := .tier_class(if ("race_code" %in% names(dt)) race_code else NA_character_)]
 
   # Both sides restricted to top-tier finals. This is the whole point: it holds
   # round and tier fixed so the offset can only measure what is left over. A
@@ -457,7 +457,7 @@ fit_championship_effect <- function(results, min_n = 100L) {
   # effects that are already applied elsewhere.
   tf <- dt[tc == "top" & rc == "final"]
   if (!nrow(tf)) return(empty)
-  tf[, champ := .is_championship(tier)]
+  tf[, champ := .is_championship(race_code)]
   tf[, `:=`(n_c = sum(champ), n_o = sum(!champ)), by = .(athlete_id, event_id)]
   # Only athletes seen in BOTH contexts identify the gap; anyone appearing in one
   # contributes their ability, not a comparison.
@@ -477,7 +477,7 @@ fit_championship_effect <- function(results, min_n = 100L) {
 
 #' @keywords internal
 #' @noRd
-.is_championship <- function(tier) {
+.is_championship <- function(race_code) {
   # "OW" is the World Athletics code for the global-championship category.
   #
   # CORRECTED 2026-09-09: this comment used to say "Olympics, World
@@ -490,7 +490,7 @@ fit_championship_effect <- function(results, min_n = 100L) {
   # calendar is OW at all.
   #
   # Diamond League meets carry "GW"/"GL"/"DF" and everything else A..F.
-  grepl("^OW", toupper(trimws(as.character(tier))))
+  grepl("^OW", toupper(trimws(as.character(race_code))))
 }
 
 
@@ -603,7 +603,7 @@ project_championship <- function(ability, calibration = NULL) {
 #' @return `ability` with `ability` shifted and `tier_adj` recording the shift.
 #' @seealso [project_championship()], [estimate_ability()]
 #' @export
-project_tier <- function(ability, tier, calibration = NULL, shrink = 0.5) {
+project_tier <- function(ability, race_code, calibration = NULL, shrink = 0.5) {
   ab <- data.table::copy(data.table::as.data.table(ability))
   tt <- if (is.null(calibration)) NULL
         else if (inherits(calibration, "citius_calibration") ||
@@ -613,7 +613,7 @@ project_tier <- function(ability, tier, calibration = NULL, shrink = 0.5) {
     ab[, tier_adj := 0]
     return(ab[])
   }
-  tc <- .tier_class(rep_len(as.character(tier), nrow(ab)))
+  tc <- .tier_class(rep_len(as.character(race_code), nrow(ab)))
   adj <- tt$offset[match(tc, tt$tier_class)] * shrink
   adj[!is.finite(adj)] <- 0
   # estimate_ability() SUBTRACTED this offset to reach the reference footing, so

@@ -20,6 +20,7 @@ estimate_ability(
   sigma_mode = c("athlete", "event"),
   only = NULL,
   peak_gamma = 0,
+  sigma_k = NULL,
   robust_location = FALSE,
   decouple_peak = FALSE,
   adjust_race = FALSE
@@ -96,6 +97,14 @@ every result equally on this axis. Scalar, or a table with a
 \code{precision_scale}. Swept both sides of zero on the marks lab and \code{0} is a
 genuine interior optimum globally -- not an edge artefact -- but never
 tested per event. See \verb{docs/plans/marks-parameter-optimisation-backlog-2026-09-08.md}.}
+
+\item{sigma_k}{Optional robust-sigma scale computed once by the caller: a
+single number, or a table of \code{event_id} and \code{k_ev}. Passing it lets \code{only}
+skip the population it otherwise keeps just to compute \code{k}. With \code{only},
+the table must give every event a finite \code{k_ev} (thin events: the
+caller's pooled \code{k}) -- a gap is an error, because the pooled \code{k} cannot
+be computed correctly from the entrants alone. Without \code{only}, an event
+the table omits uses the pooled \code{k} from the full input.}
 }
 \value{
 A \code{data.table} with \code{athlete_id}, \code{event_id}, \code{ability},

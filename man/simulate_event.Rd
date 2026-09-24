@@ -58,7 +58,7 @@ restored on exit, so a seeded simulation does not change the draws of
 whatever runs after it.}
 
 \item{context}{Optional \code{list(meet_tier = , round_class = )} naming the race
-being simulated (catalogue tier \code{T1_elite}/\code{T2_strong}/\code{T3_development},
+being simulated (catalogue tier \code{M1}/\code{M2}/\code{M3},
 round class \code{final}/\code{semi}/\code{heat}/\code{other}). When the calibration carries
 a \code{condition_sd_context} table the shared-shock sd is taken from the
 matching event or family cell instead of the event-wide value; otherwise

@@ -6,7 +6,7 @@ plant_wind <- function(beta = 0.0025, n_ath = 60, n_each = 40,
     w <- stats::runif(n_each, -3, 3)
     data.table::data.table(
       athlete_id = as.character(i), event_id = event_id,
-      date = Sys.Date() - seq_len(n_each), round = "F", tier = "OW",
+      date = Sys.Date() - seq_len(n_each), round = "F", race_code = "OW",
       wind = w,
       perf = ability[i] + beta * w + stats::rnorm(n_each, 0, sigma))
   }))
@@ -47,7 +47,7 @@ test_that("extreme wind readings are excluded as recording errors", {
   d <- plant_wind(beta = 0.0025)
   d <- rbind(d, data.table::data.table(
     athlete_id = "1", event_id = "AT-100Metres-M", date = Sys.Date(),
-    round = "F", tier = "OW", wind = c(50, -50), perf = to_perf(c(9, 12), -1L)))
+    round = "F", race_code = "OW", wind = c(50, -50), perf = to_perf(c(9, 12), -1L)))
   w <- fit_wind_effect(d)
   expect_lt(abs(w$beta - 0.0025), 0.0006)
 })
