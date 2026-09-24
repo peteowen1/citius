@@ -25,8 +25,8 @@ library(citius)
 
 # 1. Harvest histories for the athletes you care about
 ids  <- vapply(c("Kishane Thompson", "Noah Lyles", "Letsile Tebogo"),
-               \(n) find_athlete(n)$athlete_id[1], numeric(1))
-hist <- data.table::rbindlist(lapply(ids, athlete_results), fill = TRUE)
+               \(n) athletics_find_athlete(n)$athlete_id[1], numeric(1))
+hist <- data.table::rbindlist(lapply(ids, athletics_athlete_results), fill = TRUE)
 
 # 2. Measure the model's parameters from the data
 cal <- calibrate(add_race_key(hist))
