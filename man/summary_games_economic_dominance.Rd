@@ -23,7 +23,7 @@ summary_games_economic_dominance(
 \code{"logit_gdp"}, \code{"logit_pop"}, \code{"excess_log_pop"}, \code{"excess_log_gdp"}, \code{"multiplier_log_pop"}, \code{"multiplier_log_gdp"},
 \code{"logit_log_pop"}, or \code{"logit_log_gdp"}.}
 
-\item{gamma}{Optional elasticity exponent. Defaults to \code{0.35} for population and \code{0.45} for GDP.}
+\item{gamma}{Optional elasticity exponent. Defaults to the hand-set \code{0.35} for population and \code{0.45} for GDP.}
 }
 \value{
 A \code{data.table} of economic-adjusted gold dominance rankings with method-specific column ordering.
@@ -35,9 +35,14 @@ Supports both linear scale and sub-linear power-law (log/sqrt) scale demographic
 Dynamically positions relevant ranking metrics at the front of the output table.
 }
 \details{
-Empirical Default Elasticities (from econometric regressions across 149 Games):
+Default elasticities are HAND-SET, not measured -- nothing in this package or
+citiusdata fits them. They damp a nation's share sub-linearly so a giant is
+not ranked purely on size:
 \itemize{
-\item Population Elasticity: \code{gamma = 0.35}
-\item GDP Elasticity: \code{gamma = 0.45}
+\item Population: \code{gamma = 0.35}
+\item GDP: \code{gamma = 0.45}
+An exception to the package's no-hand-tuned-constants rule, accepted because
+this ranking is descriptive and outside the forecast model. Pass \code{gamma} to
+override; fit them from the medal tables before this ranking is published.
 }
 }

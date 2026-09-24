@@ -21,7 +21,7 @@ summary_games_dominance(
 
 \item{method}{Ranking method to use. Defaults to \code{"raw"}.}
 
-\item{gamma}{Elasticity exponent for sub-linear log/power scaling. Defaults to empirical baseline (0.35 for pop, 0.45 for GDP).}
+\item{gamma}{Elasticity exponent for sub-linear log/power scaling. Defaults to the hand-set values in \code{\link[=summary_games_economic_dominance]{summary_games_economic_dominance()}} (0.35 for pop, 0.45 for GDP).}
 }
 \value{
 A \code{data.table} of dominance rankings.
