@@ -41,8 +41,9 @@ not ranked purely on size:
 \itemize{
 \item Population: \code{gamma = 0.35}
 \item GDP: \code{gamma = 0.45}
+}
+
 An exception to the package's no-hand-tuned-constants rule, accepted because
 this ranking is descriptive and outside the forecast model. Pass \code{gamma} to
 override; fit them from the medal tables before this ranking is published.
-}
 }
