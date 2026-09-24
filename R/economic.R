@@ -5,9 +5,15 @@
 #' Supports both linear scale and sub-linear power-law (log/sqrt) scale demographic/economic shares.
 #' Dynamically positions relevant ranking metrics at the front of the output table.
 #'
-#' Empirical Default Elasticities (from econometric regressions across 149 Games):
-#'   - Population Elasticity: `gamma = 0.35`
-#'   - GDP Elasticity: `gamma = 0.45`
+#' Default elasticities are HAND-SET, not measured -- nothing in this package or
+#' citiusdata fits them. They damp a nation's share sub-linearly so a giant is
+#' not ranked purely on size:
+#'   - Population: `gamma = 0.35`
+#'   - GDP: `gamma = 0.45`
+#'
+#' An exception to the package's no-hand-tuned-constants rule, accepted because
+#' this ranking is descriptive and outside the forecast model. Pass `gamma` to
+#' override; fit them from the medal tables before this ranking is published.
 #'
 #' @param games Optional character vector filtering by games.
 #' @param top_n Number of top performances to return. Defaults to 20.
@@ -15,7 +21,7 @@
 #' @param rank_by Metric to rank by: `"excess_gdp"`, `"excess_pop"`, `"multiplier_gdp"`, `"multiplier_pop"`,
 #'   `"logit_gdp"`, `"logit_pop"`, `"excess_log_pop"`, `"excess_log_gdp"`, `"multiplier_log_pop"`, `"multiplier_log_gdp"`,
 #'   `"logit_log_pop"`, or `"logit_log_gdp"`.
-#' @param gamma Optional elasticity exponent. Defaults to `0.35` for population and `0.45` for GDP.
+#' @param gamma Optional elasticity exponent. Defaults to the hand-set `0.35` for population and `0.45` for GDP.
 #' @return A `data.table` of economic-adjusted gold dominance rankings with method-specific column ordering.
 #' @export
 summary_games_economic_dominance <- function(games = NULL, top_n = 20L, min_golds = 5L, rank_by = "excess_gdp", gamma = NULL) {

@@ -207,7 +207,7 @@ get_games_medals <- function(games = NULL, year = NULL, nation = NULL) {
 #' @param top_n Number of top performances to return. Defaults to 20.
 #' @param min_golds Minimum golds required to qualify. Defaults to 5.
 #' @param method Ranking method to use. Defaults to `"raw"`.
-#' @param gamma Elasticity exponent for sub-linear log/power scaling. Defaults to empirical baseline (0.35 for pop, 0.45 for GDP).
+#' @param gamma Elasticity exponent for sub-linear log/power scaling. Defaults to the hand-set values in [summary_games_economic_dominance()] (0.35 for pop, 0.45 for GDP).
 #' @return A `data.table` of dominance rankings.
 #' @export
 summary_games_dominance <- function(games = NULL, top_n = 20L, min_golds = 5L, method = "raw", gamma = NULL) {
