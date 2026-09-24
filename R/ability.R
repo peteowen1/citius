@@ -1555,6 +1555,13 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #'   you know which athletes you are about to score -- a backtest or a
 #'   diagnostic over a fixed set of races -- because without it the refit spends
 #'   almost all of its time on athletes the caller will discard.
+#' @param sigma_k Optional robust-sigma scale computed once by the caller: a
+#'   single number, or a table of `event_id` and `k_ev`. Passing it lets `only`
+#'   skip the population it otherwise keeps just to compute `k`. With `only`,
+#'   the table must give every event a finite `k_ev` (thin events: the
+#'   caller's pooled `k`) -- a gap is an error, because the pooled `k` cannot
+#'   be computed correctly from the entrants alone. Without `only`, an event
+#'   the table omits uses the pooled `k` from the full input.
 #' @param peak_gamma Exponent upweighting an athlete's own better marks over
 #'   worse ones, ranked within (athlete, event). `0`, the default, weights
 #'   every result equally on this axis. Scalar, or a table with a

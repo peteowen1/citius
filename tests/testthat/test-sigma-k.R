@@ -43,6 +43,8 @@ test_that("passing k back with only= reproduces the per-event run, thin events i
   ref <- full[n >= 10L & is.finite(sigma_rob) & sigma_rob > 0 & is.finite(sigma_raw) & sigma_raw > 0]
   expect_gte(ref[event_id == "AT-100Metres-M", .N], 20L)
   expect_lt(ref[event_id == "AT-200Metres-M", .N], 20L)
+  # ...and k must be far enough from 1 that the old k = 1 fallback would show
+  expect_gt(abs(kt[event_id == "AT-200Metres-M"]$k_ev - 1), 0.01)
 
   ids <- c("3", "t2", "t5")
   hoisted <- estimate_ability(h, adjust_context = FALSE, only = ids, sigma_k = kt)
