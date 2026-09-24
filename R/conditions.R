@@ -45,7 +45,9 @@ conditions_params <- function(event_id, dir) {
 #'   `alt_adj`, `venue_off`.
 #' @export
 adjust_conditions <- function(params, wind = NA_real_, alt_m = NA_real_, indoor = FALSE, venue = NULL, stadium = NULL) {
-  n <- max(length(wind), length(alt_m), length(indoor), length(venue), length(stadium))
+  if (is.null(params))
+    cli::cli_abort("{.arg params} is NULL: this event has no fitted conditions model ({.fn conditions_params} returns NULL for it).")
+  n <-max(length(wind), length(alt_m), length(indoor), length(venue), length(stadium))
   wind <- rep_len(wind, n); alt_m <- rep_len(alt_m, n); indoor <- rep_len(indoor, n)
   interp <- function(grid, curve, x) {
     out <- numeric(length(x)); ok <- is.finite(x)
@@ -61,6 +63,11 @@ adjust_conditions <- function(params, wind = NA_real_, alt_m = NA_real_, indoor 
     venue <- rep_len(as.character(venue), n)
     hit <- !is.na(venue) & venue %in% names(params$venues)
     if (any(hit)) venue_off[hit] <- as.numeric(unlist(params$venues[venue[hit]]))
+    # One unknown venue is normal (offset 0 by design). Several distinct venues
+    # with none matching means the names no longer line up with the lookup,
+    # and the layer is off.
+    if (!any(hit) && data.table::uniqueN(venue[!is.na(venue)]) >= 2L)
+      cli::cli_warn("No venue in {.arg venue} matched the fitted venue lookup; the venue offset is 0 for every row.")
     if (!is.null(stadium) && length(params$stadiums)) {
       key <- paste(venue, rep_len(as.character(stadium), n), sep = "|")
       hs <- !is.na(venue) & !is.na(stadium) & key %in% names(params$stadiums)

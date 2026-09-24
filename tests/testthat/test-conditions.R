@@ -75,3 +75,20 @@ test_that("race_shock_loo never uses an athlete's own residual", {
 test_that("conditions_params returns NULL for an event with no file", {
   expect_null(conditions_params("AT-Nothing-M", tempdir()))
 })
+
+test_that("adjust_conditions refuses NULL params instead of failing inside approx()", {
+  expect_error(adjust_conditions(NULL, alt_m = 100), "no fitted conditions model")
+  expect_error(adjust_conditions(NULL, alt_m = NA_real_), "no fitted conditions model")
+})
+
+test_that("a venue lookup that matches nothing says so; one unknown venue does not", {
+  p <- fake_params(); p$venues <- list(Eugene = 0.004, Doha = -0.003)
+  # the shape of a renamed city string: every venue misses, the layer is off
+  expect_warning(a <- adjust_conditions(p, alt_m = 100, venue = c("EUGENE", "DOHA", "Monaco")),
+                 "No venue")
+  expect_equal(a$venue_off, c(0, 0, 0))
+  # a single unknown venue is the designed fallback, not a wiring failure
+  expect_no_warning(adjust_conditions(p, alt_m = 100, venue = "Nowhere"))
+  # a partial miss is also by design
+  expect_no_warning(adjust_conditions(p, alt_m = 100, venue = c("Eugene", "Nowhere")))
+})

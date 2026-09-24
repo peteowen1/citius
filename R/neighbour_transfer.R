@@ -38,7 +38,15 @@ build_neighbour_rank_reference <- function(results, events, as_of = Sys.Date(), 
   dt <- data.table::as.data.table(results)
   dt <- dt[!is.na(perf) & !is.na(event_id) & event_id %in% events]
   if (!is.null(dt$date)) dt <- dt[date <= as_of]
-  ab <- suppressWarnings(estimate_ability(dt, as_of = as_of, ...))
+  # Called once per time bucket, so estimate_ability()'s routine warnings would
+  # repeat for every bucket; muffle those. The altitude "matched no rows" guard
+  # is let through: it means a feature is silently off, not noise.
+  ab <- withCallingHandlers(
+    estimate_ability(dt, as_of = as_of, ...),
+    warning = function(w) {
+      if (!grepl("calibration$altitude matched no rows", conditionMessage(w), fixed = TRUE))
+        invokeRestart("muffleWarning")
+    })
   if (!nrow(ab)) {
     return(data.table::data.table(event_id = character(), pctl = numeric(),
                                    ability_raw = numeric()))

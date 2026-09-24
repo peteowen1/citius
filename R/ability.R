@@ -2116,8 +2116,12 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     # today's behaviour rather than to a noisy ratio from a handful of rows.
     if (!is.null(sigma_k)) {
       # Supplied by the caller. A bare number applies everywhere; a table is
-      # matched per event and falls back to the pooled k for events it omits,
-      # so a partial table degrades gracefully instead of producing NA sigma.
+      # matched per event. Without `only`, an event the table omits falls back
+      # to the pooled k, which is the population value. WITH `only`, the hoist
+      # above has already dropped that population, so k_pool here comes from a
+      # handful of entrants and usually collapses to 1 -- sigma ~15-25% too
+      # small, silently. The caller must cover every event (backfilling thin
+      # ones with its own pooled k), and a gap is an error, not a fallback.
       if (is.numeric(sigma_k) && length(sigma_k) == 1L) {
         ab[, .k_use := as.numeric(sigma_k)]
       } else {
@@ -2125,6 +2129,13 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
         if (!all(c("event_id", "k_ev") %in% names(skt)))
           cli::cli_abort("{.arg sigma_k} must be a single number or a table with {.field event_id} and {.field k_ev}.")
         ab[, .k_use := skt$k_ev[match(event_id, skt$event_id)]]
+        if (!is.null(only)) {
+          miss <- unique(as.character(ab[!is.finite(.k_use)]$event_id))
+          if (length(miss))
+            cli::cli_abort(c(
+              "{.arg sigma_k} has no finite {.field k_ev} for {length(miss)} event{?s} scored with {.arg only}: {.val {miss}}.",
+              "i" = "With {.arg only} the population k is not available here; give every event a k (thin events: the caller's pooled k)."))
+        }
         ab[!is.finite(.k_use), .k_use := k_pool]
       }
     } else if (identical(Sys.getenv("CITIUS_SIGMA_K_BY_EVENT", "0"), "1")) {

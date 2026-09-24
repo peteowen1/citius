@@ -20,6 +20,7 @@ estimate_ability(
   sigma_mode = c("athlete", "event"),
   only = NULL,
   peak_gamma = 0,
+  sigma_k = NULL,
   robust_location = FALSE,
   decouple_peak = FALSE,
   adjust_race = FALSE
