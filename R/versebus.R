@@ -37,6 +37,43 @@ VERSEBUS_VERSION <- "1.1.0"
   cli::cli_abort(msg, class = c(subclass, "vb_error"), ..., .envir = .envir)
 }
 
+# The token piggyback will upload with. gh::gh_token() reads GITHUB_PAT /
+# GITHUB_TOKEN (or a git credential helper) and NOT GH_TOKEN, which is the
+# variable the gh CLI uses -- so a workflow that sets only GH_TOKEN uploads with
+# an empty token. Wrapped so tests can stand in for it.
+.vb_token <- function() {
+  if (!requireNamespace("gh", quietly = TRUE)) return("")
+  tryCatch(as.character(gh::gh_token()), error = function(e) "")
+}
+
+# Wrapped so tests can stand in for the network call.
+.vb_pb_upload <- function(path, repo, tag) {
+  piggyback::pb_upload(path, repo = repo, tag = tag, overwrite = TRUE)
+}
+
+# HTTP status codes >= 300 in whatever pb_upload() returned. piggyback 0.1.5's
+# pb_upload_file() POSTs the asset and returns the httr response WITHOUT
+# checking it (it only warns when show_progress is on, which is off
+# non-interactively), so a refused upload comes back looking like success.
+# citiusdata run 38487753749 (2026-10-14) spent 95s of "verify race" retries
+# on uploads GitHub had refused outright.
+.vb_refused_status <- function(res) {
+  res <- if (inherits(res, "response")) list(res) else res
+  if (!is.list(res)) return(integer(0))
+  codes <- vapply(Filter(function(r) inherits(r, "response"), res),
+                  function(r) as.integer(r$status_code), integer(1))
+  codes[!is.na(codes) & codes >= 300L]
+}
+
+.vb_upload_checked <- function(path, repo, tag) {
+  refused <- .vb_refused_status(.vb_pb_upload(path, repo, tag))
+  if (length(refused)) {
+    stop(sprintf("GitHub refused the upload (HTTP %s)", paste(refused, collapse = ", ")),
+         call. = FALSE)
+  }
+  invisible(TRUE)
+}
+
 #' Classify an error from a release/network operation
 #'
 #' The cardinal versebus rule: when classification is uncertain, the answer is
@@ -658,13 +695,21 @@ vb_publish <- function(paths, repo, tag,
     }
   }, add = TRUE)
 
+  # 3a. No token, no upload. Without this an empty token is only discovered
+  # ~95s later as "missing from listing", which reads as an API race.
+  if (!nzchar(.vb_token())) {
+    .vb_abort(c("vb_publish: no GitHub token visible to piggyback for {repo}@{tag} -- nothing uploaded.",
+                "i" = "gh::gh_token() reads GITHUB_PAT or GITHUB_TOKEN, not GH_TOKEN. In a workflow, set GITHUB_PAT: ${{{{ secrets.GITHUB_TOKEN }}}}."),
+              "vb_error_auth")
+  }
+
   # 3. Upload data assets with bounded exponential backoff; collect failures.
   failures <- character(0)
   for (p in paths) {
     ok <- FALSE
     for (attempt in seq_len(max_retries + 1L)) {
       ok <- tryCatch({
-        piggyback::pb_upload(p, repo = repo, tag = tag, overwrite = TRUE)
+        .vb_upload_checked(p, repo, tag)
         TRUE
       }, error = function(e) {
         cli::cli_alert_warning("upload attempt {attempt} failed for {basename(p)}: {conditionMessage(e)}")
@@ -747,7 +792,7 @@ vb_publish <- function(paths, repo, tag,
   merged <- .vb_merge_entries(if (carry_forward) prev else NULL, entries)
   tmp <- file.path(tempdir(), "bus_manifest.json")
   manifest <- vb_write_manifest(merged, tag, tmp)
-  up <- function() piggyback::pb_upload(tmp, repo = repo, tag = tag, overwrite = TRUE)
+  up <- function() .vb_upload_checked(tmp, repo, tag)
   tryCatch(up(), error = function(e) { Sys.sleep(5); up() })
 
   # 7. Own-write cache invalidation hook.
