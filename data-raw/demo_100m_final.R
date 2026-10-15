@@ -8,9 +8,9 @@ FIELD <- c("Noah Lyles", "Kishane Thompson", "Letsile Tebogo", "Christian Colema
            "Akani Simbine", "Oblique Seville", "Ferdinand Omanyala", "Fred Kerley")
 
 histories <- rbindlist(lapply(FIELD, function(nm) {
-  cand <- find_athlete(nm)
+  cand <- athletics_find_athlete(nm)
   if (!nrow(cand)) return(NULL)
-  r <- athlete_results(cand[sex == "M"][1]$athlete_id)
+  r <- athletics_athlete_results(cand[sex == "M"][1]$athlete_id)
   if (nrow(r)) r[, athlete_name := nm]
   r
 }), use.names = TRUE, fill = TRUE)
