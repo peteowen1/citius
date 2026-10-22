@@ -15,7 +15,8 @@ simulate_event(
   calibration = NULL,
   condition_prior_weight = 0,
   seed = NULL,
-  context = NULL
+  context = NULL,
+  sensitivity_scale = NULL
 )
 }
 \arguments{
@@ -63,6 +64,12 @@ round class \code{final}/\code{semi}/\code{heat}/\code{other}). When the calibra
 a \code{condition_sd_context} table the shared-shock sd is taken from the
 matching event or family cell instead of the event-wide value; otherwise
 ignored. \code{NULL} (the default) reproduces the event-wide behaviour exactly.}
+
+\item{sensitivity_scale}{Optional divisor for the calibrated condition
+sensitivities. \code{NULL} (the default) divides by the field mean, so the
+field-average response is exactly 1 -- see \code{\link[=condition_sensitivity]{condition_sensitivity()}}. Set
+it only to pin that normalisation to a \emph{different} field than the one
+simulated, as \code{\link[=rating_medal_chance]{rating_medal_chance()}} does.}
 }
 \value{
 An object of class \code{citius_sim}: a list with the raw \code{perf} matrix
