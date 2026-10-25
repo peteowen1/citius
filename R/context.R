@@ -45,15 +45,24 @@ fit_context_effect <- function(results, covariate, by_event = TRUE, min_n = 30L)
   # planted 0.010 with an 85/15 split it recovered about 0.005.
   grp <- if (by_event) c("event_id", "level") else "level"
   dt[, lev_eff := 0]
+  # Integer group ids computed once, and every grouped mean taken over a plain
+  # column, so data.table's optimised grouped mean (GForce) applies. Grouping on
+  # the character ids re-hashes them every sweep, and `mean(perf - lev_eff)`
+  # over an expression falls back to one R call per group. Same arithmetic,
+  # several times faster; see decompose_races().
+  dt[, ae_id_ := .GRP, by = .(athlete_id, event_id)]
+  dt[, lv_id_ := .GRP, by = grp]
   for (i in 1:50) {
-    dt[, ath_eff := mean(perf - lev_eff), by = .(athlete_id, event_id)]
+    dt[, d_ := perf - lev_eff]
+    dt[, ath_eff := mean(d_), by = ae_id_]
     # Grouped update IN PLACE, not a merge. The old form built an intermediate
     # per-level table and merge()d it back -- rebuilding every row and column of
     # the table once per sweep purely to attach one number per level, which is
     # the identical pattern decompose_races() documents and fixed with an
     # update join. Here no join is needed at all: a grouped `:=` writes the
     # level mean straight onto the rows.
-    dt[, le := mean(perf - ath_eff), by = grp]
+    dt[, d_ := perf - ath_eff]
+    dt[, le := mean(d_), by = lv_id_]
     delta <- max(abs(dt$le - dt$lev_eff), na.rm = TRUE)
     dt[, lev_eff := le][, le := NULL]
     if (is.finite(delta) && delta < 1e-9) break
