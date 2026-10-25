@@ -430,3 +430,63 @@ load_athletics_history <- function(conn, athlete_ids = NULL, events = NULL,
   if (length(where)) sql <- paste(sql, "WHERE", paste(where, collapse = " AND "))
   data.table::setDT(DBI::dbGetQuery(conn, sql, params = params))
 }
+
+#' Load a store table from citius.duckdb, falling back to its .rds export
+#'
+#' The one shared copy of the "try citius.duckdb, else readRDS" block that
+#' citiusdata scripts used to paste inline (23 copies as of 2026-10-25). The
+#' pasted copies dropped every filter on the fallback path: a caller asking
+#' for 7 of championship_results' 33 columns got all 33 x 5M rows from the
+#' .rds whenever DuckDB was unavailable (e.g. a writer holding the lock).
+#' Here the fallback applies the same `events` / `from` / `to` /
+#' `athlete_ids` / `columns` filters as the DuckDB load, so both paths return
+#' the same shape.
+#'
+#' Falls back when the DuckDB load errors (warning, naming the error) or
+#' returns zero rows -- the same rule the pasted copies used.
+#'
+#' @param table One of `"championship_results"`, `"athletics_corpus"`,
+#'   `"athletics_history"`.
+#' @param rds_path Path to the table's `.rds` export, read only on fallback.
+#' @param events,from,to,athlete_ids,columns Filters, as in
+#'   `load_championship_results()`.
+#' @param path Explicit DuckDB path; `NULL` resolves via `get_citius_db_path()`.
+#' @return A data.table.
+#' @export
+load_store_table <- function(table = c("championship_results", "athletics_corpus",
+                                       "athletics_history"),
+                             rds_path, events = NULL, from = NULL, to = NULL,
+                             athlete_ids = NULL, columns = NULL, path = NULL) {
+  table <- match.arg(table)
+  x <- tryCatch(
+    with_citius_db_connection(function(conn) .citius_load(
+      conn, table, events = events, from = from, to = to,
+      columns = columns, athlete_ids = athlete_ids),
+      path = path, read_only = TRUE),
+    error = function(e) {
+      cli::cli_warn("citius.duckdb unavailable ({conditionMessage(e)}); falling back to {basename(rds_path)}.")
+      NULL
+    }
+  )
+  if (!is.null(x) && nrow(x)) return(x)
+
+  if (!file.exists(rds_path)) {
+    cli::cli_abort("Fallback file {.file {rds_path}} does not exist.")
+  }
+  x <- data.table::setDT(readRDS(rds_path))
+  if (!is.null(columns)) {
+    unknown <- setdiff(columns, names(x))
+    if (length(unknown)) {
+      cli::cli_abort(c(
+        "x" = "{.file {basename(rds_path)}} has no column{?s} {.val {unknown}}."))
+    }
+  }
+  keep <- rep(TRUE, nrow(x))
+  if (!is.null(events))      keep <- keep & x[["event_id"]] %in% events
+  if (!is.null(athlete_ids)) keep <- keep & as.character(x[["athlete_id"]]) %in% as.character(athlete_ids)
+  if (!is.null(from))        keep <- keep & !is.na(x[["date"]]) & as.Date(x[["date"]]) >= as.Date(from)
+  if (!is.null(to))          keep <- keep & !is.na(x[["date"]]) & as.Date(x[["date"]]) <= as.Date(to)
+  x <- x[keep]
+  if (!is.null(columns)) x <- x[, columns, with = FALSE]
+  x
+}
