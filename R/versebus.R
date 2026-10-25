@@ -4,7 +4,7 @@
 # Pattern spec: C:\dev\ECOSYSTEM-FIX-PLAN.md S1. Repo-specific glue (repo/tag
 # resolution, cache invalidation) stays OUT of this file -- callers pass
 # repo/tag explicitly and register hooks via options() (see vb_publish).
-VERSEBUS_VERSION <- "1.1.0"
+VERSEBUS_VERSION <- "1.1.1"
 
 # Session state: one-time legacy warnings, manifest-seen memory (for the
 # retry-once-on-momentary-absence rule), manifest fetch rate limiting.
@@ -302,6 +302,32 @@ vb_list_assets <- function(repo, tag) {
     if (as.integer(resp$status_code) %in% c(404L, 410L)) return(VB_ASSET_CONFIRMED_ABSENT)
     NA_real_
   }, error = function(e) NA_real_)
+}
+
+# Make piggyback re-list on every call (cache duration 1s) and return a
+# function that restores the caller's setting; use as
+# `restore <- .vb_with_fresh_listing(); on.exit(restore(), add = TRUE)` (call the
+# helper NOW; only the restore belongs in on.exit) so a publish never leaks
+# the setting to unrelated callers.
+#
+# It also turns off gh's own HTTP cache (`options(gh_cache = FALSE)`). gh >= 1.4
+# wraps every GET in httr2::req_cache(), and GitHub sends
+# `Cache-Control: private, max-age=60`, so a release listing fetched within the
+# last 60 s is served from disk WITHOUT asking GitHub -- piggyback's listings go
+# through gh too, so the cache-duration setting above never reached it.
+# Measured 2026-10-25 against a scratch tag on torpdata: with the listing
+# fetched once beforehand, a just-uploaded asset stayed absent from the
+# gh-cached listing for 56 s while an uncached listing showed it at once, and
+# safe_release_upload() took 70 s instead of ~4 s.
+.vb_with_fresh_listing <- function() {
+  prev <- Sys.getenv("piggyback_cache_duration", unset = NA)
+  Sys.setenv(piggyback_cache_duration = 1)
+  prev_gh <- options(gh_cache = FALSE)
+  function() {
+    if (is.na(prev)) Sys.unsetenv("piggyback_cache_duration")
+    else Sys.setenv(piggyback_cache_duration = prev)
+    options(prev_gh)
+  }
 }
 
 #' Positively confirm an asset is absent from a release
@@ -685,15 +711,8 @@ vb_publish <- function(paths, repo, tag,
   # bare Sys.setenv() that leaked for the rest of the session, silently
   # disabling piggyback's listing cache for every unrelated caller after the
   # first publish.
-  .vb_prev_cache_duration <- Sys.getenv("piggyback_cache_duration", unset = NA)
-  Sys.setenv(piggyback_cache_duration = 1)
-  on.exit({
-    if (is.na(.vb_prev_cache_duration)) {
-      Sys.unsetenv("piggyback_cache_duration")
-    } else {
-      Sys.setenv(piggyback_cache_duration = .vb_prev_cache_duration)
-    }
-  }, add = TRUE)
+  restore_cache <- .vb_with_fresh_listing()
+  on.exit(restore_cache(), add = TRUE)
 
   # 3a. No token, no upload. Without this an empty token is only discovered
   # ~95s later as "missing from listing", which reads as an API race.
