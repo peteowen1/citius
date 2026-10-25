@@ -106,6 +106,12 @@ a function call per group is the first thing to suspect if this gets slow again.
 
 - `data.table` throughout; declare NSE symbols in `R/globals.R`
 - snake_case columns everywhere
-- Both source adapters return the *same canonical schema* so models never see
-  feed-specific columns. Add new feeds by writing an adapter, not by teaching
-  models about a new shape.
+- The aim is one canonical result schema across source adapters, so models
+  never see feed-specific columns. Add new feeds by writing an adapter, not by
+  teaching models about a new shape. **The code does not keep this yet:**
+  `aquatics_results()` returns a character `athlete_id` (athletics: integer),
+  no `competition_id`, `race_code`, `venue_country` or `result_score`, and
+  feed-specific columns (`lane`, `reaction_time`, `fina_points`, `split_50`,
+  `heat_name`, ...). Callers must add `competition_id`/`race_key` themselves
+  (see `citiusdata/scripts/harvest_swimming_meets.R`). Do not assume two
+  adapters' rows line up without checking.

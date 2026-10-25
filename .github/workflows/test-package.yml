@@ -31,13 +31,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      # citiusdata beside the package, because three tests in
+      # citiusdata beside the package, because four tests in
       # test-calibration-wiring.R resolve it via wiring_verse_root() and
       # skip_if() when it is absent. Without this step they SKIPPED SILENTLY on
-      # every CI run -- including the deployment check that asserts every
-      # adjustment layer the package reads is present in the shipped
-      # calibration. A guard built to catch "half the layers are inert and
+      # every CI run. A guard built to catch "half the layers are inert and
       # nobody knows" was itself never running. Found 2026-08-13.
+      # This checkout does NOT make the deployment check run on CI. That test
+      # (every adjustment layer the package reads is present in the shipped
+      # calibration) also needs the deployed calibration .rds named in
+      # citiusdata/scripts/_deployed.R. The .rds lives in a citiusdata Release,
+      # not in git (data/* is gitignored), and nothing here downloads it, so on
+      # CI that test still skips with "deployed calibration not present". It
+      # only runs locally, where the .rds is on disk.
       # No continue-on-error: a failed checkout would make wiring_verse_root()
       # return NULL, all four wiring tests skip_if(), and CI report green --
       # re-creating the silent-skip this step exists to prevent. If this step
