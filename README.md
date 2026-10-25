@@ -29,6 +29,9 @@ ids  <- vapply(c("Kishane Thompson", "Noah Lyles", "Letsile Tebogo"),
 hist <- data.table::rbindlist(lapply(ids, athletics_athlete_results), fill = TRUE)
 
 # 2. Measure the model's parameters from the data
+#    add_race_key() builds a rough competition|event|round|date key: it cannot
+#    separate heats, and rows with no competition_id pool together. Fine for a
+#    demo; for a real calibration use the corpus build (see Design notes).
 cal <- calibrate(add_race_key(hist))
 
 # 3. Estimate ability and simulate
@@ -40,8 +43,14 @@ medal_probs(sim)
 prob_better_than(sim, 9.80, who = "any")
 ```
 
-Swimming works the same way through `aquatics_competitions()`,
-`aquatics_disciplines()` and `aquatics_results()`.
+Swimming has its own source functions, `aquatics_competitions()`,
+`aquatics_disciplines()` and `aquatics_results()`, but their rows are not the
+same shape as the athletics ones. `aquatics_results()` returns no
+`competition_id`, `race_code`, `venue_country` or `result_score`, its
+`athlete_id` is character rather than integer, and it adds feed-specific columns
+(`heat_name`, `heat_place`, `lane`, `reaction_time`, `fina_points`, `split_50`,
+`age_at_result`). The caller must add `competition_id` (and a `race_key`)
+before calibrating; `citiusdata/scripts/harvest_swimming_meets.R` shows how.
 
 ## Design notes
 
@@ -54,9 +63,14 @@ those are labelled placeholders, not estimates.
 
 **Whole fields are what make it work.** Splitting `perf = athlete + race +
 residual` is the only way to tell "off day" apart from "slow race for everyone",
-and it needs performances that shared a race. `add_race_key()` recovers those
-groupings from athlete histories, so calibration quality scales with how many
-athletes you harvest.
+and it needs performances that shared a race. `add_race_key()` only
+approximates those groupings from athlete histories: its key is
+competition|event|round|date, so every heat of a round merges into one
+pseudo-race, and rows with no `competition_id` (about half the athletics
+athlete-endpoint rows, where the feed sends 0) all pool into one race per
+event, round and date. A real calibration comes from the corpus build
+(`citiusdata/scripts/build_athletics_corpus.R`), which keeps the authoritative
+race keys.
 
 **Everything is on an oriented log scale.** `to_perf()` maps marks to a space
 where higher is always better, so a 9.58s sprint and an 8.95m long jump are
