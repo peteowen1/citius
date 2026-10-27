@@ -79,8 +79,17 @@ aquatics_athlete_results <- function(athlete_id, sex = NULL) {
   # (time-event) silently produced a WRONG-SIGNED perf for unmatched FIELD
   # events, undoing the guarantee match_event() exists to give.
   dt[, perf := to_perf(mark, orientation)]
-  # No competition_id is returned, so the race key is built from what uniquely
-  # identifies a race here: meet, event, phase and date.
+  # No competition_id is returned, so the race key is built from meet, event,
+  # phase and date. That identifies a ROUND, not a race: every heat of a round
+  # (all heats of the 100m Freestyle on one day of one meet) shares one
+  # race_key, so decompose_races() and calibrate() treat separately-run heats
+  # as one race -- the same defect source_athletics.R fixed with raceNumber.
+  # It is not fixed here because none of the fields this parser reads separates
+  # heats. The competition route has one (Heats[[i]]$Name, plus HeatRank beside
+  # Rank; see aquatics_results()), but whether this route's per-swim objects
+  # carry an equivalent has not been checked against a live response. Do not
+  # build a discriminator from anything else: an invented key that splits the
+  # wrong rows is worse than a known pooling.
   dt[, race_key := paste(comp_name, discipline, round, date, sep = "|")]
   dt[]
 }
