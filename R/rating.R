@@ -30,7 +30,7 @@
 #' **The reference field is a choice hidden inside the number**, so it is
 #' returned as an attribute and should be quoted with it.
 #'
-#' * `"top8"` (the default; also `"top3"`, `"top12"`, ...) takes the best `N`
+#' * `"top8"` (the default; also `"top5"`, `"top12"`, ...; at least 4) takes the best `N`
 #'   rows of `ability` by `ability`. It answers "against the field as it stands
 #'   in this table", and **moves as the field moves**: a rating computed from a
 #'   2019 table and one from a 2026 table are against different fields and are
