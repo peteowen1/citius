@@ -16,7 +16,7 @@ test_that("vb_publish refuses to upload without a token", {
   uploads <- 0L
   local_mocked_bindings(
     .vb_token = function() "",
-    .vb_pb_upload = function(...) { uploads <<- uploads + 1L; fake_response(201L) }
+    .vb_safe_upload = function(...) { uploads <<- uploads + 1L; invisible(1) }
   )
   expect_error(
     vb_publish(local_asset(), repo = "o/r", tag = "t", carry_forward = FALSE),
@@ -30,9 +30,11 @@ test_that("a refused upload fails as an upload failure, before any listing check
   listed <- 0L
   local_mocked_bindings(
     .vb_token = function() "ghp_test",
-    .vb_pb_upload = function(...) list(fake_response(401L)),  # pb_upload returns a list
     vb_list_assets = function(...) { listed <<- listed + 1L; data.frame(name = character(), size = numeric()) }
   )
+  # versebus 1.2.0: the refusal is caught inside .vb_safe_upload(), right
+  # after piggyback returns it (pb_upload returns a list of responses).
+  local_mocked_bindings(pb_upload = function(...) list(fake_response(401L)), .package = "piggyback")
   err <- expect_error(
     vb_publish(local_asset(), repo = "o/r", tag = "t", carry_forward = FALSE, max_retries = 0),
     class = "vb_error_transient"
@@ -70,7 +72,7 @@ test_that("vb_publish's post-upload verify reads the listing with gh's cache off
   seen <- logical(0)
   local_mocked_bindings(
     .vb_token = function() "ghp_test",
-    .vb_pb_upload = function(...) list(fake_response(201L)),
+    .vb_safe_upload = function(...) invisible(1),
     vb_list_assets = function(...) {
       seen <<- c(seen, isFALSE(getOption("gh_cache")))
       data.frame(name = basename(p), size = as.numeric(file.size(p)), stringsAsFactors = FALSE)
