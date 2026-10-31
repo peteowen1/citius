@@ -25,6 +25,16 @@
 #' @return A `data.table` of economic-adjusted gold dominance rankings with method-specific column ordering.
 #' @export
 summary_games_economic_dominance <- function(games = NULL, top_n = 20L, min_golds = 5L, rank_by = "excess_gdp", gamma = NULL) {
+  if (!(length(rank_by) == 1L && rank_by %in% .economic_rank_by)) {
+    choices <- .economic_choices_text(.economic_rank_by)
+    cli::cli_abort("Unknown rank_by option. Choose from: {choices}.")
+  }
+  parts <- regmatches(rank_by, regexec("^(excess|multiplier|logit)_((log_)?(pop|gdp))$", rank_by))[[1]]
+  metric <- parts[2]
+  is_log <- nzchar(parts[4])
+  var_col <- if (parts[5] == "pop") "population" else "gdp_usd"
+  tot_col <- if (parts[5] == "pop") "tot_comp_pop" else "tot_comp_gdp"
+
   if (is.null(gamma)) {
     if (grepl("gdp", rank_by)) {
       gamma <- 0.45
@@ -105,162 +115,76 @@ summary_games_economic_dominance <- function(games = NULL, top_n = 20L, min_gold
   merged <- merge(merged, denom, by = c("games", "year"), all.x = TRUE)
   
   merged[, act_gold_pct := (as.numeric(gold) / total_golds_in_games) * 100.0]
-  merged[, pop_share_pct := (as.numeric(population) / tot_comp_pop) * 100.0]
-  merged[, gdp_share_pct := (as.numeric(gdp_usd) / tot_comp_gdp) * 100.0]
-  
-  merged[, excess_gold_vs_pop := act_gold_pct - pop_share_pct]
-  merged[, excess_gold_vs_gdp := act_gold_pct - gdp_share_pct]
-  merged[, pop_multiplier := act_gold_pct / pop_share_pct]
-  merged[, gdp_multiplier := act_gold_pct / gdp_share_pct]
-  
-  # Sub-linear power-law elasticity scaling. The denominator is summed over
-  # DISTINCT economies for the same reason as the linear one above: summing
-  # over rows counts the UK once per home nation.
-  merged[, pop_pow := (as.numeric(population))^gamma]
-  merged[, gdp_pow := (as.numeric(gdp_usd))^gamma]
-  denom_pow <- unique(merged[!is.na(iso3), .(games, year, iso3, pop_pow, gdp_pow)])
-  denom_pow <- denom_pow[, .(tot_comp_pop_pow = sum(pop_pow, na.rm = TRUE),
-                             tot_comp_gdp_pow = sum(gdp_pow, na.rm = TRUE)),
-                         by = .(games, year)]
-  merged <- merge(merged, denom_pow, by = c("games", "year"), all.x = TRUE)
-  
-  merged[, log_pop_share_pct := (pop_pow / tot_comp_pop_pow) * 100.0]
-  merged[, log_gdp_share_pct := (gdp_pow / tot_comp_gdp_pow) * 100.0]
-  
-  merged[, excess_log_pop := act_gold_pct - log_pop_share_pct]
-  merged[, excess_log_gdp := act_gold_pct - log_gdp_share_pct]
-  merged[, mult_log_pop := act_gold_pct / log_pop_share_pct]
-  merged[, mult_log_gdp := act_gold_pct / log_gdp_share_pct]
-  
-  # Logistic Logit Shifts
-  merged[, p_act := as.numeric(gold) / total_golds_in_games]
-  merged[p_act >= .citius_logit_clip, p_act := .citius_logit_clip]
-  merged[, p_pop := pop_share_pct / 100.0]
-  merged[, p_gdp := gdp_share_pct / 100.0]
-  merged[, p_log_pop := log_pop_share_pct / 100.0]
-  merged[, p_log_gdp := log_gdp_share_pct / 100.0]
-  
-  merged[p_pop <= 0.00001, p_pop := 0.00001]
-  merged[p_pop >= 0.99999, p_pop := 0.99999]
-  merged[p_gdp <= 0.00001, p_gdp := 0.00001]
-  merged[p_gdp >= 0.99999, p_gdp := 0.99999]
-  merged[p_log_pop <= 0.00001, p_log_pop := 0.00001]
-  merged[p_log_pop >= 0.99999, p_log_pop := 0.99999]
-  merged[p_log_gdp <= 0.00001, p_log_gdp := 0.00001]
-  merged[p_log_gdp >= 0.99999, p_log_gdp := 0.99999]
-  
-  logit_fun <- function(p) log(p / (1.0 - p))
-  
-  merged[, logit_act := logit_fun(p_act)]
-  merged[, logit_pop := logit_fun(p_pop)]
-  merged[, logit_gdp := logit_fun(p_gdp)]
-  merged[, logit_lpop := logit_fun(p_log_pop)]
-  merged[, logit_lgdp := logit_fun(p_log_gdp)]
-  
-  merged[, logit_shift_pop := logit_act - logit_pop]
-  merged[, logit_shift_gdp := logit_act - logit_gdp]
-  merged[, logit_shift_log_pop := logit_act - logit_lpop]
-  merged[, logit_shift_log_gdp := logit_act - logit_lgdp]
-  
-  merged[, odds_ratio_pop := exp(logit_shift_pop)]
-  merged[, odds_ratio_gdp := exp(logit_shift_gdp)]
-  merged[, odds_ratio_log_pop := exp(logit_shift_log_pop)]
-  merged[, odds_ratio_log_gdp := exp(logit_shift_log_gdp)]
-  
-  if (rank_by == "excess_gdp") {
-    data.table::setorder(merged, -excess_gold_vs_gdp, -gold, na.last = TRUE)
-  } else if (rank_by == "excess_pop") {
-    data.table::setorder(merged, -excess_gold_vs_pop, -gold, na.last = TRUE)
-  } else if (rank_by == "multiplier_gdp") {
-    data.table::setorder(merged, -gdp_multiplier, -gold, na.last = TRUE)
-  } else if (rank_by == "multiplier_pop") {
-    data.table::setorder(merged, -pop_multiplier, -gold, na.last = TRUE)
-  } else if (rank_by == "logit_gdp") {
-    data.table::setorder(merged, -logit_shift_gdp, -gold, na.last = TRUE)
-  } else if (rank_by == "logit_pop") {
-    data.table::setorder(merged, -logit_shift_pop, -gold, na.last = TRUE)
-  } else if (rank_by == "excess_log_pop") {
-    data.table::setorder(merged, -excess_log_pop, -gold, na.last = TRUE)
-  } else if (rank_by == "excess_log_gdp") {
-    data.table::setorder(merged, -excess_log_gdp, -gold, na.last = TRUE)
-  } else if (rank_by == "multiplier_log_pop") {
-    data.table::setorder(merged, -mult_log_pop, -gold, na.last = TRUE)
-  } else if (rank_by == "multiplier_log_gdp") {
-    data.table::setorder(merged, -mult_log_gdp, -gold, na.last = TRUE)
-  } else if (rank_by == "logit_log_pop") {
-    data.table::setorder(merged, -logit_shift_log_pop, -gold, na.last = TRUE)
-  } else if (rank_by == "logit_log_gdp") {
-    data.table::setorder(merged, -logit_shift_log_gdp, -gold, na.last = TRUE)
+
+  # Linear share of the chosen economic variable. It is always shown, and for
+  # the log_ bases it sits beside the power-law share that is ranked on.
+  merged[, lin_share_pct := (as.numeric(merged[[var_col]]) / merged[[tot_col]]) * 100.0]
+
+  if (is_log) {
+    # Sub-linear power-law elasticity scaling. The denominator is summed over
+    # DISTINCT economies for the same reason as the linear one above: summing
+    # over rows counts the UK once per home nation.
+    merged[, var_pow := (as.numeric(merged[[var_col]]))^gamma]
+    denom_pow <- unique(merged[!is.na(iso3), .(games, year, iso3, var_pow)])
+    denom_pow <- denom_pow[, .(tot_comp_pow = sum(var_pow, na.rm = TRUE)),
+                           by = .(games, year)]
+    merged <- merge(merged, denom_pow, by = c("games", "year"), all.x = TRUE)
+    merged[, exp_share_pct := (var_pow / tot_comp_pow) * 100.0]
+    share_col <- "exp_share_pct"
   } else {
-    cli::cli_abort("Unknown rank_by option. Choose from: 'excess_gdp', 'excess_pop', 'multiplier_gdp', 'multiplier_pop', 'logit_gdp', 'logit_pop', 'excess_log_pop', 'excess_log_gdp', 'multiplier_log_pop', 'multiplier_log_gdp', 'logit_log_pop', or 'logit_log_gdp'.")
+    share_col <- "lin_share_pct"
   }
-  
+
+  if (metric == "logit") {
+    # Logistic logit shift: actual share clipped above, expected share clamped
+    # into (0, 1) on both sides.
+    merged[, p_act := as.numeric(gold) / total_golds_in_games]
+    merged[p_act >= .citius_logit_clip, p_act := .citius_logit_clip]
+    merged[, p_exp := merged[[share_col]] / 100.0]
+    merged[p_exp <= 0.00001, p_exp := 0.00001]
+    merged[p_exp >= 0.99999, p_exp := 0.99999]
+    logit_fun <- function(p) log(p / (1.0 - p))
+    merged[, logit_shift := logit_fun(p_act) - logit_fun(p_exp)]
+    merged[, odds_ratio := exp(logit_shift)]
+    sort_col <- "logit_shift"
+  } else {
+    merged[, excess := act_gold_pct - merged[[share_col]]]
+    merged[, multiplier := act_gold_pct / merged[[share_col]]]
+    sort_col <- metric
+  }
+
+  data.table::setorderv(merged, c(sort_col, "gold"), order = c(-1L, -1L),
+                        na.last = TRUE)
+
   # Format numeric fields into display strings
+  fmt <- function(x, suffix) {
+    data.table::fifelse(!is.na(x), paste0(round(x, 1), suffix), "N/A")
+  }
+
   merged[, golds := gold]
   merged[, total_event_golds := total_golds_in_games]
-  merged[, fmt_actual_gold_pct := paste0(round(act_gold_pct, 1), "%")]
-  merged[, fmt_pop_share := data.table::fifelse(!is.na(pop_share_pct), paste0(round(pop_share_pct, 1), "%"), "N/A")]
-  merged[, fmt_gdp_share := data.table::fifelse(!is.na(gdp_share_pct), paste0(round(gdp_share_pct, 1), "%"), "N/A")]
-  merged[, fmt_exp_log_pop_share := data.table::fifelse(!is.na(log_pop_share_pct), paste0(round(log_pop_share_pct, 1), "%"), "N/A")]
-  merged[, fmt_exp_log_gdp_share := data.table::fifelse(!is.na(log_gdp_share_pct), paste0(round(log_gdp_share_pct, 1), "%"), "N/A")]
-  merged[, fmt_excess_vs_pop := data.table::fifelse(!is.na(excess_gold_vs_pop), paste0(round(excess_gold_vs_pop, 1), "%"), "N/A")]
-  merged[, fmt_excess_vs_gdp := data.table::fifelse(!is.na(excess_gold_vs_gdp), paste0(round(excess_gold_vs_gdp, 1), "%"), "N/A")]
-  merged[, fmt_excess_vs_log_pop := data.table::fifelse(!is.na(excess_log_pop), paste0(round(excess_log_pop, 1), "%"), "N/A")]
-  merged[, fmt_excess_vs_log_gdp := data.table::fifelse(!is.na(excess_log_gdp), paste0(round(excess_log_gdp, 1), "%"), "N/A")]
-  merged[, fmt_pop_multiplier := data.table::fifelse(!is.na(pop_multiplier), paste0(round(pop_multiplier, 1), "x"), "N/A")]
-  merged[, fmt_gdp_multiplier := data.table::fifelse(!is.na(gdp_multiplier), paste0(round(gdp_multiplier, 1), "x"), "N/A")]
-  merged[, fmt_mult_log_pop := data.table::fifelse(!is.na(mult_log_pop), paste0(round(mult_log_pop, 1), "x"), "N/A")]
-  merged[, fmt_mult_log_gdp := data.table::fifelse(!is.na(mult_log_gdp), paste0(round(mult_log_gdp, 1), "x"), "N/A")]
-  merged[, fmt_odds_ratio_pop := data.table::fifelse(!is.na(odds_ratio_pop), paste0(round(odds_ratio_pop, 1), "x"), "N/A")]
-  merged[, fmt_odds_ratio_gdp := data.table::fifelse(!is.na(odds_ratio_gdp), paste0(round(odds_ratio_gdp, 1), "x"), "N/A")]
-  merged[, fmt_odds_ratio_log_pop := data.table::fifelse(!is.na(odds_ratio_log_pop), paste0(round(odds_ratio_log_pop, 1), "x"), "N/A")]
-  merged[, fmt_odds_ratio_log_gdp := data.table::fifelse(!is.na(odds_ratio_log_gdp), paste0(round(odds_ratio_log_gdp, 1), "x"), "N/A")]
-  
+
   # Select base front columns
   base_cols <- c("games", "year", "country", "host", "competing_nations", "golds", "total_event_golds", "actual_gold_pct")
-  merged[, actual_gold_pct := fmt_actual_gold_pct]
+  merged[, actual_gold_pct := paste0(round(act_gold_pct, 1), "%")]
   merged[, country := nation]
   merged[, host := data.table::fifelse(is.na(host) | host == "", "Unknown", host)]
-  
-  # Method-specific front columns
-  if (rank_by == "excess_pop") {
-    method_cols <- c("pop_share", "excess_vs_pop", "pop_multiplier")
-    merged[, pop_share := fmt_pop_share]; merged[, excess_vs_pop := fmt_excess_vs_pop]; merged[, pop_multiplier := fmt_pop_multiplier]
-  } else if (rank_by == "excess_gdp") {
-    method_cols <- c("gdp_share", "excess_vs_gdp", "gdp_multiplier")
-    merged[, gdp_share := fmt_gdp_share]; merged[, excess_vs_gdp := fmt_excess_vs_gdp]; merged[, gdp_multiplier := fmt_gdp_multiplier]
-  } else if (rank_by == "multiplier_pop") {
-    method_cols <- c("pop_share", "pop_multiplier", "excess_vs_pop")
-    merged[, pop_share := fmt_pop_share]; merged[, pop_multiplier := fmt_pop_multiplier]; merged[, excess_vs_pop := fmt_excess_vs_pop]
-  } else if (rank_by == "multiplier_gdp") {
-    method_cols <- c("gdp_share", "gdp_multiplier", "excess_vs_gdp")
-    merged[, gdp_share := fmt_gdp_share]; merged[, gdp_multiplier := fmt_gdp_multiplier]; merged[, excess_vs_gdp := fmt_excess_vs_gdp]
-  } else if (rank_by == "logit_pop") {
-    method_cols <- c("pop_share", "logit_shift_pop", "odds_ratio_pop")
-    merged[, pop_share := fmt_pop_share]; merged[, odds_ratio_pop := fmt_odds_ratio_pop]; merged[, logit_shift_pop := round(logit_shift_pop, 2)]
-  } else if (rank_by == "logit_gdp") {
-    method_cols <- c("gdp_share", "logit_shift_gdp", "odds_ratio_gdp")
-    merged[, gdp_share := fmt_gdp_share]; merged[, odds_ratio_gdp := fmt_odds_ratio_gdp]; merged[, logit_shift_gdp := round(logit_shift_gdp, 2)]
-  } else if (rank_by == "excess_log_pop") {
-    method_cols <- c("pop_share", "exp_log_pop_share", "excess_vs_log_pop", "mult_log_pop")
-    merged[, pop_share := fmt_pop_share]; merged[, exp_log_pop_share := fmt_exp_log_pop_share]; merged[, excess_vs_log_pop := fmt_excess_vs_log_pop]; merged[, mult_log_pop := fmt_mult_log_pop]
-  } else if (rank_by == "excess_log_gdp") {
-    method_cols <- c("gdp_share", "exp_log_gdp_share", "excess_vs_log_gdp", "mult_log_gdp")
-    merged[, gdp_share := fmt_gdp_share]; merged[, exp_log_gdp_share := fmt_exp_log_gdp_share]; merged[, excess_vs_log_gdp := fmt_excess_vs_log_gdp]; merged[, mult_log_gdp := fmt_mult_log_gdp]
-  } else if (rank_by == "multiplier_log_pop") {
-    method_cols <- c("pop_share", "exp_log_pop_share", "mult_log_pop", "excess_vs_log_pop")
-    merged[, pop_share := fmt_pop_share]; merged[, exp_log_pop_share := fmt_exp_log_pop_share]; merged[, mult_log_pop := fmt_mult_log_pop]; merged[, excess_vs_log_pop := fmt_excess_vs_log_pop]
-  } else if (rank_by == "multiplier_log_gdp") {
-    method_cols <- c("gdp_share", "exp_log_gdp_share", "mult_log_gdp", "excess_vs_log_gdp")
-    merged[, gdp_share := fmt_gdp_share]; merged[, exp_log_gdp_share := fmt_exp_log_gdp_share]; merged[, mult_log_gdp := fmt_mult_log_gdp]; merged[, excess_vs_log_gdp := fmt_excess_vs_log_gdp]
-  } else if (rank_by == "logit_log_pop") {
-    method_cols <- c("pop_share", "exp_log_pop_share", "logit_shift_log_pop", "odds_ratio_log_pop")
-    merged[, pop_share := fmt_pop_share]; merged[, exp_log_pop_share := fmt_exp_log_pop_share]; merged[, odds_ratio_log_pop := fmt_odds_ratio_log_pop]; merged[, logit_shift_log_pop := round(logit_shift_log_pop, 2)]
-  } else if (rank_by == "logit_log_gdp") {
-    method_cols <- c("gdp_share", "exp_log_gdp_share", "logit_shift_log_gdp", "odds_ratio_log_gdp")
-    merged[, gdp_share := fmt_gdp_share]; merged[, exp_log_gdp_share := fmt_exp_log_gdp_share]; merged[, odds_ratio_log_gdp := fmt_odds_ratio_log_gdp]; merged[, logit_shift_log_gdp := round(logit_shift_log_gdp, 2)]
+
+  # Method-specific front columns, named and ordered as the lookup table says.
+  out <- .economic_outputs[[rank_by]]
+  method_values <- list(
+    share      = fmt(merged$lin_share_pct, "%"),
+    exp_share  = if (is_log) fmt(merged$exp_share_pct, "%"),
+    excess     = if (metric != "logit") fmt(merged$excess, "%"),
+    multiplier = if (metric != "logit") fmt(merged$multiplier, "x"),
+    logit      = if (metric == "logit") round(merged$logit_shift, 2),
+    odds       = if (metric == "logit") fmt(merged$odds_ratio, "x")
+  )
+  method_cols <- out$name
+  for (i in seq_along(method_cols)) {
+    data.table::set(merged, j = method_cols[i], value = method_values[[out$role[i]]])
   }
-  
+
   all_cols <- c(base_cols, method_cols)
   res <- merged[, ..all_cols]
   res <- utils::head(res, top_n)
@@ -273,4 +197,59 @@ summary_games_economic_dominance <- function(games = NULL, top_n = 20L, min_gold
   data.table::setattr(res, "unresolved_nations", unresolved)
   data.table::setattr(res, "n_unresolved", length(unresolved))
   res
+}
+
+
+# Output columns per rank_by method, one entry per method, in the order error
+# messages list them: `name` is the column in the returned table, `role` the
+# value it holds (see summary_games_economic_dominance()). The names are
+# irregular (pop_multiplier but mult_log_pop) and are kept as they were, so
+# this is the one place they are spelled out.
+.economic_outputs <- list(
+  excess_gdp = list(
+    name = c("gdp_share", "excess_vs_gdp", "gdp_multiplier"),
+    role = c("share", "excess", "multiplier")),
+  excess_pop = list(
+    name = c("pop_share", "excess_vs_pop", "pop_multiplier"),
+    role = c("share", "excess", "multiplier")),
+  multiplier_gdp = list(
+    name = c("gdp_share", "gdp_multiplier", "excess_vs_gdp"),
+    role = c("share", "multiplier", "excess")),
+  multiplier_pop = list(
+    name = c("pop_share", "pop_multiplier", "excess_vs_pop"),
+    role = c("share", "multiplier", "excess")),
+  logit_gdp = list(
+    name = c("gdp_share", "logit_shift_gdp", "odds_ratio_gdp"),
+    role = c("share", "logit", "odds")),
+  logit_pop = list(
+    name = c("pop_share", "logit_shift_pop", "odds_ratio_pop"),
+    role = c("share", "logit", "odds")),
+  excess_log_pop = list(
+    name = c("pop_share", "exp_log_pop_share", "excess_vs_log_pop", "mult_log_pop"),
+    role = c("share", "exp_share", "excess", "multiplier")),
+  excess_log_gdp = list(
+    name = c("gdp_share", "exp_log_gdp_share", "excess_vs_log_gdp", "mult_log_gdp"),
+    role = c("share", "exp_share", "excess", "multiplier")),
+  multiplier_log_pop = list(
+    name = c("pop_share", "exp_log_pop_share", "mult_log_pop", "excess_vs_log_pop"),
+    role = c("share", "exp_share", "multiplier", "excess")),
+  multiplier_log_gdp = list(
+    name = c("gdp_share", "exp_log_gdp_share", "mult_log_gdp", "excess_vs_log_gdp"),
+    role = c("share", "exp_share", "multiplier", "excess")),
+  logit_log_pop = list(
+    name = c("pop_share", "exp_log_pop_share", "logit_shift_log_pop", "odds_ratio_log_pop"),
+    role = c("share", "exp_share", "logit", "odds")),
+  logit_log_gdp = list(
+    name = c("gdp_share", "exp_log_gdp_share", "logit_shift_log_gdp", "odds_ratio_log_gdp"),
+    role = c("share", "exp_share", "logit", "odds"))
+)
+
+# The twelve rank_by methods. summary_games_dominance() dispatches on this same
+# vector, so the two functions cannot disagree about which methods exist.
+.economic_rank_by <- names(.economic_outputs)
+
+# "'a', 'b', or 'c'" for an error message.
+.economic_choices_text <- function(x) {
+  q <- paste0("'", x, "'")
+  paste0(paste(q[-length(q)], collapse = ", "), ", or ", q[length(q)])
 }

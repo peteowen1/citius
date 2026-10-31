@@ -50,10 +50,17 @@ fit_venue_effect <- function(results, venue_col = "comp_name", min_n = 15L) {
   # racing fraction p at one venue carries only (1-p) of its effect in their
   # deviation. See fit_context_effect() for the derivation.
   dt[, ven_eff := 0]
+  # Integer group ids computed once, and every grouped mean taken over a plain
+  # column, so data.table's optimised grouped mean (GForce) applies; over an
+  # expression it makes one R call per group. See decompose_races().
+  dt[, ae_id_ := .GRP, by = .(athlete_id, event_id)]
+  dt[, vn_id_ := .GRP, by = .(event_id, venue)]
   for (i in 1:50) {
-    dt[, ath_eff := mean(perf - ven_eff), by = .(athlete_id, event_id)]
-    new <- dt[, .(ve = mean(perf - ath_eff)), by = .(event_id, venue)]
-    dt <- merge(dt, new, by = c("event_id", "venue"), all.x = TRUE, sort = FALSE)
+    dt[, d_ := perf - ven_eff]
+    dt[, ath_eff := mean(d_), by = ae_id_]
+    dt[, d_ := perf - ath_eff]
+    new <- dt[, .(ve = mean(d_)), by = vn_id_]
+    dt <- merge(dt, new, by = "vn_id_", all.x = TRUE, sort = FALSE)
     delta <- max(abs(dt$ve - dt$ven_eff), na.rm = TRUE)
     dt[, ven_eff := ve][, ve := NULL]
     if (is.finite(delta) && delta < 1e-9) break

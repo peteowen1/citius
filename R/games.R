@@ -251,12 +251,12 @@ summary_games_dominance <- function(games = NULL, top_n = 20L, min_golds = 5L, m
     return(utils::head(dt, top_n))
   } else if (method == "logit_nations") {
     return(summary_games_logit_dominance(games = games, top_n = top_n, min_golds = min_golds))
-  } else if (method %in% c("excess_gdp", "excess_pop", "multiplier_gdp", "multiplier_pop", "logit_gdp", "logit_pop",
-                          "excess_log_pop", "excess_log_gdp", "multiplier_log_pop", "multiplier_log_gdp",
-                          "logit_log_pop", "logit_log_gdp")) {
+  } else if (method %in% .economic_rank_by) {
     return(summary_games_economic_dominance(games = games, top_n = top_n, min_golds = min_golds, rank_by = method, gamma = gamma))
   } else {
-    cli::cli_abort("Unknown method '{method}'. Choose from: 'raw', 'excess_nations', 'multiplier_nations', 'logit_nations', 'excess_gdp', 'excess_pop', 'multiplier_gdp', 'multiplier_pop', 'logit_gdp', 'logit_pop', 'excess_log_pop', 'excess_log_gdp', 'multiplier_log_pop', 'multiplier_log_gdp', 'logit_log_pop', or 'logit_log_gdp'.")
+    choices <- .economic_choices_text(c("raw", "excess_nations", "multiplier_nations",
+                                        "logit_nations", .economic_rank_by))
+    cli::cli_abort("Unknown method '{method}'. Choose from: {choices}.")
   }
 }
 

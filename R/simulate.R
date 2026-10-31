@@ -100,6 +100,21 @@ race_conditions <- function(event_id, calibration = NULL, context = NULL) {
 #' @seealso [calibrate()]
 #' @export
 condition_sensitivity <- function(ability, event_id, calibration = NULL) {
+  out <- .sensitivity_raw(ability, calibration)
+
+  # Renormalise to mean 1: the field-average response is already represented by
+  # race_conditions(), so sensitivity must carry only the relative differences.
+  m <- mean(out)
+  if (is.finite(m) && m > 0) out <- out / m
+  out
+}
+
+# Calibrated sensitivity per row of `ability`, BEFORE the field-mean
+# renormalisation: 1 for anyone the calibration does not know, and for every row
+# when there is no calibration. Split out of condition_sensitivity() so that
+# rating_medal_chance() can renormalise against the reference field instead of
+# against whichever athletes happen to share a simulation with it.
+.sensitivity_raw <- function(ability, calibration = NULL) {
   n <- nrow(ability)
   if (is.null(calibration) || is.null(calibration$athlete) ||
       !"sensitivity" %in% names(calibration$athlete)) {
@@ -110,11 +125,6 @@ condition_sensitivity <- function(ability, event_id, calibration = NULL) {
   idx <- match(as.character(ability$athlete_id), s$athlete_id)
   out <- s$sensitivity[idx]
   out[!is.finite(out)] <- 1
-
-  # Renormalise to mean 1: the field-average response is already represented by
-  # race_conditions(), so sensitivity must carry only the relative differences.
-  m <- mean(out)
-  if (is.finite(m) && m > 0) out <- out / m
   out
 }
 
@@ -167,6 +177,11 @@ condition_sensitivity <- function(ability, event_id, calibration = NULL) {
 #' @param seed Optional integer seed for reproducibility. The RNG state is
 #'   restored on exit, so a seeded simulation does not change the draws of
 #'   whatever runs after it.
+#' @param sensitivity_scale Optional divisor for the calibrated condition
+#'   sensitivities. `NULL` (the default) divides by the field mean, so the
+#'   field-average response is exactly 1 -- see [condition_sensitivity()]. Set
+#'   it only to pin that normalisation to a *different* field than the one
+#'   simulated, as [rating_medal_chance()] does.
 #' @return An object of class `citius_sim`: a list with the raw `perf` matrix
 #'   (`n_sims` x athletes), `rank` matrix, the `ability` input and the settings
 #'   used.
@@ -191,7 +206,7 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
                            df = NULL, foul_prob = NULL, taper = 0,
                            form_sd = NULL, calibration = NULL,
                            condition_prior_weight = 0.0, seed = NULL,
-                           context = NULL) {
+                           context = NULL, sensitivity_scale = NULL) {
   ab <- data.table::as.data.table(ability)
   req <- c("athlete_id", "event_id", "ability", "sigma")
   missing <- setdiff(req, names(ab))
@@ -309,7 +324,11 @@ simulate_event <- function(ability, n_sims = 10000L, condition_sd = NULL,
   # Sensitivity turns the shared shock from a main effect into an interaction,
   # which is the only way conditions can reorder the field. See
   # condition_sensitivity().
-  sens <- condition_sensitivity(ab, event_id, calibration)
+  sens <- if (is.null(sensitivity_scale)) {
+    condition_sensitivity(ab, event_id, calibration)
+  } else {
+    .sensitivity_raw(ab, calibration) / sensitivity_scale
+  }
   if (length(sens) != n_ath || anyNA(sens)) {
     cli::cli_abort("{.fn condition_sensitivity} must return one non-missing value per entrant.")
   }

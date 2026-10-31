@@ -219,6 +219,7 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
   # radix pass instead.
   dt[, ae_id := .GRP, by = .(athlete_id, event_id)]
   dt[, rk_id := .GRP, by = race_key]
+  n_rk <- max(dt$rk_id)
 
   converged <- FALSE
   # Initialised because the loop can break before `delta` is ever assigned --
@@ -232,8 +233,16 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
     # Ability is per athlete *per event*: a sprinter's 100m and 200m marks live
     # on entirely different scales, and pooling them puts the gap between the
     # two distances into the residual, where it masquerades as day-to-day noise.
-    dt[, a_i := mean(perf - c_r), by = ae_id]
-    new_c <- dt[shared == TRUE, .(c_new = mean(perf - a_i)), by = rk_id]
+    # Each mean is taken over a plain column, never over an expression such as
+    # `mean(perf - c_r)`. data.table's optimised grouped mean (GForce) only
+    # applies to a bare column; over an expression it makes one R call per
+    # group -- ~1.05M athlete-events plus ~0.7M races on the corpus, about
+    # 6.5 s a sweep and ~43 min for 400 sweeps. Writing the difference into a
+    # scratch column first is ~3-4x faster per sweep and numerically identical.
+    dt[, d_ := perf - c_r]
+    dt[, a_i := mean(d_), by = ae_id]
+    dt[, d_ := perf - a_i]
+    new_c <- dt[shared == TRUE, .(c_new = mean(d_)), by = rk_id]
     if (!nrow(new_c)) { converged <- TRUE; break }
     # Centre only when it is actually needed. With any race pinned at zero the
     # level is already identified and this constraint is redundant AND harmful --
@@ -241,17 +250,18 @@ decompose_races <- function(results, max_iter = 400L, tol = 1e-8,
     if (identical(centre, "always") || all(dt$shared)) {
       new_c[, c_new := c_new - mean(c_new)]      # centre: resolves the confounding
     }
-    # An update join, NOT a merge. `merge()` here rebuilt the entire table --
-    # every row, every column -- on each of up to 50 sweeps, purely to attach one
-    # number per race. This writes in place.
-    dt[, c_new := 0]                             # races with no fitted effect
-    dt[new_c, on = "rk_id", c_new := i.c_new]
+    # Attach one number per race in place, NOT via merge(): that rebuilt the
+    # entire table on every sweep. rk_id is a dense .GRP integer, so a lookup
+    # vector indexed by it replaces even the update join.
+    c_vec <- numeric(n_rk)                       # races with no fitted effect stay 0
+    c_vec[new_c$rk_id] <- new_c$c_new
+    dt[, c_new := c_vec[rk_id]]
     delta <- max(abs(dt$c_new - dt$c_r), na.rm = TRUE)
     dt[, c_r := c_new]
     if (is.finite(delta) && delta < tol) { converged <- TRUE; break }
   }
 
-  dt[, c("c_new", "ae_id", "rk_id") := NULL]
+  dt[, intersect(c("c_new", "d_", "ae_id", "rk_id"), names(dt)) := NULL]
   dt[, resid := perf - a_i - c_r]
 
   race <- dt[shared == TRUE, .(c_r = data.table::first(c_r), n_in_race = .N,
