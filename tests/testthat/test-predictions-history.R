@@ -113,3 +113,10 @@ test_that("a history failure does not fail the live publish", {
   expect_identical(as.character(res), "live-ok")
   expect_null(attr(res, "history"))
 })
+
+test_that("a live upload that returns NULL does not make the wrapper throw", {
+  res <- NULL
+  expect_no_error(res <- publish_with_history(function() invisible(NULL), data.frame(), repo = "o/r",
+                                              history_fn = function(...) "n.parquet"))
+  expect_null(res)
+})

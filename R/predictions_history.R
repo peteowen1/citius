@@ -162,6 +162,9 @@ publish_with_history <- function(live, predictions, repo,
         "Prediction history NOT written ({conditionMessage(e)}); the live publish succeeded.")
       NULL
     })
-  if (!is.null(name)) attr(out, "history") <- name
+  # attr<- on NULL is an error, and many upload functions return
+  # invisible(NULL): setting it unguarded would throw AFTER both the live and
+  # the history publish had succeeded (review, 2026-11-07).
+  if (!is.null(name) && !is.null(out)) attr(out, "history") <- name
   out
 }
