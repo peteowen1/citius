@@ -128,3 +128,40 @@ publish_prediction_history <- function(predictions, repo,
              rows = stats::setNames(nrow(dt), name), carry_forward = TRUE)
   invisible(name)
 }
+
+#' Run a live publish, then record the dated history copy
+#'
+#' The one place the history step is wired to a live publish. `live` is the
+#' caller's own upload (for the athletics cards: the R2 upload in
+#' citiusdata's `export_athletics_blog.R`). History is written only after
+#' `live` returns without error, and in its own `tryCatch`, so a history
+#' failure is reported as a warning and never fails the live publish. The
+#' timestamp that names the history file is taken once, after the live upload
+#' has succeeded.
+#'
+#' @param live a function with no arguments that does the live upload. It must
+#'   signal an error on failure. Its value is returned.
+#' @param predictions,repo,model_version,tag passed to
+#'   [publish_prediction_history()].
+#' @param history_fn the history publisher; a seam for tests.
+#' @return the value of `live()`; the history asset name is attached as the
+#'   `"history"` attribute when it was written.
+#' @keywords internal
+#' @export
+publish_with_history <- function(live, predictions, repo,
+                                 model_version = as.character(utils::packageVersion("citius")),
+                                 tag = PREDICTION_HISTORY_TAG,
+                                 history_fn = publish_prediction_history) {
+  stopifnot(is.function(live))
+  out <- live()  # an error here propagates: no live publish, no history
+  name <- tryCatch(
+    history_fn(predictions, repo = repo, model_version = model_version,
+               published = Sys.time(), tag = tag),
+    error = function(e) {
+      cli::cli_alert_warning(
+        "Prediction history NOT written ({conditionMessage(e)}); the live publish succeeded.")
+      NULL
+    })
+  if (!is.null(name)) attr(out, "history") <- name
+  out
+}

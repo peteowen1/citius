@@ -88,3 +88,28 @@ test_that("an absent release is created, and dry_run uploads nothing", {
   publish_prediction_history(preds(), "o/r", "v", published = t1)
   expect_identical(c(created, uploaded), c(1L, 1L))
 })
+
+test_that("publish_with_history records history only after a successful live upload", {
+  calls <- character()
+  hist <- function(...) { calls <<- c(calls, "history"); "predictions_x.parquet" }
+  res <- publish_with_history(function() { calls <<- c(calls, "live"); "ok" },
+                              data.frame(), repo = "o/r", history_fn = hist)
+  expect_identical(calls, c("live", "history"))
+  expect_identical(attr(res, "history"), "predictions_x.parquet")
+})
+
+test_that("publish_with_history skips history when the live upload fails", {
+  calls <- character()
+  hist <- function(...) { calls <<- c(calls, "history"); "x" }
+  expect_error(publish_with_history(function() stop("upload failed"),
+                                    data.frame(), repo = "o/r", history_fn = hist),
+               "upload failed")
+  expect_identical(calls, character())
+})
+
+test_that("a history failure does not fail the live publish", {
+  res <- publish_with_history(function() "live-ok", data.frame(), repo = "o/r",
+                              history_fn = function(...) stop("release down"))
+  expect_identical(as.character(res), "live-ok")
+  expect_null(attr(res, "history"))
+})
