@@ -54,3 +54,4 @@ utils::globalVariables(c(
   "own_var", "own_w", "nb_raw", "nb_var", "nb_w", "nb_v", "nb_wv", "nb_sw",
   "nb_swv", "tau2", "sigma2_target"
 ))
+utils::globalVariables(c("published_utc"))
