@@ -87,3 +87,25 @@ test_that("apply_record_blend keeps integer athlete ids integer", {
   out <- suppressMessages(apply_record_blend(ab, rec, lng))
   expect_type(out$athlete_id, "integer"); expect_true(all(out$blend_applied))
 })
+
+test_that("estimate_ability opt-in round weighting is inert by default and acts when used", {
+  set.seed(1)
+  res <- data.table::data.table(
+    athlete_id = rep(c("a", "b", "c"), each = 6), event_id = "AT-800Metres-W",
+    date = rep(as.Date("2026-01-01") + seq(0, 150, 30), 3),
+    round = rep(c("Final", "Semifinal - Heat", "Round 1 - Heat"), 6),
+    perf = -log(c(115, 119, 121, 114, 118, 120, 116, 116.5, 117, 115.5, 116, 117.5, 118, 118.5, 119, 117.5, 118, 119)))
+  base <- suppressWarnings(suppressMessages(estimate_ability(res, as_of = as.Date("2026-07-01"), half_life = 180, adjust_context = FALSE)))
+  res[, w1 := 1]
+  same <- suppressWarnings(suppressMessages(estimate_ability(res, as_of = as.Date("2026-07-01"), half_life = 180, adjust_context = FALSE, weight_col = "w1")))
+  expect_equal(same$ability_raw, base$ability_raw)
+  res[, w0 := data.table::fifelse(round == "Final", 1, 0)]
+  fin <- suppressWarnings(suppressMessages(estimate_ability(res, as_of = as.Date("2026-07-01"), half_life = 180, adjust_context = FALSE,
+                                                            weight_col = "w0", return_rows = TRUE)))
+  rows <- attr(fin, "rows")
+  expect_true(is.data.frame(rows)); expect_true(all(rows$round == "Final")); expect_true("w" %in% names(rows))
+  expect_gt(fin[athlete_id == "a", ability_raw], base[athlete_id == "a", ability_raw])  # a's slow heats no longer count
+  expect_null(attr(base, "rows"))
+  res[, wneg := -1]
+  expect_error(estimate_ability(res, as_of = as.Date("2026-07-01"), weight_col = "wneg", adjust_context = FALSE), ">= 0")
+})
