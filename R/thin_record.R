@@ -19,7 +19,10 @@
 # 1500 / 5000 m both sexes, offsets fitted on 2024 cuts, verdict on 4 2025 cuts,
 # 71,361 next results): marks error 2.250% deployed -> 2.081% with both steps;
 # within-race concordance 67.296% -> 68.302%. Pete chose this version (C).
-# Not yet run through the championship backtest; not deployed.
+# It then FAILED the championship backtest (2026-11-09, 719 M1 meets; on R1 races
+# 2025+ concordance -1.33, CI -2.58 to -0.14) and is not deployed. The successor,
+# version E, is a recent/own-record blend with no event-mean term
+# (citiusdata/scripts/backtest_athletics.R, CITIUS_THIN_BLEND).
 
 #' Pull thin-record athletes towards their own longer record
 #'
