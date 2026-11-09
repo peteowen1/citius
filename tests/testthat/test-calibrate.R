@@ -300,6 +300,41 @@ test_that("flag_implausible removes failures without touching real marks", {
   expect_equal(sort(out[!is.na(mark)]$mark), sort(d$mark[1:7]))
 })
 
+test_that("flag_implausible flags marks faster than the world record", {
+  # A 2% short road course: 26:01 against a 26:31 record is nowhere near 5 MADs
+  # from the median, so only the record check can catch it.
+  wr <- data.frame(event_id = c("AT-10KilometresRoad-M", "AT-200Metres-M", "AT-LongJump-M"),
+                   mark = c("26:31", "19.19", "8.95"))
+  d <- data.table::data.table(
+    event_id = c(rep("AT-10KilometresRoad-M", 6), rep("AT-200Metres-M", 4),
+                 rep("AT-LongJump-M", 3), "AT-100Metres-M"),
+    mark = c(1561, 1620, 1650, 1700, 1760, 1591,   # 26:01, ..., 26:31 (equal)
+             18.90, 20.50, 20.60, 18.90,
+             8.99, 8.95, 8.92, 9.50),
+    legal = c(rep(NA, 6), TRUE, TRUE, TRUE, FALSE, TRUE, TRUE, TRUE, NA),
+    athlete_id = as.character(1:14), race_key = "r1", date = Sys.Date())
+  d[, perf := to_perf(mark, ifelse(grepl("Jump", event_id), 1L, -1L))]
+
+  base <- flag_implausible(d)
+  expect_equal(sum(base$implausible), 0)  # the Hampel rule alone misses all of it
+
+  out <- flag_implausible(d, world_records = wr)
+  expect_equal(which(out$implausible), c(1L, 7L, 11L))
+  expect_true(all(is.na(out$mark[out$implausible])))
+  # Equal to the record, wind-assisted, and an event with no record: all kept
+  expect_false(out$implausible[6])
+  expect_false(out$implausible[10])
+  expect_false(out$implausible[14])
+})
+
+test_that("flag_implausible rejects a malformed world_records table", {
+  d <- data.table::data.table(event_id = "AT-100Metres-M", mark = 10, perf = to_perf(10, -1L))
+  expect_error(flag_implausible(d, world_records = data.frame(event_id = "AT-100Metres-M")),
+               "event_id")
+  expect_error(flag_implausible(d, world_records = data.frame(event_id = "AT-100Metres-M", mark = "DNF")),
+               "parsed")
+})
+
 test_that("flag_implausible leaves clean data alone", {
   sim <- simulate_races(n_races = 60)
   out <- flag_implausible(sim$data)
