@@ -58,5 +58,6 @@ utils::globalVariables(c("published_utc"))
 # thin_record.R
 utils::globalVariables(c(
   "own_prior", "i.own_prior", "ability_event_prior", "own_prior_applied",
-  "gap", "gap_days", "gap_offset", "i.offset", "offset"
+  "gap", "gap_days", "gap_offset", "i.offset", "offset",
+  ".R", ".wR", ".kR", ".L", ".new", "i..R", "i..wR", "i..kR", "i..L", "blend_a", "blend_applied"
 ))

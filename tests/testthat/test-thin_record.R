@@ -50,3 +50,39 @@ test_that("thin-record helpers refuse malformed input", {
   expect_error(apply_gap_offsets(data.table::data.table(ability = 1, last_date = Sys.Date()),
                                  Sys.Date(), data.table::data.table(gap = "nope", offset = 0)), "Unknown")
 })
+
+test_that("apply_record_blend computes a*R + (1-a)*L and zeroes shrinkage where applied", {
+  ab <- data.table::data.table(athlete_id = c("1", "2", "3"), event_id = "E",
+                               ability = c(-5.6, -5.5, -5.4), shrinkage = c(0.9, 0.1, 0.5))
+  rec <- data.table::data.table(athlete_id = c("1", "2"), event_id = "E", ability_raw = c(-5.45, -5.50),
+                                w_total = c(0.2, 2.0), shrinkage = c(0.5, 0.05))
+  lng <- data.table::data.table(athlete_id = c("1", "2"), event_id = "E", ability_raw = c(-5.47, -5.52))
+  out <- suppressMessages(apply_record_blend(ab, rec, lng, kappa_mult = 0.5))
+  kR1 <- 0.5 * 0.2 / 0.5; a1 <- 0.2 / (0.2 + 0.5 * kR1)
+  expect_equal(out$ability[1], a1 * -5.45 + (1 - a1) * -5.47)
+  expect_equal(out$blend_a[1], a1)
+  expect_equal(out$shrinkage[1:2], c(0, 0))
+  # athlete 3 has no refit rows: untouched, flagged
+  expect_false(out$blend_applied[3]); expect_equal(out$ability[3], -5.4); expect_equal(out$shrinkage[3], 0.5)
+  expect_equal(out$athlete_id, ab$athlete_id)            # same rows, same order
+  expect_equal(ab$ability, c(-5.6, -5.5, -5.4))          # input not modified
+})
+
+test_that("apply_record_blend falls back on non-finite inputs and validates arguments", {
+  ab <- data.table::data.table(athlete_id = "1", event_id = "E", ability = -5.6, shrinkage = 0.9)
+  rec <- data.table::data.table(athlete_id = "1", event_id = "E", ability_raw = -5.45, w_total = 0, shrinkage = 1)
+  lng <- data.table::data.table(athlete_id = "1", event_id = "E", ability_raw = -5.47)
+  out <- suppressMessages(apply_record_blend(ab, rec, lng))
+  expect_false(out$blend_applied); expect_equal(out$ability, -5.6); expect_equal(out$shrinkage, 0.9)
+  expect_error(apply_record_blend(ab, rec, lng, kappa_mult = 0), "positive")
+  expect_error(apply_record_blend(ab[, !"shrinkage"], rec, lng), "lacks")
+})
+
+test_that("apply_record_blend keeps integer athlete ids integer", {
+  ab <- data.table::data.table(athlete_id = 1:2, event_id = "E", ability = c(-5.6, -5.5), shrinkage = c(0.5, 0.5))
+  rec <- data.table::data.table(athlete_id = c("1", "2"), event_id = "E", ability_raw = c(-5.5, -5.5),
+                                w_total = c(1, 1), shrinkage = c(0.2, 0.2))
+  lng <- data.table::data.table(athlete_id = c("1", "2"), event_id = "E", ability_raw = c(-5.5, -5.5))
+  out <- suppressMessages(apply_record_blend(ab, rec, lng))
+  expect_type(out$athlete_id, "integer"); expect_true(all(out$blend_applied))
+})

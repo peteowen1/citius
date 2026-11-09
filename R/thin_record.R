@@ -126,3 +126,58 @@ apply_gap_offsets <- function(ability, as_of, offsets) {
   cli::cli_alert_info("gap_offsets: shifted {ab[gap_offset != 0, .N]} of {nrow(ab)} ability rows.")
   ab[]
 }
+
+#' Blend recent form with the athlete's own long record (version E)
+#'
+#' The thin-record rating that passed the championship backtest (2026-11-10; 719 M1
+#' meets scored on R1 races, 2025+ marks error 1.480% -> 1.413%). For each row:
+#' \deqn{rating = a R + (1 - a) L, \quad a = w_R / (w_R + m_R \kappa_R)}
+#' where `R` is the athlete's recent level (an [estimate_ability()] refit with every
+#' half-life multiplied, the measured version used x2), `w_R` its total result
+#' weight and `kappa_R` its fitted kappa, and `L` the own long record (a refit with
+#' a long half-life, measured at 365 days). There is NO pull towards the event mean:
+#' tuned on R1 racers it came out at zero. Availability (has the athlete raced at
+#' all lately) is a separate status, not part of this number.
+#'
+#' Rows where the blend applies get `shrinkage = 0`, because none of the rating is
+#' the event mean any more; [condition_prior()] would otherwise add a field shift
+#' to them that the tuning never saw. Rows without a finite blend keep their row.
+#'
+#' @param ability A table from [estimate_ability()] (needs `athlete_id`, `event_id`,
+#'   `ability`, `shrinkage`).
+#' @param recent,long Tables from [estimate_ability()] fitted on the same history and
+#'   `as_of` with the recent and long half-lives; `recent` needs `ability_raw`,
+#'   `w_total`, `shrinkage`; `long` needs `ability_raw`.
+#' @param kappa_mult Multiplier on the recent fit's kappa (`m_R`); measured 0.5.
+#' @return `ability` (a copy, same rows and order) with `ability` replaced and
+#'   `shrinkage` set to 0 where applied, plus `blend_a` and logical `blend_applied`.
+#' @export
+apply_record_blend <- function(ability, recent, long, kappa_mult = 0.5) {
+  need <- c("athlete_id", "event_id", "ability", "shrinkage")
+  miss <- setdiff(need, names(ability))
+  if (length(miss)) cli::cli_abort("{.arg ability} lacks {.field {miss}}.")
+  miss <- setdiff(c("athlete_id", "event_id", "ability_raw", "w_total", "shrinkage"), names(recent))
+  if (length(miss)) cli::cli_abort("{.arg recent} lacks {.field {miss}}.")
+  miss <- setdiff(c("athlete_id", "event_id", "ability_raw"), names(long))
+  if (length(miss)) cli::cli_abort("{.arg long} lacks {.field {miss}}.")
+  if (!is.numeric(kappa_mult) || length(kappa_mult) != 1L || !is.finite(kappa_mult) || kappa_mult <= 0)
+    cli::cli_abort("{.arg kappa_mult} must be one positive number.")
+  ab <- data.table::copy(data.table::as.data.table(ability))
+  key_type <- class(ab$athlete_id)
+  ab[, athlete_id := as.character(athlete_id)]
+  rr <- unique(data.table::as.data.table(recent)[, .(athlete_id = as.character(athlete_id), event_id,
+    .R = ability_raw, .wR = w_total, .kR = shrinkage * w_total / (1 - shrinkage))], by = c("athlete_id", "event_id"))
+  ll <- unique(data.table::as.data.table(long)[, .(athlete_id = as.character(athlete_id), event_id, .L = ability_raw)],
+               by = c("athlete_id", "event_id"))
+  ab[rr, c(".R", ".wR", ".kR") := .(i..R, i..wR, i..kR), on = c("athlete_id", "event_id")]
+  ab[ll, .L := i..L, on = c("athlete_id", "event_id")]
+  for (v in c(".R", ".wR", ".kR", ".L")) if (!v %in% names(ab)) ab[, (v) := NA_real_]
+  ab[, blend_a := .wR / (.wR + kappa_mult * .kR)]
+  ab[, .new := blend_a * .R + (1 - blend_a) * .L]
+  ab[, blend_applied := is.finite(.new)]
+  ab[blend_applied == TRUE, `:=`(ability = .new, shrinkage = 0)]
+  ab[, c(".R", ".wR", ".kR", ".L", ".new") := NULL]
+  cli::cli_alert_info("record_blend: applied to {ab[, sum(blend_applied)]} of {nrow(ab)} ability rows (kappa x{kappa_mult}).")
+  if (identical(key_type, "integer")) ab[, athlete_id := as.integer(athlete_id)]
+  ab[]
+}
