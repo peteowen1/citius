@@ -18,7 +18,9 @@ apply_record_blend(ability, recent, long, kappa_mult = 0.5)
 }
 \value{
 \code{ability} (a copy, same rows and order) with \code{ability} replaced and
-\code{shrinkage} set to 0 where applied, plus \code{blend_a} and logical \code{blend_applied}.
+\code{shrinkage} set to 0 where applied, plus \code{blend_a}, \code{blend_wR} (the recent
+refit's total result weight, which the ratings page's uncertainty model reads)
+and logical \code{blend_applied}.
 }
 \description{
 The thin-record rating that passed the championship backtest (2026-11-10; 719 M1

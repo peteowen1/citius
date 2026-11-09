@@ -150,7 +150,9 @@ apply_gap_offsets <- function(ability, as_of, offsets) {
 #'   `w_total`, `shrinkage`; `long` needs `ability_raw`.
 #' @param kappa_mult Multiplier on the recent fit's kappa (`m_R`); measured 0.5.
 #' @return `ability` (a copy, same rows and order) with `ability` replaced and
-#'   `shrinkage` set to 0 where applied, plus `blend_a` and logical `blend_applied`.
+#'   `shrinkage` set to 0 where applied, plus `blend_a`, `blend_wR` (the recent
+#'   refit's total result weight, which the ratings page's uncertainty model reads)
+#'   and logical `blend_applied`.
 #' @export
 apply_record_blend <- function(ability, recent, long, kappa_mult = 0.5) {
   need <- c("athlete_id", "event_id", "ability", "shrinkage")
@@ -173,6 +175,7 @@ apply_record_blend <- function(ability, recent, long, kappa_mult = 0.5) {
   ab[ll, .L := i..L, on = c("athlete_id", "event_id")]
   for (v in c(".R", ".wR", ".kR", ".L")) if (!v %in% names(ab)) ab[, (v) := NA_real_]
   ab[, blend_a := .wR / (.wR + kappa_mult * .kR)]
+  ab[, blend_wR := .wR]
   ab[, .new := blend_a * .R + (1 - blend_a) * .L]
   ab[, blend_applied := is.finite(.new)]
   ab[blend_applied == TRUE, `:=`(ability = .new, shrinkage = 0)]

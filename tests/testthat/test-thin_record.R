@@ -61,6 +61,7 @@ test_that("apply_record_blend computes a*R + (1-a)*L and zeroes shrinkage where 
   kR1 <- 0.5 * 0.2 / 0.5; a1 <- 0.2 / (0.2 + 0.5 * kR1)
   expect_equal(out$ability[1], a1 * -5.45 + (1 - a1) * -5.47)
   expect_equal(out$blend_a[1], a1)
+  expect_equal(out$blend_wR[1:2], c(0.2, 2.0)); expect_true(is.na(out$blend_wR[3]))
   expect_equal(out$shrinkage[1:2], c(0, 0))
   # athlete 3 has no refit rows: untouched, flagged
   expect_false(out$blend_applied[3]); expect_equal(out$ability[3], -5.4); expect_equal(out$shrinkage[3], 0.5)
