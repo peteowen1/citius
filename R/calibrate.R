@@ -19,12 +19,7 @@
 #' missing performance, not a bad one. For technical events this is also what
 #' makes the foul rate measurable.
 #'
-#' @param results Canonical results.
-#' @param k Number of scaled MADs beyond which a mark is flagged. The
-#'   conventional Hampel value is 3; a looser default is used here so that
-#'   genuinely poor but real performances survive.
-#' ## World-record check
-#'
+#' @section World-record check:
 #' The Hampel rule cannot see a mark that is only a few percent too good. A road
 #' course 2-5% short sits nowhere near 5 MADs from its event median, so a
 #' 26:01 10km (record 26:31) or a 40:59 women's 10,000m walk (record 41:56)
@@ -40,6 +35,15 @@
 #' here because they are reference data, maintained in citiusdata
 #' (`data/world_records.csv`), not a quantity the package estimates.
 #'
+#' The table has to be current: a stale record flags the athlete who broke it.
+#' In Nov 2026 the table credited Jacob Kiplimo with a 57:20 half-marathon
+#' record, and the check then flagged Kiplimo's own 56:42 (Barcelona, Feb 2025)
+#' in `championship_results.rds`. Audit the table before passing it.
+#'
+#' @param results Canonical results.
+#' @param k Number of scaled MADs beyond which a mark is flagged. The
+#'   conventional Hampel value is 3; a looser default is used here so that
+#'   genuinely poor but real performances survive.
 #' @param world_records Optional table of ratified records with columns
 #'   `event_id` and `mark` (character such as `"26:31"` or numeric, in the units
 #'   [parse_mark()] returns). Events without a record are checked by the Hampel

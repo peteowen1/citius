@@ -11,24 +11,7 @@ flag_implausible(results, k = 5, world_records = NULL)
 
 \item{k}{Number of scaled MADs beyond which a mark is flagged. The
 conventional Hampel value is 3; a looser default is used here so that
-genuinely poor but real performances survive.
-\subsection{World-record check}{
-
-The Hampel rule cannot see a mark that is only a few percent too good. A road
-course 2-5\% short sits nowhere near 5 MADs from its event median, so a
-26:01 10km (record 26:31) or a 40:59 women's 10,000m walk (record 41:56)
-passes, and a field of club runners on a short course then rates as
-world-class. Supplying \code{world_records} adds a second, independent rule: a
-mark that beats the ratified world record is flagged, because a legal mark
-cannot.
-
-Two things keep this from over-flagging. Marks with \code{legal == FALSE}
-(wind-assisted) are exempt, since a wind-aided 200m can honestly beat the
-record; they remain subject to the Hampel rule. And a mark \emph{equal} to the
-record is never flagged. The records are an input rather than a constant
-here because they are reference data, maintained in citiusdata
-(\code{data/world_records.csv}), not a quantity the package estimates.
-}}
+genuinely poor but real performances survive.}
 
 \item{world_records}{Optional table of ratified records with columns
 \code{event_id} and \code{mark} (character such as \code{"26:31"} or numeric, in the units
@@ -60,3 +43,26 @@ Flagged marks become \code{NA}, which is the honest encoding: a failure is a
 missing performance, not a bad one. For technical events this is also what
 makes the foul rate measurable.
 }
+\section{World-record check}{
+
+The Hampel rule cannot see a mark that is only a few percent too good. A road
+course 2-5\% short sits nowhere near 5 MADs from its event median, so a
+26:01 10km (record 26:31) or a 40:59 women's 10,000m walk (record 41:56)
+passes, and a field of club runners on a short course then rates as
+world-class. Supplying \code{world_records} adds a second, independent rule: a
+mark that beats the ratified world record is flagged, because a legal mark
+cannot.
+
+Two things keep this from over-flagging. Marks with \code{legal == FALSE}
+(wind-assisted) are exempt, since a wind-aided 200m can honestly beat the
+record; they remain subject to the Hampel rule. And a mark \emph{equal} to the
+record is never flagged. The records are an input rather than a constant
+here because they are reference data, maintained in citiusdata
+(\code{data/world_records.csv}), not a quantity the package estimates.
+
+The table has to be current: a stale record flags the athlete who broke it.
+In Nov 2026 the table credited Jacob Kiplimo with a 57:20 half-marathon
+record, and the check then flagged Kiplimo's own 56:42 (Barcelona, Feb 2025)
+in \code{championship_results.rds}. Audit the table before passing it.
+}
+
