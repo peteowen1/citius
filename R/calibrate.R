@@ -19,14 +19,39 @@
 #' missing performance, not a bad one. For technical events this is also what
 #' makes the foul rate measurable.
 #'
+#' @section World-record check:
+#' The Hampel rule cannot see a mark that is only a few percent too good. A road
+#' course 2-5% short sits nowhere near 5 MADs from its event median, so a
+#' 26:01 10km (record 26:31) or a 40:59 women's 10,000m walk (record 41:56)
+#' passes, and a field of club runners on a short course then rates as
+#' world-class. Supplying `world_records` adds a second, independent rule: a
+#' mark that beats the ratified world record is flagged, because a legal mark
+#' cannot.
+#'
+#' Two things keep this from over-flagging. Marks with `legal == FALSE`
+#' (wind-assisted) are exempt, since a wind-aided 200m can honestly beat the
+#' record; they remain subject to the Hampel rule. And a mark *equal* to the
+#' record is never flagged. The records are an input rather than a constant
+#' here because they are reference data, maintained in citiusdata
+#' (`data/world_records.csv`), not a quantity the package estimates.
+#'
+#' The table has to be current: a stale record flags the athlete who broke it.
+#' In Nov 2026 the table credited Jacob Kiplimo with a 57:20 half-marathon
+#' record, and the check then flagged Kiplimo's own 56:42 (Barcelona, Feb 2025)
+#' in `championship_results.rds`. Audit the table before passing it.
+#'
 #' @param results Canonical results.
 #' @param k Number of scaled MADs beyond which a mark is flagged. The
 #'   conventional Hampel value is 3; a looser default is used here so that
 #'   genuinely poor but real performances survive.
+#' @param world_records Optional table of ratified records with columns
+#'   `event_id` and `mark` (character such as `"26:31"` or numeric, in the units
+#'   [parse_mark()] returns). Events without a record are checked by the Hampel
+#'   rule only. `NULL` (default) skips the record check.
 #' @return The input with implausible `mark` and `perf` values set to `NA` and a
 #'   logical `implausible` column added.
 #' @export
-flag_implausible <- function(results, k = 5) {
+flag_implausible <- function(results, k = 5, world_records = NULL) {
   dt <- data.table::copy(if (data.table::is.data.table(results)) results
                          else data.table::as.data.table(results))
   if (!nrow(dt)) {
@@ -42,6 +67,17 @@ flag_implausible <- function(results, k = 5) {
     else abs(perf - med) > k * scaled_mad
   }, by = event_id]
 
+  if (!is.null(world_records)) {
+    n_hampel <- sum(dt$implausible, na.rm = TRUE)
+    dt[, implausible := implausible | .beats_world_record(dt, world_records)]
+    n_wr <- sum(dt$implausible, na.rm = TRUE) - n_hampel
+    if (n_wr) {
+      cli::cli_alert_info(
+        "Flagged {n_wr} further mark{?s} faster than the world record for the event."
+      )
+    }
+  }
+
   n_flag <- sum(dt$implausible, na.rm = TRUE)
   if (n_flag) {
     cli::cli_alert_info(
@@ -50,6 +86,36 @@ flag_implausible <- function(results, k = 5) {
   }
   dt[implausible == TRUE, `:=`(mark = NA_real_, perf = NA_real_)]
   dt[]
+}
+
+
+.beats_world_record <- function(dt, world_records) {
+  wr <- data.table::as.data.table(world_records)
+  if (!all(c("event_id", "mark") %in% names(wr))) {
+    cli::cli_abort("{.arg world_records} needs {.field event_id} and {.field mark} columns.")
+  }
+  wr <- data.table::data.table(
+    event_id = wr$event_id,
+    wr_mark = if (is.character(wr$mark)) parse_mark(wr$mark) else as.numeric(wr$mark)
+  )
+  if (anyNA(wr$wr_mark)) {
+    cli::cli_abort("{sum(is.na(wr$wr_mark))} world record mark{?s} could not be parsed.")
+  }
+  if (anyDuplicated(wr$event_id)) {
+    cli::cli_abort("{.arg world_records} has more than one record for an event.")
+  }
+  # Orientation comes from the registry so the comparison is on the same
+  # higher-is-better scale as dt$perf; an event outside it has no orientation
+  # and is left to the Hampel rule.
+  ev <- citius_events()[, .(event_id, orientation)]
+  wr <- merge(wr, ev, by = "event_id")
+  wr[, wr_perf := to_perf(wr_mark, orientation)]
+  wr_perf <- wr$wr_perf[match(dt$event_id, wr$event_id)]
+  # legal is NA for events with no wind reading, which must still be checked.
+  legal <- if ("legal" %in% names(dt)) dt$legal else rep(NA, nrow(dt))
+  exempt <- !is.na(legal) & !legal
+  # The tolerance stops a mark equal to the record being flagged by rounding.
+  !is.na(dt$perf) & !is.na(wr_perf) & !exempt & dt$perf > wr_perf + 1e-9
 }
 
 
