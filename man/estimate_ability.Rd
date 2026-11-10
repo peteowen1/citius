@@ -23,7 +23,10 @@ estimate_ability(
   sigma_k = NULL,
   robust_location = FALSE,
   decouple_peak = FALSE,
-  adjust_race = FALSE
+  adjust_race = FALSE,
+  coast_semis = FALSE,
+  weight_col = NULL,
+  return_rows = FALSE
 )
 }
 \arguments{
@@ -105,6 +108,21 @@ the table must give every event a finite \code{k_ev} (thin events: the
 caller's pooled \code{k}) -- a gap is an error, because the pooled \code{k} cannot
 be computed correctly from the entrants alone. Without \code{only}, an event
 the table omits uses the pooled \code{k} from the full input.}
+
+\item{coast_semis}{Also apply the calibration's per-athlete coasting
+correction to semi-finals, not only heats. \code{FALSE} (the default) is the
+deployed behaviour; opt-in so it can be measured first.}
+
+\item{weight_col}{Optional name of a numeric, non-negative column of
+\code{results} multiplied into each result's weight after every built-in factor
+(\code{0} drops the result). \code{NULL} (the default) leaves every weight unchanged.
+For measuring round-weighting rules.}
+
+\item{return_rows}{If \code{TRUE}, attach the per-race rows that build each
+athlete's \code{ability_raw} (after context adjustment, trimming and \code{only}) as
+\code{attr(result, "rows")}: \code{athlete_id}, \code{event_id}, \code{date}, \code{round},
+\code{race_key}, \code{place}, \code{mark}, adjusted \code{perf} and final weight \code{w}, where
+present. For tracing why an athlete is rated where they are.}
 }
 \value{
 A \code{data.table} with \code{athlete_id}, \code{event_id}, \code{ability},

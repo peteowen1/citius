@@ -993,7 +993,7 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #' (2026-08-13). Callers rely on that; the same table returns invisibly.
 #' @keywords internal
 #' @noRd
-.adjust_history_to_target <- function(dt, calibration, adjust_race) {
+.adjust_history_to_target <- function(dt, calibration, adjust_race, coast_semis = FALSE) {
   ctx <- if (!is.null(calibration) && !is.null(calibration$round)) {
     list(round = stats::setNames(calibration$round$offset, calibration$round$round_class),
          tier  = stats::setNames(calibration$tier$offset, calibration$tier$tier_class))
@@ -1269,7 +1269,11 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
     excess <- trait - pooled_heat
     # Only heats. A coaster's finals are raced, and the trait says nothing
     # about their semis.
-    excess[.round_class(if ("round" %in% names(dt)) dt$round else NA_character_) != "heat"] <- 0
+    # `coast_semis = TRUE` (opt-in, 2026-11-10) also applies it to semi-finals:
+    # Werro wins semis jogging and they were counted at face value
+    # (docs/incidents/werro-underrated-2026-08-13.md). Measured before any default change.
+    .coast_rounds <- if (isTRUE(coast_semis)) c("heat", "semi") else "heat"
+    excess[!.round_class(if ("round" %in% names(dt)) dt$round else NA_character_) %in% .coast_rounds] <- 0
     dt[, perf := perf - excess]
   }
 
@@ -1574,6 +1578,18 @@ estimate_context_effects <- function(results, min_cell = 2000L, shrink = TRUE,
 #'   Without this the estimate answers "how does this athlete perform on an
 #'   average day at an average meet", which is systematically slower than a
 #'   championship final and will under-predict the event being simulated.
+#' @param coast_semis Also apply the calibration's per-athlete coasting
+#'   correction to semi-finals, not only heats. `FALSE` (the default) is the
+#'   deployed behaviour; opt-in so it can be measured first.
+#' @param weight_col Optional name of a numeric, non-negative column of
+#'   `results` multiplied into each result's weight after every built-in factor
+#'   (`0` drops the result). `NULL` (the default) leaves every weight unchanged.
+#'   For measuring round-weighting rules.
+#' @param return_rows If `TRUE`, attach the per-race rows that build each
+#'   athlete's `ability_raw` (after context adjustment, trimming and `only`) as
+#'   `attr(result, "rows")`: `athlete_id`, `event_id`, `date`, `round`,
+#'   `race_key`, `place`, `mark`, adjusted `perf` and final weight `w`, where
+#'   present. For tracing why an athlete is rated where they are.
 #' @return A `data.table` with `athlete_id`, `event_id`, `ability`,
 #'   `ability_raw`, `sigma`, `sigma_raw`, `sigma_rob`, `sigma_marks`,
 #'   `recent_mean`, `ability_se`, `n`, `n_eff`, `w_total`, `shrinkage`,
@@ -1630,7 +1646,10 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
                              # until backtested: the deployed calibration
                              # carries `race`, so a default of TRUE would change
                              # every shipped forecast the moment this merged.
-                             adjust_race = FALSE) {
+                             adjust_race = FALSE,
+                             coast_semis = FALSE,
+                             weight_col = NULL,
+                             return_rows = FALSE) {
   if (!nrow(results)) return(.empty_ability())
 
   # Surface a non-converged decomposition at the point it affects an answer,
@@ -1814,7 +1833,7 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # adjustment stack that runs on the next line.
   dt[, perf_raw := perf]
 
-  if (isTRUE(adjust_context)) .adjust_history_to_target(dt, calibration, adjust_race)
+  if (isTRUE(adjust_context)) .adjust_history_to_target(dt, calibration, adjust_race, coast_semis = coast_semis)
 
   # CONTEXT SCALE: how much of the adjustment above to actually keep.
   #
@@ -1857,6 +1876,21 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
   # recover what "tactical" is supposed to mean with no registry input: middle,
   # distance and combined want 0.40, while jump and throw want 0.00. A shot put
   # has no tactics to trim away.
+  # OPTIONAL PER-RACE WEIGHT MULTIPLIER (2026-11-10, opt-in). `weight_col` names a
+  # column of `results` multiplied into each result's weight after every built-in
+  # factor (recency, race count, precision, peak_gamma). Used to measure
+  # round-weighting rules (e.g. down-weight heats an athlete won) without
+  # changing the default; NULL leaves every weight bit-identical.
+  if (!is.null(weight_col)) {
+    if (!is.character(weight_col) || length(weight_col) != 1L || !weight_col %in% names(dt))
+      cli::cli_abort("{.arg weight_col} must name one column of {.arg results}.")
+    .wm <- dt[[weight_col]]
+    if (!is.numeric(.wm) || anyNA(.wm) || any(.wm < 0))
+      cli::cli_abort("{.arg weight_col} column {.field {weight_col}} must be numeric, non-missing and >= 0.")
+    dt[, w := w * .wm]
+    dt <- dt[w > 0]
+    rm(.wm)
+  }
   dt[, .trim := .event_param(event_id, trim_tactical, "trim_tactical", 0.25)]
   if (any(dt$.trim > 0)) {
     # Vectorised rank-and-filter, not `.SD[...]` per group. The `.SD` form made
@@ -1958,6 +1992,11 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
     if (!nrow(dt)) return(.empty_ability())
   }
 
+  # PER-RACE ROWS (return_rows = TRUE, opt-in): the exact rows and weights that
+  # build each athlete's ability_raw, after context adjustment, trimming and the
+  # `only` restriction. Attached as attr(result, "rows"); costs nothing when off.
+  .rows_out <- if (isTRUE(return_rows)) data.table::copy(dt[, intersect(
+    c("athlete_id", "event_id", "date", "round", "race_key", "place", "mark", "perf", "w"), names(dt)), with = FALSE]) else NULL
   ab <- dt[, {
     ok <- w > 0
     mu <- if (sum(ok)) {
@@ -2379,7 +2418,9 @@ estimate_ability <- function(results, as_of = Sys.Date(), half_life = 540,
             "sigma_between", "age_ref", "last_date")
   if ("ability_peak" %in% names(ab)) cols <- c(cols, "ability_peak")
   cols <- intersect(cols, names(ab))
-  ab[, cols, with = FALSE][]
+  out <- ab[, cols, with = FALSE]
+  if (!is.null(.rows_out)) data.table::setattr(out, "rows", .rows_out)
+  out[]
 }
 
 
