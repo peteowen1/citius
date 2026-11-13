@@ -335,6 +335,13 @@ test_that("flag_implausible rejects a malformed world_records table", {
                "parsed")
 })
 
+test_that("flag_implausible warns about a world-record id the registry does not know", {
+  d <- data.table::data.table(event_id = "AT-100Metres-M", mark = 9, perf = to_perf(9, -1L))
+  expect_warning(out <- flag_implausible(d, world_records = data.frame(event_id = "AT-100Metre-M", mark = "9.58")),
+                 "AT-100Metre-M")
+  expect_false(is.na(out$perf[1]))   # the typo'd record is ignored, not applied
+})
+
 test_that("flag_implausible leaves clean data alone", {
   sim <- simulate_races(n_races = 60)
   out <- flag_implausible(sim$data)

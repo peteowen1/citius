@@ -108,6 +108,12 @@ flag_implausible <- function(results, k = 5, world_records = NULL) {
   # higher-is-better scale as dt$perf; an event outside it has no orientation
   # and is left to the Hampel rule.
   ev <- citius_events()[, .(event_id, orientation)]
+  # A misspelt id would otherwise drop out here and read exactly like an event
+  # with no record, so say which ones did.
+  unknown <- setdiff(wr$event_id, ev$event_id)
+  if (length(unknown)) cli::cli_warn(c(
+    "{length(unknown)} world-record row{?s} name{?s/} no registry event and {?is/are} ignored: {.val {unknown}}",
+    "i" = "Check the ids against {.fn citius_events}."))
   wr <- merge(wr, ev, by = "event_id")
   wr[, wr_perf := to_perf(wr_mark, orientation)]
   wr_perf <- wr$wr_perf[match(dt$event_id, wr$event_id)]
