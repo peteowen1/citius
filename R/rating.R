@@ -181,14 +181,17 @@ rating_medal_chance <- function(ability, event_id, calibration = NULL,
   req <- c("athlete_id", "event_id", "ability", "sigma")
   if (is.character(reference) && length(reference) == 1L &&
       grepl("^top[0-9]+$", reference)) {
-    n <- as.integer(sub("^top", "", reference))
-    if (nrow(ab) < n) {
+    # Not called `n`: inside `[.data.table` that name resolves to the `n` COLUMN
+    # of estimate_ability() output (its result count) before the local variable,
+    # which silently sized the reference by the first athlete's result count.
+    top_n <- as.integer(sub("^top", "", reference))
+    if (nrow(ab) < top_n) {
       cli::cli_warn("Only {nrow(ab)} athlete{?s} with an ability estimate; {.val {reference}} reference uses all of them.")
-      n <- nrow(ab)
+      top_n <- nrow(ab)
     }
-    ref <- data.table::copy(ab[order(-ability)][seq_len(n)])
+    ref <- data.table::copy(ab[order(-ability)][seq_len(top_n)])
     lab <- sprintf("top %d by ability among the %d rated athletes supplied (moves with the field)",
-                   n, nrow(ab))
+                   top_n, nrow(ab))
   } else if (is.data.frame(reference)) {
     ref <- data.table::as.data.table(reference)
     missing <- setdiff(req, names(ref))

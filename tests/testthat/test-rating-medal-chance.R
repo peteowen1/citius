@@ -141,3 +141,16 @@ test_that("condition_sensitivity() is unchanged by the .sensitivity_raw() split"
                       sensitivity_scale = mean(raw))
   expect_equal(a$perf, b$perf)
 })
+
+test_that("an `n` column (estimate_ability()'s result count) does not size the reference", {
+  # estimate_ability() returns `n`; `seq_len(n)` inside a data.table call once
+  # resolved to that column instead of the requested reference size.
+  ab <- rating_field()
+  ab[, n := c(40L, rep(3L, 13L))]
+  p <- rating_medal_chance(ab, "AT-100Metres-M", n_sims = 500L, seed = 1L)
+  expect_equal(nrow(attr(p, "reference")), 8L)
+  expect_length(p, nrow(ab))
+  ab[, n := 1L]
+  p1 <- rating_medal_chance(ab, "AT-100Metres-M", n_sims = 500L, seed = 1L)
+  expect_equal(nrow(attr(p1, "reference")), 8L)
+})
